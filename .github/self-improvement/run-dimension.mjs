@@ -15,7 +15,12 @@ const DIMENSIONS = {
   stability: { label: '稳定性', runs: 3 },
   usability: { label: '可用性', runs: 1 },
 };
-const CONFIG_PATH = '.self-improvement.json';
+// The workflow checks the runner out separately; fall back to the repo root for local runs.
+const CONFIG_PATH =
+  process.env.MERGELENS_CONFIG && existsSync(process.env.MERGELENS_CONFIG)
+    ? process.env.MERGELENS_CONFIG
+    : '.self-improvement.json';
+const NODE_TOOL = /^(?:\S+=\S+\s+)*(?:npm|npx|pnpm|yarn|bun)\b/;
 const dimension = String(process.argv[2] ?? '').trim().toLowerCase();
 
 function fail(message) {
@@ -146,6 +151,14 @@ function main() {
   const command = String(dimensionConfig.command ?? '').trim();
   if (!command) {
     const message = `「${meta.label}」尚未配置命令。请在 MergeLens 设置页填写 ${dimension} 命令并重新安装验证资产，或直接修改 ${CONFIG_PATH}。`;
+    fail(message);
+    appendSummary([`## MergeLens · ${meta.label}`, '', `⚠️ ${message}`]);
+    return;
+  }
+
+  // The defaults are Node commands; on a Python / Go / Rust repo they can only fail.
+  if (NODE_TOOL.test(command) && !existsSync('package.json')) {
+    const message = `仓库根目录没有 package.json，但「${meta.label}」命令是 \`${command}\`。请在 MergeLens 项目「流水线」页把命令改成适合本项目的写法（例如 Python 项目用 \`pytest\`），保存后点击「安装 / 更新」。`;
     fail(message);
     appendSummary([`## MergeLens · ${meta.label}`, '', `⚠️ ${message}`]);
     return;
