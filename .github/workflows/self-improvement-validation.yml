@@ -1,0 +1,70 @@
+name: Self-improvement validation
+run-name: "Self-improve · ${{ inputs.validation_id }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      validation_id:
+        description: "MergeLens validation id"
+        required: true
+        type: string
+      candidate_id:
+        description: "Opportunity id"
+        required: true
+        type: string
+      source_repo:
+        description: "Upstream repository"
+        required: true
+        type: string
+      source_pr:
+        description: "Merged pull request number"
+        required: true
+        type: string
+      adoption_ref:
+        description: "Branch or ref containing the experiment (optional)"
+        required: false
+        default: ""
+        type: string
+      target_ref:
+        description: "Fallback branch/ref to validate"
+        required: false
+        default: "main"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-improvement-${{ inputs.validation_id }}
+  cancel-in-progress: false
+
+jobs:
+  validation:
+    name: ${{ matrix.dimension }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        dimension: [effect, performance, stability, usability]
+    steps:
+      - name: Checkout experiment ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.adoption_ref || inputs.target_ref || github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node for the validation runner
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate ${{ matrix.dimension }}
+        env:
+          MERGELENS_VALIDATION_ID: ${{ inputs.validation_id }}
+          MERGELENS_CANDIDATE_ID: ${{ inputs.candidate_id }}
+          MERGELENS_SOURCE_REPO: ${{ inputs.source_repo }}
+          MERGELENS_SOURCE_PR: ${{ inputs.source_pr }}
+          MERGELENS_DIMENSION: ${{ matrix.dimension }}
+        run: node .github/self-improvement/run-dimension.mjs "$MERGELENS_DIMENSION"
