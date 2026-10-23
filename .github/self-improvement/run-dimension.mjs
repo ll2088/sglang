@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * MergeLens validation runner.
+ * autojump validation runner.
  *
  * Installed into the target repository and executed once per matrix dimension
  * (effect / performance / stability / usability). Zero external dependencies.
@@ -25,9 +25,9 @@ const NODE_TOOL = /^(?:\S+=\S+\s+)*(?:npm|npx|pnpm|yarn|bun)\b/;
 const dimension = String(process.argv[2] ?? '').trim().toLowerCase();
 
 function fail(message) {
-  console.error(`\n[MergeLens] ERROR: ${message}\n`);
+  console.error(`\n[autojump] ERROR: ${message}\n`);
   if (process.env.GITHUB_ACTIONS === 'true') {
-    console.error(`::error title=MergeLens validation::${escapeAnnotation(message)}`);
+    console.error(`::error title=autojump validation::${escapeAnnotation(message)}`);
   }
   process.exitCode = 1;
 }
@@ -38,7 +38,7 @@ function escapeAnnotation(value) {
 
 function readConfig() {
   if (!existsSync(CONFIG_PATH)) {
-    throw new Error(`未找到 ${CONFIG_PATH}。请从 MergeLens 设置页安装验证资产。`);
+    throw new Error(`未找到 ${CONFIG_PATH}。请从 autojump 设置页安装验证资产。`);
   }
   const raw = readFileSync(CONFIG_PATH, 'utf8');
   let config;
@@ -108,7 +108,7 @@ function runShell(command, { timeoutMs, label, env = {} }) {
   const timedOut = result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM';
   const ok = result.status === 0 && !result.error;
   console.log(
-    `[MergeLens] ${label} ${ok ? 'PASS' : 'FAIL'} · exit=${result.status ?? 'n/a'} · ${Math.round(durationMs)}ms${
+    `[autojump] ${label} ${ok ? 'PASS' : 'FAIL'} · exit=${result.status ?? 'n/a'} · ${Math.round(durationMs)}ms${
       timedOut ? ' · timeout' : ''
     }`,
   );
@@ -143,7 +143,7 @@ function appendSummary(lines) {
     try {
       appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown, 'utf8');
     } catch (error) {
-      console.warn(`[MergeLens] 无法写入 job summary: ${error.message}`);
+      console.warn(`[autojump] 无法写入 job summary: ${error.message}`);
     }
   }
 }
@@ -155,9 +155,9 @@ function main() {
     process.exitCode = 2;
     return;
   }
-  console.log(`[MergeLens] dimension=${dimension} cwd=${process.cwd()}`);
+  console.log(`[autojump] dimension=${dimension} cwd=${process.cwd()}`);
   console.log(
-    `[MergeLens] validation=${process.env.MERGELENS_VALIDATION_ID ?? 'local'} candidate=${
+    `[autojump] validation=${process.env.MERGELENS_VALIDATION_ID ?? 'local'} candidate=${
       process.env.MERGELENS_CANDIDATE_ID ?? 'local'
     }`,
   );
@@ -167,24 +167,24 @@ function main() {
     config = readConfig();
   } catch (error) {
     fail(error.message);
-    appendSummary([`## MergeLens · ${meta.label}`, '', `❌ ${error.message}`]);
+    appendSummary([`## autojump · ${meta.label}`, '', `❌ ${error.message}`]);
     return;
   }
 
   const dimensionConfig = normalizeDimensionConfig(config, dimension);
   const command = String(dimensionConfig.command ?? '').trim();
   if (!command) {
-    const message = `「${meta.label}」尚未配置命令。请在 MergeLens 设置页填写 ${dimension} 命令并重新安装验证资产，或直接修改 ${CONFIG_PATH}。`;
+    const message = `「${meta.label}」尚未配置命令。请在 autojump 设置页填写 ${dimension} 命令并重新安装验证资产，或直接修改 ${CONFIG_PATH}。`;
     fail(message);
-    appendSummary([`## MergeLens · ${meta.label}`, '', `⚠️ ${message}`]);
+    appendSummary([`## autojump · ${meta.label}`, '', `⚠️ ${message}`]);
     return;
   }
 
   // The defaults are Node commands; on a Python / Go / Rust repo they can only fail.
   if (NODE_TOOL.test(command) && !existsSync('package.json')) {
-    const message = `仓库根目录没有 package.json，但「${meta.label}」命令是 \`${command}\`。请在 MergeLens 项目「流水线」页把命令改成适合本项目的写法（例如 Python 项目用 \`pytest\`），保存后点击「安装 / 更新」。`;
+    const message = `仓库根目录没有 package.json，但「${meta.label}」命令是 \`${command}\`。请在 autojump 项目「流水线」页把命令改成适合本项目的写法（例如 Python 项目用 \`pytest\`），保存后点击「安装 / 更新」。`;
     fail(message);
-    appendSummary([`## MergeLens · ${meta.label}`, '', `⚠️ ${message}`]);
+    appendSummary([`## autojump · ${meta.label}`, '', `⚠️ ${message}`]);
     return;
   }
 
@@ -197,7 +197,7 @@ function main() {
 
   const setup = String(config.setup ?? '').trim() || autoSetupCommand(process.cwd());
   const summary = [
-    `## MergeLens · ${meta.label} (${dimension})`,
+    `## autojump · ${meta.label} (${dimension})`,
     '',
     `- 候选：\`${process.env.MERGELENS_CANDIDATE_ID ?? 'local'}\``,
     `- 验证 ID：\`${process.env.MERGELENS_VALIDATION_ID ?? 'local'}\``,
@@ -206,7 +206,7 @@ function main() {
   ];
 
   if (setup) {
-    console.log(`[MergeLens] setup: ${setup}`);
+    console.log(`[autojump] setup: ${setup}`);
     const setupResult = runShell(setup, {
       timeoutMs: Math.min(timeoutMs, 30 * 60_000),
       label: 'setup',
@@ -280,6 +280,17 @@ function main() {
   if (dimension === 'performance') {
     const medianMs = median(durations);
     const budgetMs = Number(dimensionConfig.budget_ms) || 0;
+    // Machine-readable metric for autojump's baseline comparison (read back via check-run annotations).
+    if (process.env.GITHUB_ACTIONS === 'true' && durations.length) {
+      console.log(
+        `::notice title=hop-metric::${JSON.stringify({
+          dimension,
+          medianMs: Math.round(medianMs),
+          runs: durations.length,
+          samples: durations.map((value) => Math.round(value)),
+        })}`,
+      );
+    }
     summary.push(
       `- 中位耗时：**${Math.round(medianMs)}ms**`,
       `- 性能预算：${budgetMs > 0 ? `**${Math.round(budgetMs)}ms**` : '未设置'}`,
@@ -319,7 +330,7 @@ function main() {
   if (firstFailure?.tail) summary.push('', '<details open><summary>首次失败的输出末尾</summary>', '', '```text', firstFailure.tail, '```', '', '</details>');
   appendSummary(summary);
   if (!passed) {
-    console.error(`[MergeLens] ${dimension} validation failed (${failures}/${results.length} runs).`);
+    console.error(`[autojump] ${dimension} validation failed (${failures}/${results.length} runs).`);
     if (firstFailure) annotateFailure(`「${meta.label}」命令`, firstFailure);
     process.exitCode = 1;
   }
