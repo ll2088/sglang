@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * MergeLens dependency upgrade step.
+ * autojump dependency upgrade step.
  *
  * Runs inside the project's GitHub Actions. Inputs arrive as environment
  * variables (never interpolated into a shell), every external command uses an
@@ -25,8 +25,8 @@ function env(key) {
 }
 
 function fail(message) {
-  console.error(`::error title=MergeLens upgrade::${String(message).replace(/\r?\n/g, '%0A')}`);
-  summary([`### ❌ MergeLens 升级失败`, '', message]);
+  console.error(`::error title=autojump upgrade::${String(message).replace(/\r?\n/g, '%0A')}`);
+  summary([`### ❌ autojump 升级失败`, '', message]);
   process.exit(1);
 }
 
@@ -55,7 +55,7 @@ function has(command) {
 }
 
 function validateInputs() {
-  if (!/^mergelens\/deps\/[a-z0-9][a-z0-9.-]*$/.test(input.branch)) fail(`拒绝推送非 MergeLens 分支：${input.branch}`);
+  if (!/^mergelens\/deps\/[a-z0-9][a-z0-9.-]*$/.test(input.branch)) fail(`拒绝推送非 autojump 分支：${input.branch}`);
   if (!['npm', 'go', 'pypi'].includes(input.ecosystem)) fail(`不支持的生态：${input.ecosystem}`);
   if (!/^[A-Za-z0-9@][A-Za-z0-9@/._~+-]{0,213}$/.test(input.name)) fail(`依赖名不合法：${input.name}`);
   if (!/^v?[0-9][0-9A-Za-z.+!-]{0,63}$/.test(input.version)) fail(`版本号不合法：${input.version}`);
@@ -155,7 +155,7 @@ function upgradePython() {
 
 function main() {
   validateInputs();
-  console.log(`[MergeLens] upgrade=${input.id} ${input.ecosystem} ${input.name} → ${input.version}`);
+  console.log(`[autojump] upgrade=${input.id} ${input.ecosystem} ${input.name} → ${input.version}`);
   if (input.ecosystem === 'npm') upgradeNpm();
   if (input.ecosystem === 'go') upgradeGo();
   if (input.ecosystem === 'pypi') upgradePython();
@@ -167,16 +167,16 @@ function main() {
   run('git', ['config', 'user.email', 'mergelens-bot@users.noreply.github.com']);
   run('git', ['checkout', '-B', input.branch]);
   run('git', ['add', '-A']);
-  run('git', ['commit', '-m', `chore(deps): bump ${input.name} to ${input.version}`, '-m', `MergeLens upgrade ${input.id}`]);
-  // The branch is owned by MergeLens; re-running an upgrade replaces it.
+  run('git', ['commit', '-m', `chore(deps): bump ${input.name} to ${input.version}`, '-m', `autojump upgrade ${input.id}`]);
+  // The branch is owned by autojump; re-running an upgrade replaces it.
   run('git', ['push', '--force', 'origin', `HEAD:refs/heads/${input.branch}`]);
 
   summary([
-    '### ✅ MergeLens 依赖升级完成',
+    '### ✅ autojump 依赖升级完成',
     '',
     `- 依赖：\`${input.name}\` → \`${input.version}\`（${input.ecosystem}）`,
     `- 分支：\`${input.branch}\``,
-    '- 下一步：MergeLens 会在该分支上触发四维验证，通过后提交 PR。',
+    '- 下一步：autojump 会在该分支上触发四项验证，通过后提交 PR。',
   ]);
 }
 
