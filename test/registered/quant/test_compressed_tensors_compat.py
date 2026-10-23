@@ -151,5 +151,18 @@ class TestChainedConverterEquivalence(unittest.TestCase):
         self.assertIsInstance(list(chain), list)
 
 
+def _run_self_check() -> int:
+    """Lightweight entrypoint usable by CI verification commands.
+
+    Runs the compatibility checks without requiring a GPU and returns a
+    non-zero exit code only on real failures; missing optional dependencies
+    are reported as skips rather than errors.
+    """
+    loader = unittest.TestLoader()
+    suite = loader.loadTestsFromModule(importlib.import_module(__name__))
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    return 0 if result.wasSuccessful() else 1
+
+
 if __name__ == "__main__":
-    unittest.main()
+    raise SystemExit(_run_self_check())
