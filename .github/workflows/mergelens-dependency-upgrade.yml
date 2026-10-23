@@ -1,7 +1,7 @@
-name: MergeLens dependency upgrade
-run-name: "MergeLens upgrade · ${{ inputs.upgrade_id }}"
+name: autojump dependency upgrade
+run-name: "autojump upgrade · ${{ inputs.upgrade_id }}"
 
-# Dispatched by the MergeLens extension. It bumps one dependency on a
+# Dispatched by the autojump extension. It bumps one dependency on a
 # dedicated `mergelens/deps/*` branch and pushes it; the extension then runs the
 # four-dimension validation workflow on that branch and opens a pull request
 # only when validation passes.
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       upgrade_id:
-        description: "MergeLens upgrade id"
+        description: "autojump upgrade id"
         required: true
         type: string
       ecosystem:
