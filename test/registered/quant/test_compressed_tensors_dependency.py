@@ -54,7 +54,8 @@ class TestCompressedTensorsConstraint(unittest.TestCase):
                     continue
                 # Normalize whitespace so "compressed-tensors == 0.19.0" also matches.
                 normalized = stripped.replace(" ", "")
-                if EXPECTED not in normalized:
+                # Accept the exact pin, optionally followed by a marker or comment.
+                if not normalized.startswith(EXPECTED):
                     offenders.append((rel, stripped))
         self.assertEqual(
             offenders,
