@@ -136,7 +136,10 @@ class TestChainedConverterEquivalence(unittest.TestCase):
             self.skipTest(f"compressed_tensors.entrypoints.convert unavailable: {exc}")
         chain_cls = getattr(convert_mod, "ConverterChain", None)
         if chain_cls is None:
-            self.skipTest("ConverterChain not available in this build")
+            self.skipTest(
+                "ConverterChain not available in this build; "
+                "chained-converter equivalence not exercised"
+            )
         # A single-element chain must be equivalent to invoking the converter
         # directly; both paths are exercised here so a regression in the
         # chaining plumbing surfaces as a test failure rather than silently.

@@ -21,7 +21,10 @@ pyproject.toml in the repository that pins compressed-tensors agrees on
 import pathlib
 import unittest
 
-from packaging.requirements import Requirement
+try:
+    from packaging.requirements import Requirement
+except ImportError:  # packaging is a transitive dep; skip gracefully if absent
+    Requirement = None
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 EXPECTED = "compressed-tensors==0.19.0"
@@ -60,6 +63,8 @@ class TestCompressedTensorsConstraint(unittest.TestCase):
         )
 
     def test_constraint_is_parseable(self):
+        if Requirement is None:
+            self.skipTest("packaging not installed; cannot parse requirement")
         req = Requirement(EXPECTED)
         self.assertEqual(req.name, "compressed-tensors")
         self.assertEqual(str(req.specifier), "==0.19.0")
