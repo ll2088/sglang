@@ -2,6 +2,13 @@
 
 Auto-tune Triton FP8/INT8 block-wise quantization kernels for optimal performance.
 
+> **Note (compressed-tensors 0.19.0):** The GPTQ group / dynamic activation
+> ordering code paths were removed upstream in compressed-tensors 0.19.0. The
+> scripts in this directory do not depend on those paths; they only use
+> `vllm._custom_ops`, Triton, and SGLang kernels. If you maintain a downstream
+> quantization loader, make sure it no longer calls the removed GPTQ ordering
+> APIs.
+
 ## When to Use Triton FP8 Block-wise Quantization Kernel vs DeepGEMM
 
 **Use Triton FP8 Block-wise Quantization Kernel when:**
