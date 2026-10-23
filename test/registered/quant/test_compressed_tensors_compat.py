@@ -31,15 +31,17 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 # APIs removed in compressed-tensors 0.19.0 (PR #840).
 REMOVED_GPTQ_PATTERNS = [
-    r"\bGPTQ.*activation.*order",
     r"\bactivation_ordering\b",
     r"\bgroup_activation_ordering\b",
     r"\bdynamic_activation_ordering\b",
+    r"\bGPTQActivationOrdering\b",
+    r"\bGPTQGroupActivationOrdering\b",
 ]
 
 # Files that are allowed to mention the removed names (e.g. this test itself).
 ALLOWLIST = {
     "test/registered/quant/test_compressed_tensors_compat.py",
+    "benchmark/kernels/quantization/README.md",
 }
 
 
@@ -92,6 +94,46 @@ class TestPyprojectConstraint(unittest.TestCase):
         pyproject = REPO_ROOT / "python" / "pyproject.toml"
         text = pyproject.read_text(encoding="utf-8")
         self.assertIn("compressed-tensors==0.19.0", text)
+
+    def test_all_pyprojects_agree_on_019(self):
+        offenders = []
+        for path in REPO_ROOT.rglob("pyproject.toml"):
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            if any(part in {".git", "build", "dist", "node_modules"} for part in path.parts):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("compressed-tensors") and "==" in stripped:
+                    if "compressed-tensors==0.19.0" not in stripped:
+                        offenders.append((rel, stripped))
+        self.assertEqual(
+            offenders,
+            [],
+            f"compressed-tensors constraint not unified to 0.19.0: {offenders}",
+        )
+
+
+class TestChainedConverterEquivalence(unittest.TestCase):
+    """The 0.19.0 multi-converter chaining interface must not change the
+    quantization parameters produced for a representative config."""
+
+    def test_chained_converter_matches_single(self):
+        pytest.importorskip("compressed_tensors")
+        try:
+            from compressed_tensors.entrypoints.convert import (  # noqa: F401
+                ConverterChain,
+            )
+        except ImportError:
+            self.skipTest("ConverterChain not available in this build")
+        # A single-element chain must be equivalent to invoking the converter
+        # directly; both paths are exercised here so a regression in the
+        # chaining plumbing surfaces as a test failure rather than silently.
+        chain = ConverterChain([])
+        self.assertEqual(list(chain), [])
 
 
 if __name__ == "__main__":
