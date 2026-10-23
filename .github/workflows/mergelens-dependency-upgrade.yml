@@ -1,0 +1,89 @@
+name: MergeLens dependency upgrade
+run-name: "MergeLens upgrade · ${{ inputs.upgrade_id }}"
+
+# Dispatched by the MergeLens extension. It bumps one dependency on a
+# dedicated `mergelens/deps/*` branch and pushes it; the extension then runs the
+# four-dimension validation workflow on that branch and opens a pull request
+# only when validation passes.
+on:
+  workflow_dispatch:
+    inputs:
+      upgrade_id:
+        description: "MergeLens upgrade id"
+        required: true
+        type: string
+      ecosystem:
+        description: "npm | go | pypi"
+        required: true
+        type: string
+      package:
+        description: "Package or module name"
+        required: true
+        type: string
+      version:
+        description: "Target version"
+        required: true
+        type: string
+      spec:
+        description: "Requirement written to the manifest"
+        required: true
+        type: string
+      manifest:
+        description: "Manifest file"
+        required: true
+        type: string
+      branch:
+        description: "Upgrade branch (mergelens/deps/...)"
+        required: true
+        type: string
+      base_ref:
+        description: "Base branch"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mergelens-upgrade-${{ inputs.branch }}
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    name: upgrade
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base_ref }}
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Go
+        if: ${{ inputs.ecosystem == 'go' }}
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Python
+        if: ${{ inputs.ecosystem == 'pypi' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Upgrade dependency and push branch
+        env:
+          MERGELENS_UPGRADE_ID: ${{ inputs.upgrade_id }}
+          MERGELENS_ECOSYSTEM: ${{ inputs.ecosystem }}
+          MERGELENS_PACKAGE: ${{ inputs.package }}
+          MERGELENS_VERSION: ${{ inputs.version }}
+          MERGELENS_SPEC: ${{ inputs.spec }}
+          MERGELENS_MANIFEST: ${{ inputs.manifest }}
+          MERGELENS_BRANCH: ${{ inputs.branch }}
+        run: node .github/self-improvement/upgrade-dependency.mjs
