@@ -6,7 +6,8 @@
  * (effect / performance / stability / usability). Zero external dependencies.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, appendFileSync } from 'node:fs';
+import { existsSync, readFileSync, appendFileSync, mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const DIMENSIONS = {
@@ -72,10 +73,24 @@ function autoSetupCommand(cwd) {
   return 'npm install';
 }
 
+// Output still streams live; a copy is kept so a failure can quote its last lines.
+const LOG_DIR = mkdtempSync(path.join(os.tmpdir(), 'mergelens-'));
+process.on('exit', () => rmSync(LOG_DIR, { recursive: true, force: true }));
+const TEE_SCRIPT = 'set -o pipefail; /bin/bash -lc "$MERGELENS_CMD" 2>&1 | tee "$MERGELENS_LOG"';
+
+function outputTail(file, lines = 25) {
+  try {
+    return readFileSync(file, 'utf8').replace(/\x1b\[[0-9;]*m/g, '').trimEnd().split('\n').slice(-lines).join('\n');
+  } catch {
+    return '';
+  }
+}
+
 function runShell(command, { timeoutMs, label, env = {} }) {
   const started = process.hrtime.bigint();
   console.log(`\n$ ${command}`);
-  const result = spawnSync('/bin/bash', ['-lc', command], {
+  const logFile = path.join(LOG_DIR, `${label.replace(/[^\w.-]+/g, '_')}.log`);
+  const result = spawnSync('/bin/bash', ['-c', TEE_SCRIPT], {
     cwd: process.cwd(),
     stdio: 'inherit',
     env: {
@@ -83,6 +98,8 @@ function runShell(command, { timeoutMs, label, env = {} }) {
       CI: '1',
       MERGELENS_DIMENSION: dimension,
       ...env,
+      MERGELENS_CMD: command,
+      MERGELENS_LOG: logFile,
     },
     timeout: timeoutMs,
     killSignal: 'SIGTERM',
@@ -102,7 +119,14 @@ function runShell(command, { timeoutMs, label, env = {} }) {
     timedOut,
     durationMs,
     error: result.error ? result.error.message : null,
+    tail: ok ? '' : outputTail(logFile),
   };
+}
+
+/** Puts the failing command's last output lines in the run's Annotations panel. */
+function annotateFailure(title, result) {
+  const reason = result.timedOut ? '超时' : `exit=${result.status ?? result.signal ?? 'n/a'}`;
+  fail(`${title}失败（${reason}）${result.tail ? `，输出末尾：\n${result.tail}` : ''}`);
 }
 
 function median(values) {
@@ -202,7 +226,8 @@ function main() {
       '',
     );
     if (!setupResult.ok) {
-      fail(`环境准备命令失败（exit=${setupResult.status ?? 'timeout'}）`);
+      annotateFailure('环境准备命令', setupResult);
+      summary.push('```text', setupResult.tail, '```', '');
       appendSummary(summary);
       return;
     }
@@ -290,9 +315,12 @@ function main() {
     passed ? '### ✅ 验证通过' : '### ❌ 验证未通过',
   );
 
+  const firstFailure = results.find((result) => !result.ok);
+  if (firstFailure?.tail) summary.push('', '<details open><summary>首次失败的输出末尾</summary>', '', '```text', firstFailure.tail, '```', '', '</details>');
   appendSummary(summary);
   if (!passed) {
     console.error(`[MergeLens] ${dimension} validation failed (${failures}/${results.length} runs).`);
+    if (firstFailure) annotateFailure(`「${meta.label}」命令`, firstFailure);
     process.exitCode = 1;
   }
 }
