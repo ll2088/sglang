@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "generatedBy": "MergeLens",
+  "setup": "",
+  "effect": {
+    "command": "npm test",
+    "timeout_minutes": 20
+  },
+  "performance": {
+    "command": "npm run benchmark",
+    "timeout_minutes": 20,
+    "runs": 3,
+    "budget_ms": null
+  },
+  "stability": {
+    "command": "npm test",
+    "timeout_minutes": 20,
+    "runs": 3,
+    "max_failure_rate": 0
+  },
+  "usability": {
+    "command": "npm run test:e2e",
+    "timeout_minutes": 20
+  }
+}
