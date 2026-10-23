@@ -11,3 +11,7 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 async-stream = "0.3"
+prost = "0.13"
+prost-types = "0.13"
+tonic = "0.12"
+tonic-build = "0.12"
