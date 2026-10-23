@@ -8,3 +8,6 @@ members = [
 version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
+
+[workspace.dependencies]
+async-stream = "0.3"
