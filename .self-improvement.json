@@ -1,25 +1,25 @@
 {
   "version": 1,
-  "generatedBy": "autohop",
-  "setup": "npm install",
+  "generatedBy": "autojump",
+  "setup": "cargo fetch",
   "effect": {
-    "command": "",
+    "command": "cargo test --workspace",
     "timeout_minutes": 20
   },
   "performance": {
-    "command": "",
+    "command": "cargo bench --workspace",
     "timeout_minutes": 20,
     "runs": 3,
     "budget_ms": null
   },
   "stability": {
-    "command": "",
+    "command": "cargo test --workspace",
     "timeout_minutes": 20,
     "runs": 3,
     "max_failure_rate": 0
   },
   "usability": {
-    "command": "",
+    "command": "cargo test --workspace --all-features",
     "timeout_minutes": 20
   }
 }
