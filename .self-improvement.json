@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generatedBy": "MergeLens",
-  "setup": "pip install -e \"python[test]\"",
+  "setup": "curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\" && uv venv -p 3.12 .venv && SGLANG_BUILD_RUST_EXTS=none uv pip install --python .venv -e \"python[dev]\" --index-strategy unsafe-best-match --prerelease allow",
   "effect": {
     "command": "source .venv/bin/activate && git ls-files -- test/registered/unit/sampling test/registered/unit/model_executor > /tmp/ml-effect.txt && cd test && python3 run_suite.py --hw cpu --suite base-a-test-cpu --only-file-list /tmp/ml-effect.txt --timeout-per-file 300",
     "timeout_minutes": 20
