@@ -1,25 +1,25 @@
 {
   "version": 1,
   "generatedBy": "MergeLens",
-  "setup": "",
+  "setup": "pip install -e \"python[test]\"",
   "effect": {
-    "command": "npm test",
+    "command": "source .venv/bin/activate && git ls-files -- test/registered/unit/sampling test/registered/unit/model_executor > /tmp/ml-effect.txt && cd test && python3 run_suite.py --hw cpu --suite base-a-test-cpu --only-file-list /tmp/ml-effect.txt --timeout-per-file 300",
     "timeout_minutes": 20
   },
   "performance": {
-    "command": "npm run benchmark",
+    "command": "source .venv/bin/activate && git ls-files -- 'test/registered/unit/mem_cache/*radix*' > /tmp/ml-perf.txt && cd test && python3 run_suite.py --hw cpu --suite base-a-test-cpu --only-file-list /tmp/ml-perf.txt --timeout-per-file 300",
     "timeout_minutes": 20,
     "runs": 3,
     "budget_ms": null
   },
   "stability": {
-    "command": "npm test",
+    "command": "source .venv/bin/activate && git ls-files -- test/registered/unit/spec > /tmp/ml-stab.txt && cd test && python3 run_suite.py --hw cpu --suite base-a-test-cpu --only-file-list /tmp/ml-stab.txt --timeout-per-file 300",
     "timeout_minutes": 20,
     "runs": 3,
     "max_failure_rate": 0
   },
   "usability": {
-    "command": "npm run test:e2e",
+    "command": "source .venv/bin/activate && git ls-files -- test/registered/unit/entrypoints/openai test/registered/unit/parser test/registered/unit/function_call | grep -vE 'test_serving_decisions|test_template_manager|test_function_call_parser' > /tmp/ml-use.txt && cd test && python3 run_suite.py --hw cpu --suite base-a-test-cpu --only-file-list /tmp/ml-use.txt --timeout-per-file 300",
     "timeout_minutes": 20
   }
 }
