@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       validation_id:
-        description: "MergeLens validation id"
+        description: "autojump validation id"
         required: true
         type: string
       candidate_id:
@@ -57,8 +57,8 @@ jobs:
 
       # The runner and its config come from the commit the workflow was
       # dispatched on (the default branch), so experiment branches created
-      # before MergeLens was installed still validate correctly.
-      - name: Checkout MergeLens runner
+      # before autojump was installed still validate correctly.
+      - name: Checkout autojump runner
         uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
