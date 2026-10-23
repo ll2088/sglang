@@ -123,16 +123,14 @@ class TestChainedConverterEquivalence(unittest.TestCase):
 
     def test_chained_converter_matches_single(self):
         pytest.importorskip("compressed_tensors")
-        try:
-            from compressed_tensors.entrypoints.convert import (  # noqa: F401
-                ConverterChain,
-            )
-        except ImportError:
+        convert_mod = importlib.import_module("compressed_tensors.entrypoints.convert")
+        chain_cls = getattr(convert_mod, "ConverterChain", None)
+        if chain_cls is None:
             self.skipTest("ConverterChain not available in this build")
         # A single-element chain must be equivalent to invoking the converter
         # directly; both paths are exercised here so a regression in the
         # chaining plumbing surfaces as a test failure rather than silently.
-        chain = ConverterChain([])
+        chain = chain_cls([])
         self.assertEqual(list(chain), [])
 
 

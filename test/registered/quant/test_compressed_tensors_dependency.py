@@ -49,7 +49,9 @@ class TestCompressedTensorsConstraint(unittest.TestCase):
                     continue
                 if "==" not in stripped:
                     continue
-                if EXPECTED not in stripped:
+                # Normalize whitespace so "compressed-tensors == 0.19.0" also matches.
+                normalized = stripped.replace(" ", "")
+                if EXPECTED not in normalized:
                     offenders.append((rel, stripped))
         self.assertEqual(
             offenders,
