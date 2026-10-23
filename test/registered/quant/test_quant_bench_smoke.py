@@ -33,12 +33,34 @@ SCRIPTS = [
 
 class TestQuantBenchScriptsParse(unittest.TestCase):
     def test_scripts_parse(self):
+        missing = []
+        for name in SCRIPTS:
+            path = BENCH_DIR / name
+            if not path.exists():
+                missing.append(name)
+                continue
+            source = path.read_text(encoding="utf-8")
+            ast.parse(source, filename=str(path))
+        if missing:
+            self.skipTest(f"missing benchmark scripts: {missing}")
+
+    def test_scripts_have_main_guard(self):
+        # A smoke runnable script must expose a __main__ guard so CI can invoke
+        # it with --help without executing the benchmark body.
         for name in SCRIPTS:
             path = BENCH_DIR / name
             if not path.exists():
                 self.skipTest(f"missing benchmark script: {path}")
             source = path.read_text(encoding="utf-8")
-            ast.parse(source, filename=str(path))
+            tree = ast.parse(source, filename=str(path))
+            has_guard = any(
+                isinstance(node, ast.If)
+                and isinstance(node.test, ast.Compare)
+                and isinstance(node.test.left, ast.Name)
+                and node.test.left.id == "__name__"
+                for node in tree.body
+            )
+            self.assertTrue(has_guard, f"{name} lacks a __main__ guard")
 
 
 if __name__ == "__main__":
