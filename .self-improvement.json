@@ -1,25 +1,25 @@
 {
   "version": 1,
   "generatedBy": "autojump",
-  "setup": "cargo fetch",
+  "setup": "pip install -e python",
   "effect": {
-    "command": "cargo test --workspace",
+    "command": "pytest -q",
     "timeout_minutes": 20
   },
   "performance": {
-    "command": "cargo bench --workspace",
+    "command": "python -m pytest benchmark -q --durations=10",
     "timeout_minutes": 20,
     "runs": 3,
     "budget_ms": null
   },
   "stability": {
-    "command": "cargo test --workspace",
+    "command": "pytest -q -p no:randomly",
     "timeout_minutes": 20,
     "runs": 3,
     "max_failure_rate": 0
   },
   "usability": {
-    "command": "cargo test --workspace --all-features",
+    "command": "pytest -q test",
     "timeout_minutes": 20
   }
 }
