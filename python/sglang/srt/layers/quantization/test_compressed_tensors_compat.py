@@ -6,6 +6,11 @@ import pytest
 def test_compressed_tensors_version_is_019():
     ct = importlib.import_module("compressed_tensors")
     version = getattr(ct, "__version__", None)
+    if version is None:
+        # Some builds expose the version only via package metadata.
+        from importlib.metadata import version as pkg_version
+
+        version = pkg_version("compressed-tensors")
     assert version is not None, "compressed_tensors.__version__ is missing"
     assert version.startswith("0.19."), f"expected compressed-tensors 0.19.x, got {version}"
 
@@ -13,6 +18,7 @@ def test_compressed_tensors_version_is_019():
 def test_compressed_tensors_public_api_importable():
     # 0.19.0 removed the GPTQ group/dynamic activation ordering paths; the
     # remaining public entry points used by sglang must still import cleanly.
+    pytest.importorskip("compressed_tensors")
     for module_name in (
         "compressed_tensors.compressors",
         "compressed_tensors.quantization",
@@ -32,9 +38,10 @@ def test_removed_gptq_ordering_symbols_not_referenced():
         "GPTQDynamicActivationOrdering",
     )
     root = pathlib.Path(__file__).resolve().parent
+    this_file = pathlib.Path(__file__).resolve()
     offenders = []
     for path in root.rglob("*.py"):
-        if path.name == pathlib.Path(__file__).name:
+        if path.resolve() == this_file:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         for symbol in removed:
@@ -45,18 +52,18 @@ def test_removed_gptq_ordering_symbols_not_referenced():
 
 def test_sglang_quantization_module_importable():
     pytest.importorskip("torch")
+    pytest.importorskip("compressed_tensors")
     importlib.import_module("sglang.srt.layers.quantization.compressed_tensors")
 
 
 def test_compressed_tensors_quant_config_construct_and_forward():
     torch = pytest.importorskip("torch")
     pytest.importorskip("compressed_tensors")
-    from compressed_tensors.quantization import (
-        QuantizationArgs,
-        QuantizationConfig,
-        QuantizationScheme,
-        QuantizationStatus,
-    )
+    quantization = pytest.importorskip("compressed_tensors.quantization")
+    QuantizationArgs = quantization.QuantizationArgs
+    QuantizationConfig = quantization.QuantizationConfig
+    QuantizationScheme = quantization.QuantizationScheme
+    QuantizationStatus = quantization.QuantizationStatus
 
     scheme = QuantizationScheme(
         targets=["Linear"],
@@ -85,7 +92,8 @@ def test_compressed_tensors_quant_config_construct_and_forward():
 def test_compressed_tensors_weight_load_and_dequantize():
     torch = pytest.importorskip("torch")
     pytest.importorskip("compressed_tensors")
-    from compressed_tensors.compressors import ModelCompressor  # noqa: F401
+    compressors = pytest.importorskip("compressed_tensors.compressors")
+    assert hasattr(compressors, "ModelCompressor")
 
     # Simulate a packed int8 weight with per-channel scales and verify the
     # dequantized result matches the expected floating point values.
