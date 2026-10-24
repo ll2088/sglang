@@ -30,6 +30,11 @@ on:
         required: false
         default: "main"
         type: string
+      dimensions:
+        description: "JSON array of dimensions for this run (key/label/command); falls back to .self-improvement.json"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -39,14 +44,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  pick:
+    name: dimensions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        env:
+          DIMENSIONS_INPUT: ${{ inputs.dimensions }}
+        run: |
+          if [ -n "$DIMENSIONS_INPUT" ]; then
+            echo "matrix=$DIMENSIONS_INPUT" >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix=[{"key":"effect"},{"key":"performance"},{"key":"stability"},{"key":"usability"}]' >> "$GITHUB_OUTPUT"
+          fi
+
   validation:
-    name: ${{ matrix.dimension }}
+    name: ${{ matrix.dimension.key }}
+    needs: pick
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        dimension: [effect, performance, stability, usability]
+        dimension: ${{ fromJSON(needs.pick.outputs.matrix) }}
     steps:
       - name: Checkout experiment ref
         uses: actions/checkout@v5
@@ -75,12 +98,16 @@ jobs:
         with:
           node-version: 22
 
-      - name: Validate ${{ matrix.dimension }}
+      - name: Validate ${{ matrix.dimension.key }}
         env:
           MERGELENS_VALIDATION_ID: ${{ inputs.validation_id }}
           MERGELENS_CANDIDATE_ID: ${{ inputs.candidate_id }}
           MERGELENS_SOURCE_REPO: ${{ inputs.source_repo }}
           MERGELENS_SOURCE_PR: ${{ inputs.source_pr }}
-          MERGELENS_DIMENSION: ${{ matrix.dimension }}
+          MERGELENS_DIMENSION: ${{ matrix.dimension.key }}
+          MERGELENS_DIMENSION_LABEL: ${{ matrix.dimension.label }}
+          MERGELENS_DIMENSION_COMMAND: ${{ matrix.dimension.command }}
+          MERGELENS_DIMENSION_RUNS: ${{ matrix.dimension.runs }}
+          MERGELENS_DIMENSION_TIMEOUT: ${{ matrix.dimension.timeout_minutes }}
           MERGELENS_CONFIG: .mergelens-runner/.self-improvement.json
         run: node .mergelens-runner/.github/self-improvement/run-dimension.mjs "$MERGELENS_DIMENSION"
