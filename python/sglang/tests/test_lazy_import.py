@@ -65,6 +65,7 @@ def test_lazy_import_wraps_attribute_error(broken_module, target, attr):
     assert isinstance(excinfo.value.__cause__, AttributeError)
     assert _MARKER in str(excinfo.value.__cause__)
     assert _MARKER in str(excinfo.value)
+    assert "AttributeError" in str(excinfo.value)
     assert finder.attempts == 1
 
 
@@ -77,6 +78,7 @@ def test_lazy_import_hasattr_does_not_swallow(broken_module):
         hasattr(lazy, "anything")
 
     assert isinstance(excinfo.value.__cause__, AttributeError)
+    assert _MARKER in str(excinfo.value)
 
 
 def test_lazy_import_getattr_default_does_not_swallow(broken_module):
@@ -88,6 +90,7 @@ def test_lazy_import_getattr_default_does_not_swallow(broken_module):
         getattr(lazy, "anything", None)
 
     assert isinstance(excinfo.value.__cause__, AttributeError)
+    assert _MARKER in str(excinfo.value)
 
 
 def test_lazy_import_from_import_preserves_cause(broken_module):
@@ -103,6 +106,7 @@ def test_lazy_import_from_import_preserves_cause(broken_module):
             lazy()
 
     assert isinstance(excinfo.value.__cause__, AttributeError)
+    assert _MARKER in str(excinfo.value)
     assert finder.attempts == 1
 
 
@@ -113,3 +117,4 @@ def test_lazy_import_missing_module_still_raises_import_error():
         lazy()
 
     assert not isinstance(excinfo.value.__cause__, AttributeError)
+    assert "_definitely_missing_lazy_module" in str(excinfo.value)
