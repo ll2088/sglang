@@ -2,25 +2,35 @@
 /**
  * autojump validation runner.
  *
- * Installed into the target repository and executed once per matrix dimension
- * (effect / performance / stability / usability). Zero external dependencies.
+ * Installed into the target repository and executed once per matrix dimension.
+ * The dimension set is chosen per change by the AI plan stage and arrives via
+ * environment variables (JUMP_DIMENSION_COMMAND etc., with pre-rename
+ * MERGELENS_* names still honoured); the config file's
+ * `dimensions` array and legacy fixed keys are the fallback. Zero dependencies.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, appendFileSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const DIMENSIONS = {
-  effect: { label: '效果', runs: 1 },
-  performance: { label: '性能', runs: 3 },
-  stability: { label: '稳定性', runs: 3 },
-  usability: { label: '可用性', runs: 1 },
-};
+const DEFAULT_RUNS = { effect: 1, performance: 3, stability: 3, usability: 1 };
+const DEFAULT_LABELS = { effect: '效果', performance: '性能', stability: '稳定性', usability: '可用性' };
 // The workflow checks the runner out separately; fall back to the repo root for local runs.
+/** JUMP_* is primary; MERGELENS_* is the pre-rename name, read as a fallback. */
+function env(name) {
+  return String(process.env[name] ?? '').trim();
+}
+
+function envAny(name) {
+  return env(`JUMP_${name}`) || env(`MERGELENS_${name}`);
+}
+
 const CONFIG_PATH =
-  process.env.MERGELENS_CONFIG && existsSync(process.env.MERGELENS_CONFIG)
-    ? process.env.MERGELENS_CONFIG
-    : '.self-improvement.json';
+  env('JUMP_CONFIG') && existsSync(env('JUMP_CONFIG'))
+    ? env('JUMP_CONFIG')
+    : env('MERGELENS_CONFIG') && existsSync(env('MERGELENS_CONFIG'))
+      ? env('MERGELENS_CONFIG')
+      : '.self-improvement.json';
 const NODE_TOOL = /^(?:\S+=\S+\s+)*(?:npm|npx|pnpm|yarn|bun)\b/;
 const dimension = String(process.argv[2] ?? '').trim().toLowerCase();
 
@@ -51,11 +61,27 @@ function readConfig() {
   return config;
 }
 
-function normalizeDimensionConfig(config, key) {
-  const raw = config[key];
-  if (typeof raw === 'string') return { command: raw };
-  if (raw && typeof raw === 'object') return raw;
-  return {};
+/**
+ * A dimension's effective config. The per-run spec (env vars set by the
+ * workflow matrix) wins; then the config file's `dimensions` array entry;
+ * then the legacy fixed key. `{}` means "no command configured".
+ */
+function resolveDimensionConfig(config, key) {
+  const fromEnv = {
+    command: envAny('DIMENSION_COMMAND'),
+    label: envAny('DIMENSION_LABEL'),
+    timeout_minutes: envAny('DIMENSION_TIMEOUT'),
+    runs: envAny('DIMENSION_RUNS'),
+  };
+  const specified = Object.fromEntries(
+    Object.entries(fromEnv).filter(([, value]) => value !== undefined && value !== ''),
+  );
+  const fromFile = (Array.isArray(config.dimensions)
+    ? config.dimensions.find((item) => item && item.key === key)
+    : null) ?? config[key];
+  const base =
+    typeof fromFile === 'string' ? { command: fromFile } : fromFile && typeof fromFile === 'object' ? fromFile : {};
+  return { ...base, ...specified };
 }
 
 function autoSetupCommand(cwd) {
@@ -74,9 +100,9 @@ function autoSetupCommand(cwd) {
 }
 
 // Output still streams live; a copy is kept so a failure can quote its last lines.
-const LOG_DIR = mkdtempSync(path.join(os.tmpdir(), 'mergelens-'));
+const LOG_DIR = mkdtempSync(path.join(os.tmpdir(), 'jump-'));
 process.on('exit', () => rmSync(LOG_DIR, { recursive: true, force: true }));
-const TEE_SCRIPT = 'set -o pipefail; /bin/bash -lc "$MERGELENS_CMD" 2>&1 | tee "$MERGELENS_LOG"';
+const TEE_SCRIPT = 'set -o pipefail; /bin/bash -lc "$JUMP_CMD" 2>&1 | tee "$JUMP_LOG"';
 
 function outputTail(file, lines = 25) {
   try {
@@ -96,10 +122,10 @@ function runShell(command, { timeoutMs, label, env = {} }) {
     env: {
       ...process.env,
       CI: '1',
-      MERGELENS_DIMENSION: dimension,
+      JUMP_DIMENSION: dimension,
       ...env,
-      MERGELENS_CMD: command,
-      MERGELENS_LOG: logFile,
+      JUMP_CMD: command,
+      JUMP_LOG: logFile,
     },
     timeout: timeoutMs,
     killSignal: 'SIGTERM',
@@ -149,42 +175,46 @@ function appendSummary(lines) {
 }
 
 function main() {
-  const meta = DIMENSIONS[dimension];
-  if (!meta) {
-    console.error(`Usage: node run-dimension.mjs <${Object.keys(DIMENSIONS).join('|')}>`);
+  if (!dimension) {
+    console.error('Usage: node run-dimension.mjs <dimension-key>');
     process.exitCode = 2;
     return;
   }
   console.log(`[autojump] dimension=${dimension} cwd=${process.cwd()}`);
   console.log(
-    `[autojump] validation=${process.env.MERGELENS_VALIDATION_ID ?? 'local'} candidate=${
-      process.env.MERGELENS_CANDIDATE_ID ?? 'local'
+    `[autojump] validation=${envAny('VALIDATION_ID') || 'local'} candidate=${
+      envAny('CANDIDATE_ID') || 'local'
     }`,
   );
 
-  let config;
+  let config = {};
   try {
     config = readConfig();
   } catch (error) {
-    fail(error.message);
-    appendSummary([`## autojump · ${meta.label}`, '', `❌ ${error.message}`]);
-    return;
+    // Only fatal when this run doesn't carry its own command in the env.
+    if (!envAny('DIMENSION_COMMAND')) {
+      fail(error.message);
+      appendSummary([`## autojump · ${dimension}`, '', `❌ ${error.message}`]);
+      return;
+    }
   }
 
-  const dimensionConfig = normalizeDimensionConfig(config, dimension);
+  const dimensionConfig = resolveDimensionConfig(config, dimension);
+  const label =
+    String(dimensionConfig.label ?? DEFAULT_LABELS[dimension] ?? dimension).slice(0, 24) || dimension;
   const command = String(dimensionConfig.command ?? '').trim();
   if (!command) {
-    const message = `「${meta.label}」尚未配置命令。请在 autojump 设置页填写 ${dimension} 命令并重新安装验证资产，或直接修改 ${CONFIG_PATH}。`;
+    const message = `「${label}」尚未配置命令。autojump 通常会在触发验证前自动生成并同步命令；若仍缺少，请在项目「流水线」页填写后重试，或直接修改 ${CONFIG_PATH}。`;
     fail(message);
-    appendSummary([`## autojump · ${meta.label}`, '', `⚠️ ${message}`]);
+    appendSummary([`## autojump · ${label} (${dimension})`, '', `⚠️ ${message}`]);
     return;
   }
 
   // The defaults are Node commands; on a Python / Go / Rust repo they can only fail.
   if (NODE_TOOL.test(command) && !existsSync('package.json')) {
-    const message = `仓库根目录没有 package.json，但「${meta.label}」命令是 \`${command}\`。请在 autojump 项目「流水线」页把命令改成适合本项目的写法（例如 Python 项目用 \`pytest\`），保存后点击「安装 / 更新」。`;
+    const message = `仓库根目录没有 package.json，但「${label}」命令是 \`${command}\`。请在 autojump 项目「流水线」页把命令改成适合本项目的写法（例如 Python 项目用 \`pytest\`），保存后点击「安装 / 更新」。`;
     fail(message);
-    appendSummary([`## autojump · ${meta.label}`, '', `⚠️ ${message}`]);
+    appendSummary([`## autojump · ${label} (${dimension})`, '', `⚠️ ${message}`]);
     return;
   }
 
@@ -192,16 +222,16 @@ function main() {
   const timeoutMs = Math.max(1, timeoutMinutes) * 60_000;
   const runsRequested = Math.max(
     1,
-    Math.min(10, Number(dimensionConfig.runs) || meta.runs),
+    Math.min(10, Number(dimensionConfig.runs) || DEFAULT_RUNS[dimension] || 1),
   );
 
   const setup = String(config.setup ?? '').trim() || autoSetupCommand(process.cwd());
   const summary = [
-    `## autojump · ${meta.label} (${dimension})`,
+    `## autojump · ${label} (${dimension})`,
     '',
-    `- 候选：\`${process.env.MERGELENS_CANDIDATE_ID ?? 'local'}\``,
-    `- 验证 ID：\`${process.env.MERGELENS_VALIDATION_ID ?? 'local'}\``,
-    `- 维度：**${meta.label}** · 命令执行 ${runsRequested} 次`,
+    `- 候选：\`${envAny('CANDIDATE_ID') || 'local'}\``,
+    `- 验证 ID：\`${envAny('VALIDATION_ID') || 'local'}\``,
+    `- 维度：**${label}** · 命令执行 ${runsRequested} 次`,
     '',
   ];
 
@@ -233,26 +263,20 @@ function main() {
     }
   }
 
+  // A repeat-run dimension (max_failure_rate configured, or legacy stability)
+  // runs every requested time so a real failure rate can be measured; others
+  // stop at the first failure.
+  const repeatMode =
+    dimension === 'stability' || Number.isFinite(Number(dimensionConfig.max_failure_rate));
   const results = [];
-  if (dimension === 'stability') {
-    for (let index = 1; index <= runsRequested; index += 1) {
-      const result = runShell(command, {
-        timeoutMs,
-        label: `run ${index}/${runsRequested}`,
-        env: { MERGELENS_RUN_INDEX: String(index) },
-      });
-      results.push(result);
-    }
-  } else {
-    for (let index = 1; index <= runsRequested; index += 1) {
-      const result = runShell(command, {
-        timeoutMs,
-        label: `run ${index}/${runsRequested}`,
-        env: { MERGELENS_RUN_INDEX: String(index) },
-      });
-      results.push(result);
-      if (!result.ok) break;
-    }
+  for (let index = 1; index <= runsRequested; index += 1) {
+    const result = runShell(command, {
+      timeoutMs,
+      label: `run ${index}/${runsRequested}`,
+      env: { JUMP_RUN_INDEX: String(index) },
+    });
+    results.push(result);
+    if (!result.ok && !repeatMode) break;
   }
 
   const durations = results.map((result) => result.durationMs);
@@ -277,7 +301,8 @@ function main() {
   );
 
   let passed = failures === 0;
-  if (dimension === 'performance') {
+  const timedDimension = dimension === 'performance' || Number(dimensionConfig.budget_ms) > 0;
+  if (timedDimension) {
     const medianMs = median(durations);
     const budgetMs = Number(dimensionConfig.budget_ms) || 0;
     // Machine-readable metric for autojump's baseline comparison (read back via check-run annotations).
@@ -302,7 +327,7 @@ function main() {
     }
   }
 
-  if (dimension === 'stability') {
+  if (repeatMode) {
     summary.push(
       `- 失败率：**${(failureRate * 100).toFixed(1)}%**（上限 ${(maxFailureRate * 100).toFixed(1)}%）`,
       `- 运行次数：**${results.length}**`,
@@ -331,7 +356,7 @@ function main() {
   appendSummary(summary);
   if (!passed) {
     console.error(`[autojump] ${dimension} validation failed (${failures}/${results.length} runs).`);
-    if (firstFailure) annotateFailure(`「${meta.label}」命令`, firstFailure);
+    if (firstFailure) annotateFailure(`「${label}」命令`, firstFailure);
     process.exitCode = 1;
   }
 }
