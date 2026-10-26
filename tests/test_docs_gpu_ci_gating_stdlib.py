@@ -58,11 +58,23 @@ def check_stacked_and_merge_base():
     return failures
 
 
+def check_retarget_requires_push_or_rerun():
+    failures = []
+    for path in DOCS:
+        text = _read(path).lower()
+        if "retarget" not in text:
+            failures.append(
+                f"{path} must state that retargeting to main needs a new push or full re-run"
+            )
+    return failures
+
+
 CHECKS = [
     check_mentions_gpu_ci,
     check_main_target_requirement,
     check_non_main_skip,
     check_stacked_and_merge_base,
+    check_retarget_requires_push_or_rerun,
 ]
 
 

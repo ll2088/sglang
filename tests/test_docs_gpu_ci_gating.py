@@ -54,3 +54,11 @@ def test_docs_explain_stacked_and_merge_base(path):
     text = path.read_text(encoding="utf-8").lower()
     assert "stacked" in text, f"{path} must explain stacked PRs"
     assert "merge-base" in text, f"{path} must explain merge-base detection"
+
+
+@pytest.mark.parametrize("path", DOCS, ids=lambda p: p.name)
+def test_docs_retarget_requires_push_or_rerun(path):
+    text = path.read_text(encoding="utf-8").lower()
+    assert "retarget" in text, (
+        f"{path} must state that retargeting to main needs a new push or full re-run"
+    )
