@@ -1,17 +1,27 @@
 import pathlib
+import sys
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError:  # pragma: no cover - environment without pytest
+    print(
+        "SKIP: pytest is not installed; run "
+        "tests/test_docs_gpu_ci_gating_stdlib.py for the dependency-free checks",
+        file=sys.stderr,
+    )
+    sys.exit(0)
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
-pytestmark = pytest.mark.skipif(
-    not DOCS[0].exists(), reason="documentation files are not present"
-)
 DOCS = [
     ROOT / "docs" / "CONTRIBUTING.md",
     ROOT / ".agents" / "skills" / "ci-workflow-guide" / "SKILL.md",
     ROOT / ".agents" / "skills" / "babysit-pr-to-pass-ci" / "SKILL.md",
 ]
+
+pytestmark = pytest.mark.skipif(
+    not DOCS[0].exists(), reason="documentation files are not present"
+)
 
 
 @pytest.mark.parametrize("path", DOCS, ids=lambda p: p.name)
