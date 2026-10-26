@@ -1,15 +1,20 @@
+import importlib.util
 import pathlib
 import sys
 
-try:
-    import pytest
-except ModuleNotFoundError:  # pragma: no cover - environment without pytest
+# Probe for pytest before importing it so that `python -m pytest` in an
+# environment without pytest exits 0 with a SKIP message instead of failing
+# with "No module named pytest". The dependency-free checks live in
+# tests/test_docs_gpu_ci_gating_stdlib.py.
+if importlib.util.find_spec("pytest") is None:  # pragma: no cover
     print(
         "SKIP: pytest is not installed; run "
         "tests/test_docs_gpu_ci_gating_stdlib.py for the dependency-free checks",
         file=sys.stderr,
     )
     sys.exit(0)
+
+import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
