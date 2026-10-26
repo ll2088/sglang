@@ -9,7 +9,8 @@ import sys
 if importlib.util.find_spec("pytest") is None:  # pragma: no cover
     print(
         "SKIP: pytest is not installed; run "
-        "tests/test_docs_gpu_ci_gating_stdlib.py for the dependency-free checks",
+        "tests/test_docs_gpu_ci_gating_stdlib.py for the dependency-free checks "
+        "or tests/run_docs_gpu_ci_gating.py for the combined entry point",
         file=sys.stderr,
     )
     sys.exit(0)
