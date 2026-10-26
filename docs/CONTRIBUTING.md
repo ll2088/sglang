@@ -24,6 +24,14 @@ Thank you for your interest in contributing to our documentation! This guide wil
 
 For more details on local development, see our [development guide](development.mdx).
 
+## CI behavior for pull requests
+
+GPU CI runs only for pull requests that target `main`. A PR whose base branch is not `main`
+(for example, a stacked PR based on another PR's branch) skips GPU CI; only the bottom PR
+of a stack, once it targets `main`, runs the full GPU suite. The gate uses the PR's
+merge-base against `main` to decide whether the PR is stacked, so retargeting a PR to
+`main` requires a new push or a full re-run to pick up the change.
+
 ## Writing guidelines
 
 - **Use active voice**: "Run the command" not "The command should be run"
