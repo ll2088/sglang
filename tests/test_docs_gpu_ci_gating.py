@@ -3,6 +3,10 @@ import pathlib
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+pytestmark = pytest.mark.skipif(
+    not DOCS[0].exists(), reason="documentation files are not present"
+)
 DOCS = [
     ROOT / "docs" / "CONTRIBUTING.md",
     ROOT / ".agents" / "skills" / "ci-workflow-guide" / "SKILL.md",
