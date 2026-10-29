@@ -12,6 +12,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Exposed for tests that need to swap the logger without importing the
+# ``sglang`` package ``__init__`` (which pulls in heavy runtime deps).
+__all__ = [
+    "get_protobuf_implementation",
+    "warn_if_python_protobuf",
+    "logger",
+]
+
 _WARNING_MESSAGE = (
     "SGLang gRPC/SMG is using Python protobuf, which can reduce throughput. "
     "Set PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=upb before starting Python "
