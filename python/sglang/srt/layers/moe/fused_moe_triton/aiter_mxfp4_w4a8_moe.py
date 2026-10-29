@@ -206,6 +206,30 @@ def aiter_w4a8_gfx1250_supports_parallel_config(
     return not use_all2all_kernels and not enable_eplb and dp_size <= 1
 
 
+def aiter_w4a8_gfx1250_check_parallel_config(
+    use_all2all_kernels: bool,
+    enable_eplb: bool,
+    dp_size: int,
+) -> None:
+    """Raise a clear error for unsupported parallel configs instead of letting
+    the kernel fault on global expert ids indexing a rank-local weight shard."""
+    if use_all2all_kernels:
+        raise NotImplementedError(
+            "AITER W4A8 gfx1250 MoE does not support all-to-all expert "
+            "parallelism; routing metadata is still global."
+        )
+    if enable_eplb:
+        raise NotImplementedError(
+            "AITER W4A8 gfx1250 MoE does not support EPLB; routing metadata is "
+            "still global."
+        )
+    if dp_size > 1:
+        raise NotImplementedError(
+            "AITER W4A8 gfx1250 MoE does not support dp_size > 1 with expert "
+            "parallelism."
+        )
+
+
 def aiter_w4a8_gfx1250_forward(
     hidden_states: torch.Tensor,
     router_logits: torch.Tensor,
@@ -251,6 +275,13 @@ def aiter_w4a8_gfx1250_forward(
             raise ValueError(
                 "expert_map requires num_local_experts for the AITER W4A8 "
                 "gfx1250 expert-parallel path."
+            )
+        if expert_map.numel() != num_local_experts * (
+            expert_map.numel() // max(num_local_experts, 1)
+        ):
+            raise ValueError(
+                "expert_map size is inconsistent with num_local_experts for the "
+                "AITER W4A8 gfx1250 expert-parallel path."
             )
         routing_data, gather_idx, scatter_idx, gate_valid = _ep_routing(
             routing_mod,
