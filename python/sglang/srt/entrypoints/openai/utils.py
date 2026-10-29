@@ -11,6 +11,7 @@ from sglang.srt.entrypoints.openai.protocol import (
     SpecTokensDetails,
     StreamOptions,
 )
+from sglang.srt.utils.protobuf_impl import warn_if_python_protobuf
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,10 @@ def to_openai_style_logprobs(
 
     def append_token_logprobs(token_logprobs):
         for logprob, token_id, token_text in token_logprobs:
-            token_text = _lossless_token_text(tokenizer, token_id, token_text)
+            # Fast path: a display string without U+FFFD is already lossless,
+            # so skip the byte-level tokenizer probe entirely.
+            if token_text is None or "\ufffd" in token_text:
+                token_text = _lossless_token_text(tokenizer, token_id, token_text)
             ret_logprobs.tokens.append(token_text)
             ret_logprobs.token_logprobs.append(logprob)
 
@@ -155,7 +159,11 @@ def to_openai_style_logprobs(
             if tokens is not None:
                 ret_logprobs.top_logprobs.append(
                     {
-                        _lossless_token_text(tokenizer, token_id, token_text): logprob
+                        (
+                            token_text
+                            if token_text is not None and "\ufffd" not in token_text
+                            else _lossless_token_text(tokenizer, token_id, token_text)
+                        ): logprob
                         for logprob, token_id, token_text in tokens
                     }
                 )
