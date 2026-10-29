@@ -91,7 +91,10 @@ class MockTemplateManager:
 
 def test_coerce_number_preserves_large_integer():
     """Entry-level smoke check; exhaustive boundary coverage lives in
-    test/registered/unit/function_call/test_coerce_to_schema_type.py."""
+    test/registered/unit/function_call/test_coerce_to_schema_type.py.
+
+    Imports the pure helper lazily so this module's heavy serving imports do
+    not gate the numeric assertions."""
     from sglang.srt.function_call.utils import coerce_to_schema_type
 
     for value in (

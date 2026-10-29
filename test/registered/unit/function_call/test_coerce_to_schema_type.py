@@ -5,10 +5,20 @@ pulling in the full serving stack (and its heavy optional dependencies).
 """
 
 import json
+import sys
 
 import pytest
 
 from sglang.srt.function_call.utils import coerce_to_schema_type
+
+# These tests only exercise the pure conversion helper, so they must not pull
+# in the serving stack. They are also expected to run on the project's
+# supported interpreters (3.10-3.12); a 3.14 interpreter breaks dependency
+# resolution for the wider sglang package before pytest even starts.
+pytestmark = pytest.mark.skipif(
+    sys.version_info >= (3, 14),
+    reason="sglang dependencies have no cp314 wheels; run on 3.10-3.12",
+)
 
 
 LARGE_INTEGERS = [
