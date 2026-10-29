@@ -131,6 +131,32 @@ def test_coerce_number_non_integer_semantics_unchanged():
     assert coerce_to_schema_type("inf", "number") == float("inf")
 
 
+def test_coerce_number_string_digits_unchanged():
+    from sglang.srt.function_call.utils import coerce_to_schema_type
+
+    # A quoted numeric string is still a JSON string; the number branch must
+    # not silently turn it into an int.
+    assert coerce_to_schema_type("123", "string") == "123"
+    assert coerce_to_schema_type("123", "integer") == 123
+
+
+def test_coerce_number_bool_unchanged():
+    from sglang.srt.function_call.utils import coerce_to_schema_type
+
+    # bool is an int subclass; the number branch must not coerce it.
+    assert coerce_to_schema_type(True, "number") is True
+    assert coerce_to_schema_type(False, "number") is False
+
+
+def test_coerce_number_float_input_unchanged():
+    from sglang.srt.function_call.utils import coerce_to_schema_type
+
+    assert coerce_to_schema_type(5.0, "number") == 5
+    assert isinstance(coerce_to_schema_type(5.0, "number"), int)
+    assert coerce_to_schema_type(3.14, "number") == 3.14
+    assert coerce_to_schema_type(float("inf"), "number") == float("inf")
+
+
 def test_coerce_number_large_integer_nested():
     from sglang.srt.function_call.utils import coerce_to_schema_type
 
