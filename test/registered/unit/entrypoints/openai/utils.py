@@ -91,88 +91,16 @@ class MockTemplateManager:
 
 
 def test_coerce_number_preserves_large_integer():
+    """Entry-level smoke check; exhaustive boundary coverage lives in
+    test/registered/unit/function_call/test_coerce_to_schema_type.py."""
     from sglang.srt.function_call.utils import coerce_to_schema_type
 
-    for value in (
-        2**53 + 1,
-        -(2**53 + 1),
-        9007199254740993,
-        1234567890123456789,
-        2**63 - 1,
-        -(2**63),
-        0,
-    ):
+    for value in (2**53 + 1, -(2**53 + 1), 2**63 - 1, -(2**63), 0):
         for schema_type in ("number", "double", ["number", "string"]):
             result = coerce_to_schema_type(str(value), schema_type)
             assert isinstance(result, int), (value, schema_type, result)
             assert result == value, (value, schema_type, result)
             assert json.loads(json.dumps(result)) == value
-
-
-def test_coerce_number_int64_boundaries():
-    from sglang.srt.function_call.utils import coerce_to_schema_type
-
-    for value in (2**63 - 1, -(2**63), 2**53 + 1, -(2**53 + 1), 0):
-        for schema_type in ("number", "double", ["number", "string"]):
-            result = coerce_to_schema_type(str(value), schema_type)
-            assert isinstance(result, int), (value, schema_type, result)
-            assert result == value, (value, schema_type, result)
-            assert json.loads(json.dumps(result)) == value
-
-
-def test_coerce_number_non_integer_semantics_unchanged():
-    from sglang.srt.function_call.utils import coerce_to_schema_type
-
-    assert coerce_to_schema_type("5.0", "number") == 5
-    assert isinstance(coerce_to_schema_type("5.0", "number"), int)
-    assert coerce_to_schema_type("1e3", "number") == 1000
-    assert coerce_to_schema_type("3.14", "number") == 3.14
-    assert coerce_to_schema_type("abc", "number") == "abc"
-    assert coerce_to_schema_type("inf", "number") == float("inf")
-
-
-def test_coerce_number_string_digits_unchanged():
-    from sglang.srt.function_call.utils import coerce_to_schema_type
-
-    # A quoted numeric string is still a JSON string; the number branch must
-    # not silently turn it into an int.
-    assert coerce_to_schema_type("123", "string") == "123"
-    assert coerce_to_schema_type("123", "integer") == 123
-
-
-def test_coerce_number_bool_unchanged():
-    from sglang.srt.function_call.utils import coerce_to_schema_type
-
-    # bool is an int subclass; the number branch must not coerce it.
-    assert coerce_to_schema_type(True, "number") is True
-    assert coerce_to_schema_type(False, "number") is False
-
-
-def test_coerce_number_float_input_unchanged():
-    from sglang.srt.function_call.utils import coerce_to_schema_type
-
-    assert coerce_to_schema_type(5.0, "number") == 5
-    assert isinstance(coerce_to_schema_type(5.0, "number"), int)
-    assert coerce_to_schema_type(3.14, "number") == 3.14
-    assert coerce_to_schema_type(float("inf"), "number") == float("inf")
-
-
-def test_coerce_number_large_integer_nested():
-    from sglang.srt.function_call.utils import coerce_to_schema_type
-
-    value = 2**63 - 1
-    nested = {"items": [value, {"limit": value}]}
-    assert json.loads(json.dumps(nested)) == nested
-    assert coerce_to_schema_type(str(value), "number") == value
-
-
-def test_coerce_number_large_integer_nested_negative():
-    from sglang.srt.function_call.utils import coerce_to_schema_type
-
-    value = -(2**63)
-    nested = {"items": [value, {"limit": value}]}
-    assert json.loads(json.dumps(nested)) == nested
-    assert coerce_to_schema_type(str(value), "number") == value
 
 
 def make_serving(*, is_multimodal: bool = False) -> OpenAIServingResponses:
