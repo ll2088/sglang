@@ -21,6 +21,16 @@ def gate_valid_from_topk(expert_map, topk_ids):
     return (expert_map[topk_ids.long()] >= 0).to(torch.int32).contiguous()
 
 
+def test_gate_valid_mask_all_local_and_all_remote():
+    expert_map = build_ep_expert_map(8, 2, 0, torch.device("cpu"))
+    local_ids = torch.tensor([[0, 1]], dtype=torch.int32)
+    remote_ids = torch.tensor([[2, 7]], dtype=torch.int32)
+    local_valid = gate_valid_from_topk(expert_map, local_ids)
+    remote_valid = gate_valid_from_topk(expert_map, remote_ids)
+    assert torch.equal(local_valid, torch.ones_like(local_valid))
+    assert torch.equal(remote_valid, torch.zeros_like(remote_valid))
+
+
 def supports_parallel_config(use_all2all_kernels, enable_eplb, dp_size):
     return not use_all2all_kernels and not enable_eplb and dp_size <= 1
 

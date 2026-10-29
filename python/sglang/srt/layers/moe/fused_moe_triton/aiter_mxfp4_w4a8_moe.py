@@ -192,6 +192,19 @@ def prepare_w4a8_gfx1250_weights(
     )
 
 
+def build_gate_valid_mask(
+    expert_map: torch.Tensor, topk_ids: torch.Tensor
+) -> torch.Tensor:
+    """Build the per-gate validity mask for expert parallelism.
+
+    ``expert_map`` maps a global expert id to its rank-local id, with -1 for
+    experts owned by another rank (and for the trailing sentinel slot). Gates
+    routed to non-local experts are marked 0 so the combine skips them instead
+    of indexing a rank-local weight shard with a global expert id.
+    """
+    return (expert_map[topk_ids.long()] >= 0).to(torch.int32).contiguous()
+
+
 def aiter_w4a8_gfx1250_supports_parallel_config(
     use_all2all_kernels: bool,
     enable_eplb: bool,
@@ -276,9 +289,7 @@ def aiter_w4a8_gfx1250_forward(
                 "expert_map requires num_local_experts for the AITER W4A8 "
                 "gfx1250 expert-parallel path."
             )
-        if expert_map.numel() != num_local_experts * (
-            expert_map.numel() // max(num_local_experts, 1)
-        ):
+        if expert_map.numel() < num_local_experts:
             raise ValueError(
                 "expert_map size is inconsistent with num_local_experts for the "
                 "AITER W4A8 gfx1250 expert-parallel path."

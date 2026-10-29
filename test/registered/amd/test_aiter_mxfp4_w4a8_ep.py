@@ -16,6 +16,7 @@ try:
         aiter_w4a8_gfx1250_check_parallel_config,
         aiter_w4a8_gfx1250_supports_parallel_config,
         build_ep_expert_map,
+        build_gate_valid_mask,
     )
 
     _HAS_AITER_W4A8 = True
@@ -26,6 +27,7 @@ except Exception:  # pragma: no cover - depends on the CI image
     aiter_w4a8_gfx1250_check_parallel_config = None
     aiter_w4a8_gfx1250_supports_parallel_config = None
     build_ep_expert_map = None
+    build_gate_valid_mask = None
     _HAS_AITER_W4A8 = False
 
 requires_aiter_w4a8 = pytest.mark.skipif(
@@ -65,6 +67,8 @@ def _build_ep_expert_map(num_experts, num_local_experts, ep_rank, device):
 
 
 def _gate_valid_from_topk(expert_map, topk_ids):
+    if _HAS_AITER_W4A8:
+        return build_gate_valid_mask(expert_map, topk_ids)
     return (expert_map[topk_ids.long()] >= 0).to(torch.int32).contiguous()
 
 
