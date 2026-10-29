@@ -22,6 +22,35 @@ from sglang.srt.function_call.function_call_parser import FunctionCallParser
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures/tool_parity"
 
+# Large integers that exceed the IEEE-754 exact range. JSON Schema ``number``
+# accepts integers, so both parsers must preserve them exactly instead of
+# routing them through ``float``.
+LARGE_INTEGER_VALUES = [2**53 + 1, -(2**53 + 1), 2**63 - 1, -(2**63)]
+
+
+def large_integer_tool():
+    return {
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "Look up a record by numeric limit.",
+            "parameters": {
+                "type": "object",
+                "properties": {"limit": {"type": "number"}},
+                "required": ["limit"],
+            },
+        },
+    }
+
+
+def large_integer_inputs():
+    return [
+        [
+            '{"name": "lookup", "parameters": {"limit": %d}}' % value
+            for value in LARGE_INTEGER_VALUES
+        ]
+    ]
+
 
 def calls(items):
     return [[c.tool_index, c.name, c.parameters] for c in items]
@@ -50,3 +79,22 @@ for path in sorted(FIXTURES.glob("*.json")):
         for chunks in fixture["inputs"]
     ]
     path.write_text(dump(fixture))
+
+# Record a dedicated large-integer fixture for every parser that supports the
+# generic JSON tool-call format, so the Rust parity test can assert exact
+# integer preservation across languages.
+for path in sorted(FIXTURES.glob("*.json")):
+    fixture = json.loads(path.read_text())
+    if fixture.get("parser") != "json":
+        continue
+    large_fixture = {
+        "parser": fixture["parser"],
+        "tools": [large_integer_tool()],
+        "inputs": large_integer_inputs(),
+    }
+    tools = [Tool(**tool) for tool in large_fixture["tools"]]
+    large_fixture["cases"] = [
+        {"chunks": chunks, **parse(large_fixture["parser"], tools, chunks)}
+        for chunks in large_fixture["inputs"]
+    ]
+    (FIXTURES / "large_integer_number.json").write_text(dump(large_fixture))
