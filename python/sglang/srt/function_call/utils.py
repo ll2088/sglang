@@ -260,6 +260,46 @@ def safe_ast_parse(source: str) -> ast.Module:
     return _run_ast_quiet(ast.parse, source)
 
 
+def coerce_to_schema_type(value: Any, schema_type: Any) -> Any:
+    """Coerce a parsed tool argument to the JSON Schema type it declares.
+
+    ``number`` accepts JSON integers, so integral literals are parsed with
+    ``int`` first: routing them through ``float`` would silently round values
+    beyond the IEEE-754 exact range (e.g. ``2**63 - 1``). Decimal and exponent
+    forms fall back to the existing floating-point path.
+    """
+    if isinstance(schema_type, list):
+        for candidate in schema_type:
+            coerced = coerce_to_schema_type(value, candidate)
+            if coerced is not value or candidate in ("number", "integer"):
+                return coerced
+        return value
+    if schema_type == "integer":
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return value
+    if schema_type == "number":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value) if value.is_integer() else value
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            pass
+        try:
+            val = float(value)
+        except (ValueError, TypeError):
+            return value
+        if val.is_integer():
+            return int(val)
+        return val
+    return value
+
+
 def _get_tool_schema_defs(tools: List[Tool]) -> dict:
     """
     Get consolidated $defs from all tools, validating for conflicts.

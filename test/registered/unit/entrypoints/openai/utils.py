@@ -90,6 +90,45 @@ class MockTemplateManager:
         self.python_chat_template = None
 
 
+def test_coerce_number_preserves_large_integer():
+    from sglang.srt.function_call.utils import coerce_to_schema_type
+
+    for value in (
+        2**53 + 1,
+        -(2**53 + 1),
+        9007199254740993,
+        1234567890123456789,
+        2**63 - 1,
+        -(2**63),
+        0,
+    ):
+        for schema_type in ("number", "double", ["number", "string"]):
+            result = coerce_to_schema_type(str(value), schema_type)
+            assert isinstance(result, int), (value, schema_type, result)
+            assert result == value, (value, schema_type, result)
+            assert json.loads(json.dumps(result)) == value
+
+
+def test_coerce_number_non_integer_semantics_unchanged():
+    from sglang.srt.function_call.utils import coerce_to_schema_type
+
+    assert coerce_to_schema_type("5.0", "number") == 5
+    assert isinstance(coerce_to_schema_type("5.0", "number"), int)
+    assert coerce_to_schema_type("1e3", "number") == 1000
+    assert coerce_to_schema_type("3.14", "number") == 3.14
+    assert coerce_to_schema_type("abc", "number") == "abc"
+    assert coerce_to_schema_type("inf", "number") == float("inf")
+
+
+def test_coerce_number_large_integer_nested():
+    from sglang.srt.function_call.utils import coerce_to_schema_type
+
+    value = 2**63 - 1
+    nested = {"items": [value, {"limit": value}]}
+    assert json.loads(json.dumps(nested)) == nested
+    assert coerce_to_schema_type(str(value), "number") == value
+
+
 def make_serving(*, is_multimodal: bool = False) -> OpenAIServingResponses:
     """The serving layer reads its config from the bags, so the fixture
     publishes one. Idempotent: a caller that already published keeps its own,
