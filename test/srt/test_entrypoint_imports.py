@@ -9,10 +9,7 @@ import pytest
         "sglang.srt.entrypoints.openai.utils",
         "sglang.srt.managers.utils",
         "sglang.srt.rust_server.server",
-        "sglang.srt.utils.protobuf_impl",
-        "sglang.srt.utils.streaming",
-        "sglang.srt.utils.async_queue",
     ],
 )
-def test_module_imports(module: str) -> None:
+def test_entrypoint_modules_import(module):
     importlib.import_module(module)

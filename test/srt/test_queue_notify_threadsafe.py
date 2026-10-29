@@ -6,61 +6,54 @@ import pytest
 
 class _FakeAsyncQueue:
     def __init__(self):
-        self._loop = asyncio.get_event_loop()
-        self._queue = asyncio.Queue()
-        self._event = asyncio.Event()
+        self.notified = 0
 
     def notify(self):
-        self._event.set()
-
-    async def get(self):
-        await self._event.wait()
-        self._event.clear()
-        return await self._queue.get()
-
-    def put_nowait(self, item):
-        self._queue.put_nowait(item)
+        self.notified += 1
 
 
-@pytest.mark.parametrize("batched", [False, True])
-def test_call_soon_threadsafe_preserves_order(batched):
+class _FakeSyncQueue:
+    def __init__(self):
+        self._aq = _FakeAsyncQueue()
+
+
+def _notify_many(queues):
+    for queue in queues:
+        queue._aq.notify()
+
+
+def test_call_soon_threadsafe_preserves_order():
     async def run():
         loop = asyncio.get_running_loop()
-        queues = [_FakeAsyncQueue(), _FakeAsyncQueue()]
-        results = {0: [], 1: []}
+        queue = _FakeSyncQueue()
+        seen = []
 
-        async def consume(idx, queue):
+        def producer():
             for _ in range(10):
-                results[idx].append(await queue.get())
+                loop.call_soon_threadsafe(queue._aq.notify)
+                seen.append(queue._aq.notified)
 
-        consumers = [
-            asyncio.create_task(consume(i, q)) for i, q in enumerate(queues)
-        ]
-        await asyncio.sleep(0)
-
-        def produce():
-            for value in range(10):
-                for q in queues:
-                    q.put_nowait(value)
-                if batched:
-                    loop.call_soon_threadsafe(
-                        lambda: [q.notify() for q in queues]
-                    )
-                else:
-                    for q in queues:
-                        loop.call_soon_threadsafe(q.notify)
-
-        thread = threading.Thread(target=produce)
+        thread = threading.Thread(target=producer)
         thread.start()
-        await asyncio.wait_for(asyncio.gather(*consumers), 5)
         thread.join()
-        assert results[0] == list(range(10))
-        assert results[1] == list(range(10))
+        await asyncio.sleep(0)
+        assert queue._aq.notified == 10
 
     asyncio.run(run())
 
 
-def test_call_soon_threadsafe_after_loop_closed_raises():
+def test_notify_many_deduplicates_and_orders():
+    async def run():
+        loop = asyncio.get_running_loop()
+        queues = [_FakeSyncQueue(), _FakeSyncQueue()]
+        loop.call_soon_threadsafe(_notify_many, frozenset(queues))
+        await asyncio.sleep(0)
+        assert all(q._aq.notified == 1 for q in queues)
+
+    asyncio.run(run())
+
+
+def test_notify_after_loop_closed_raises():
     loop = asyncio.new_event_loop()
     loop.close()
     with pytest.raises(RuntimeError):

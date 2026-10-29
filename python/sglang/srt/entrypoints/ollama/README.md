@@ -110,3 +110,11 @@ for chunk in router.chat_stream("Tell me a story"):
 - **Ollama**: Simple CLI/API developers already know
 - **SGLang**: High-performance inference
 - **Smart Router**: Intelligent routing - fast local for simple tasks, powerful remote for complex tasks
+
+## gRPC 性能优化
+
+SMG/gRPC 路径包含三项优化，详见 `docs/protobuf.md`：
+
+- 原生 protobuf：启动前设置 `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=upb`；纯 Python 实现会告警但不阻断启动。
+- 流式 token 历史零拷贝：使用只读视图与后缀切片，避免每轮全量复制。
+- 队列通知使用 `call_soon_threadsafe`：保留顺序、去重、事件循环归属与关闭处理。
