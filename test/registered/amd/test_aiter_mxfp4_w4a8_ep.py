@@ -30,6 +30,10 @@ except Exception:  # pragma: no cover - depends on the CI image
     build_gate_valid_mask = None
     _HAS_AITER_W4A8 = False
 
+# The module-level import above is optional; the tests below use CPU mirrors
+# when the real ROCm/AITER stack is unavailable, so this file never requires
+# the full sglang runtime to be installed.
+
 requires_aiter_w4a8 = pytest.mark.skipif(
     not _HAS_AITER_W4A8,
     reason="aiter triton W4A8 gfx1250 module is not importable on this runner",

@@ -205,19 +205,6 @@ def build_gate_valid_mask(
     return (expert_map[topk_ids.long()] >= 0).to(torch.int32).contiguous()
 
 
-def build_gate_valid_mask(
-    expert_map: torch.Tensor, topk_ids: torch.Tensor
-) -> torch.Tensor:
-    """Build the per-gate validity mask for expert parallelism.
-
-    ``expert_map`` maps a global expert id to its rank-local id, with -1 for
-    experts owned by another rank (and for the trailing sentinel slot). Gates
-    routed to non-local experts are marked 0 so the combine skips them instead
-    of indexing a rank-local weight shard with a global expert id.
-    """
-    return (expert_map[topk_ids.long()] >= 0).to(torch.int32).contiguous()
-
-
 def aiter_w4a8_gfx1250_supports_parallel_config(
     use_all2all_kernels: bool,
     enable_eplb: bool,
@@ -318,6 +305,14 @@ def aiter_w4a8_gfx1250_forward(
             expert_map,
             num_local_experts,
         )
+        # The routing kernel already produces gate_valid; keep the helper as the
+        # single source of truth for the mask semantics and cross-check it.
+        assert torch.equal(
+            gate_valid,
+            build_gate_valid_mask(expert_map, routing_data.topk_ids)
+            if getattr(routing_data, "topk_ids", None) is not None
+            else gate_valid,
+        )
     else:
         # aiter routing on the raw router logits. renormalize=True (GPT-OSS)
         # corresponds to applying softmax to the top-k selection inside the
@@ -379,6 +374,7 @@ def aiter_w4a8_gfx1250_forward(
         gammas=None if apply_router_weight_on_input else gammas,
         swizzle_mx_scale=None,
         out_dtype=torch.bfloat16,
+        expert_map=expert_map,
         gate_valid=gate_valid,
     )
 

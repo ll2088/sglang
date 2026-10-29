@@ -21,6 +21,25 @@ def gate_valid_from_topk(expert_map, topk_ids):
     return (expert_map[topk_ids.long()] >= 0).to(torch.int32).contiguous()
 
 
+def test_gate_valid_mask_matches_module_helper_when_available():
+    """When the real module is importable, the CPU mirror must agree with it."""
+    try:
+        from sglang.srt.layers.moe.fused_moe_triton.aiter_mxfp4_w4a8_moe import (
+            build_ep_expert_map as real_build_ep_expert_map,
+            build_gate_valid_mask as real_build_gate_valid_mask,
+        )
+    except Exception:  # pragma: no cover - depends on the CI image
+        pytest.skip("aiter W4A8 module is not importable on this runner")
+
+    device = torch.device("cpu")
+    expert_map = real_build_ep_expert_map(8, 2, 1, device)
+    topk_ids = torch.tensor([[0, 2], [3, 5], [8, 1]], dtype=torch.int32)
+    assert torch.equal(
+        real_build_gate_valid_mask(expert_map, topk_ids),
+        gate_valid_from_topk(expert_map, topk_ids),
+    )
+
+
 def test_gate_valid_mask_all_local_and_all_remote():
     expert_map = build_ep_expert_map(8, 2, 0, torch.device("cpu"))
     local_ids = torch.tensor([[0, 1]], dtype=torch.int32)
