@@ -124,11 +124,12 @@ SMG/gRPC 路径包含三项优化，详见 `docs/protobuf.md`：
 ### 测试与 CI 说明
 
 上述三项优化的单元测试只依赖标准库与 `pytest`，通过
-`test/srt/_bootstrap_light.py` 在未安装完整 `sglang` 依赖时以轻量桩模块加载
-目标源码，因此 CI 无需执行 `pip install -e python` 即可运行：
+`test/srt/conftest.py` 在未安装完整 `sglang` 依赖时以轻量桩模块加载目标源码，
+因此 CI 无需执行 `pip install -e python` 即可运行：
 
 ```bash
-pytest -q test/srt/test_protobuf_impl.py test/srt/test_streaming_zero_copy.py \
+PYTHONPATH=python:test/srt python -m pytest -q \
+    test/srt/test_protobuf_impl.py test/srt/test_streaming_zero_copy.py \
     test/srt/test_async_queue_notify.py test/srt/test_entrypoint_imports.py \
     test/srt/test_protobuf_warning.py test/srt/test_queue_notify_threadsafe.py
 ```
