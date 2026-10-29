@@ -18,10 +18,8 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 UTILS_PATH = REPO_ROOT / "python" / "sglang" / "srt" / "function_call" / "utils.py"
 
 
-pytestmark = pytest.mark.skipif(
-    sys.version_info < (3, 10) or sys.version_info >= (3, 14),
-    reason="sglang dependencies support Python 3.10-3.12; run on a supported interpreter",
-)
+# The helper is stdlib-only, so these assertions run on every interpreter
+# the CI matrix provides (including 3.14). No version gate is needed here.
 
 
 LARGE_INTEGERS = [
@@ -154,3 +152,45 @@ def test_float_input_semantics_unchanged():
 def test_string_schema_not_coerced_to_number():
     assert coerce_to_schema_type("123", "string") == "123"
     assert coerce_to_schema_type("123", "integer") == 123
+
+
+def test_number_branch_tries_int_before_float():
+    """Static guard on the production source text.
+
+    The ``number`` branch must call ``int()`` before ``float()`` so that
+    large integer literals never round-trip through IEEE-754.
+    """
+    import ast
+
+    source = UTILS_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    fn = next(
+        n
+        for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name == "coerce_to_schema_type"
+    )
+    number_branch = None
+    for node in ast.walk(fn):
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Compare):
+            left = node.test.left
+            if (
+                isinstance(left, ast.Name)
+                and left.id == "schema_type"
+                and any(
+                    isinstance(c, ast.Constant) and c.value == "number"
+                    for c in node.test.comparators
+                )
+            ):
+                number_branch = node
+                break
+    assert number_branch is not None, "number branch not found"
+    calls = [
+        n.func.id
+        for n in ast.walk(number_branch)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    ]
+    assert "int" in calls, "number branch must call int()"
+    assert "float" in calls, "number branch must keep the float fallback"
+    assert calls.index("int") < calls.index("float"), (
+        "number branch must try int() before float()"
+    )

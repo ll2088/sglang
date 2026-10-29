@@ -111,6 +111,8 @@ def test_coerce_number_preserves_large_integer():
             assert isinstance(result, int), (value, schema_type, result)
             assert result == value, (value, schema_type, result)
             assert json.loads(json.dumps(result)) == value
+            if value != 0:
+                assert result != int(float(value)), (value, schema_type, result)
 
 
 def test_coerce_number_non_integer_semantics_unchanged():

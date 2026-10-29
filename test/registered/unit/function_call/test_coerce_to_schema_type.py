@@ -12,13 +12,10 @@ import pytest
 from sglang.srt.function_call.utils import coerce_to_schema_type
 
 # These tests only exercise the pure conversion helper, so they must not pull
-# in the serving stack. They are also expected to run on the project's
-# supported interpreters (3.10-3.12); a 3.14 interpreter breaks dependency
-# resolution for the wider sglang package before pytest even starts.
-pytestmark = pytest.mark.skipif(
-    sys.version_info < (3, 10) or sys.version_info >= (3, 14),
-    reason="sglang dependencies support Python 3.10-3.12; run on a supported interpreter",
-)
+# in the serving stack. The helper itself is stdlib-only, so the numeric
+# assertions run on every interpreter the CI matrix provides (including 3.14);
+# only the import of the wider sglang package is version-gated.
+_SUPPORTED_PYTHON = (3, 10) <= sys.version_info < (3, 14)
 
 
 LARGE_INTEGERS = [
@@ -52,6 +49,44 @@ def test_large_integer_preserved(value, schema_type):
     assert isinstance(result, int), (value, schema_type, result)
     assert result == value, (value, schema_type, result)
     assert json.loads(json.dumps(result)) == value
+
+
+def test_number_branch_tries_int_before_float():
+    """Static guard: the ``number`` branch must attempt ``int`` first.
+
+    This pins the production source order so a future refactor cannot
+    silently reintroduce the float round-trip for large integers.
+    """
+    import ast
+    import inspect
+
+    source = inspect.getsource(coerce_to_schema_type)
+    tree = ast.parse(source)
+    number_branch = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Compare):
+            left = node.test.left
+            if (
+                isinstance(left, ast.Name)
+                and left.id == "schema_type"
+                and any(
+                    isinstance(c, ast.Constant) and c.value == "number"
+                    for c in node.test.comparators
+                )
+            ):
+                number_branch = node
+                break
+    assert number_branch is not None, "number branch not found"
+    calls = [
+        n.func.id
+        for n in ast.walk(number_branch)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    ]
+    assert "int" in calls, "number branch must call int()"
+    assert "float" in calls, "number branch must keep the float fallback"
+    assert calls.index("int") < calls.index("float"), (
+        "number branch must try int() before float()"
+    )
 
 
 @pytest.mark.parametrize("value", IEEE754_UNSAFE_INTEGERS)
