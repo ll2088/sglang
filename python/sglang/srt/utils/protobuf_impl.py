@@ -1,49 +1,49 @@
-"""Protobuf runtime guidance shared by SGLang entrypoints.
+"""Protobuf runtime guidance shared by the gRPC / SMG launchers.
 
-Native protobuf (``upb``/``cpp``) is significantly faster than the pure
-Python implementation for gRPC/streaming payloads.  The active implementation
-is fixed at import time, so the environment variable must be set before
-``google.protobuf`` is imported.
+This module only uses the standard library plus an optional import of the
+protobuf implementation API. Detection is best-effort: when the private API
+cannot be imported or has no ``Type`` attribute, callers skip the warning and
+continue startup.
 """
+
+from __future__ import annotations
 
 import logging
 
 logger = logging.getLogger(__name__)
 
-_WARNED = False
+_WARNING_MESSAGE = (
+    "SGLang gRPC/SMG is using Python protobuf, which can reduce throughput. "
+    "Set PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=upb before starting Python "
+    "and install a supported protobuf wheel with the upb extension. "
+    "Changing the environment after importing protobuf does not change "
+    "the active implementation."
+)
 
 
-def get_protobuf_implementation():
+def get_protobuf_implementation() -> str | None:
     """Return the active protobuf implementation name, or ``None``.
 
-    Detection is best-effort: if the private API is unavailable the caller
-    must continue startup without a warning.
+    ``None`` means the private implementation API is unavailable; callers must
+    treat that as "unknown" and skip any diagnostic rather than failing.
     """
     try:
         from google.protobuf.internal import api_implementation
 
-        return api_implementation.Type()
+        implementation = api_implementation.Type()
     except (ImportError, AttributeError):
         return None
+    if not isinstance(implementation, str):
+        return None
+    return implementation
 
 
 def warn_if_python_protobuf() -> None:
-    """Warn once when the pure Python protobuf implementation is active.
+    """Warn once for pure Python protobuf when it can be detected.
 
-    Never raises and never blocks startup; ``upb`` and ``cpp`` are silent.
+    Native ``upb`` and ``cpp`` implementations do not warn. An unavailable
+    detection API never blocks startup.
     """
-    global _WARNED
-    if _WARNED:
-        return
     implementation = get_protobuf_implementation()
-    if implementation != "python":
-        return
-    _WARNED = True
-    logger.warning(
-        "SGLang is using the pure Python protobuf implementation, which can "
-        "reduce gRPC/streaming throughput. Set "
-        "PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=upb before starting Python "
-        "and install a protobuf wheel with the native extension. Changing "
-        "the environment after importing protobuf does not change the "
-        "active implementation."
-    )
+    if implementation == "python":
+        logger.warning(_WARNING_MESSAGE)

@@ -115,6 +115,8 @@ for chunk in router.chat_stream("Tell me a story"):
 
 SMG/gRPC 路径包含三项优化，详见 `docs/protobuf.md`：
 
-- 原生 protobuf：启动前设置 `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=upb`；纯 Python 实现会告警但不阻断启动，原生 `upb`/`cpp` 不告警。
-- 流式 token 历史零拷贝：使用只读视图与后缀切片（`token_history_view`），避免每轮全量复制；token 顺序、logprob 对齐与终止元数据不变。
-- 队列通知使用 `call_soon_threadsafe`：保留顺序、`frozenset` 去重、事件循环归属与关闭处理（`EventLoopShutdownError`）。
+- 原生 protobuf：启动前设置 `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=upb`；纯 Python 实现会告警但不阻断启动，原生 `upb`/`cpp` 不告警。检测 API 不可用时跳过告警并继续启动。
+- 流式 token 历史零拷贝：使用只读视图与后缀切片（`sglang.srt.utils.streaming.token_history_view`），避免每轮全量复制；token 顺序、logprob 对齐与终止元数据不变。
+- 队列通知使用 `call_soon_threadsafe`：`sglang.srt.utils.async_queue.notify_one` / `notify_many` 保留顺序、`frozenset` 去重、事件循环归属与关闭处理（`EventLoopShutdownError`）。
+
+环境变量 `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION` 必须在启动 Python 之前设置；导入 protobuf 后再修改不会改变已生效的实现。

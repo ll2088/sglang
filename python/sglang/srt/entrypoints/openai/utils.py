@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 # never blocks startup when the implementation cannot be detected.
 warn_if_python_protobuf()
 
+# Re-exported for callers that build streaming responses from token histories.
+from sglang.srt.utils.streaming import token_history_len, token_history_view  # noqa: E402,F401
+
 # GPT-2 style byte-level BPE decoder table (char -> raw byte). Byte-level BPE
 # vocab tokens are stored as a printable-char mapping of the raw UTF-8 bytes
 # (see openai/gpt-2 bytes_to_unicode); converting a token id back to its raw

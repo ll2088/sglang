@@ -1,61 +1,70 @@
-"""call_soon_threadsafe queue notification tests (standard library only)."""
+"""Unit tests for call_soon_threadsafe based queue notifications."""
 
 import asyncio
-import importlib.util
-import pathlib
 
 import pytest
 
-
-def _load_notify_module():
-    path = (
-        pathlib.Path(__file__).resolve().parents[2]
-        / "python"
-        / "sglang"
-        / "srt"
-        / "utils"
-        / "async_queue_notify.py"
-    )
-    spec = importlib.util.spec_from_file_location("sglang_async_queue_notify", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from sglang.srt.utils.async_queue import (
+    EventLoopShutdownError,
+    notify_many,
+    notify_one,
+)
 
 
-@pytest.fixture(scope="module")
- def notify_module():
-    return _load_notify_module()
-
-
-def test_notify_one_from_thread(notify_module):
-    async def run():
+def test_notify_one_cross_thread_ordering() -> None:
+    async def run() -> None:
         loop = asyncio.get_running_loop()
-        notifier = notify_module._Notifier(loop)
-        waiter = asyncio.create_task(notifier.wait())
-        await asyncio.sleep(0)
-        await asyncio.to_thread(notify_module.notify_one, loop, notifier)
-        await asyncio.wait_for(waiter, 5)
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def produce() -> None:
+            for value in range(10):
+                queue.put_nowait(value)
+                notify_one(loop, queue)
+
+        await asyncio.to_thread(produce)
+        received = [await asyncio.wait_for(queue.get(), 5) for _ in range(10)]
+        assert received == list(range(10))
 
     asyncio.run(run())
 
 
-def test_notify_many_preserves_order(notify_module):
-    async def run():
+def test_notify_many_deduplicates_and_preserves_order() -> None:
+    async def run() -> None:
         loop = asyncio.get_running_loop()
-        notifiers = [notify_module._Notifier(loop) for _ in range(3)]
-        waiters = [asyncio.create_task(n.wait()) for n in notifiers]
-        await asyncio.sleep(0)
-        await asyncio.to_thread(notify_module.notify_many, loop, notifiers * 2)
-        await asyncio.wait_for(asyncio.gather(*waiters), 5)
+        queues = [asyncio.Queue(), asyncio.Queue()]
+
+        def produce() -> None:
+            for value in range(5):
+                for queue in queues:
+                    queue.put_nowait(value)
+            notify_many(loop, queues * 2)
+
+        await asyncio.to_thread(produce)
+        results = [
+            [await asyncio.wait_for(q.get(), 5) for _ in range(5)] for q in queues
+        ]
+        assert results == [list(range(5)), list(range(5))]
 
     asyncio.run(run())
 
 
-def test_notify_on_closed_loop_raises(notify_module):
+def test_notify_raises_on_stopped_loop() -> None:
     loop = asyncio.new_event_loop()
-    notifier = notify_module._Notifier(loop)
+    queue: asyncio.Queue = asyncio.Queue()
+    try:
+        with pytest.raises(EventLoopShutdownError):
+            notify_one(loop, queue)
+        with pytest.raises(EventLoopShutdownError):
+            notify_many(loop, [queue])
+    finally:
+        loop.close()
+
+
+def test_notify_raises_on_closed_loop() -> None:
+    loop = asyncio.new_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
     loop.close()
-    with pytest.raises(notify_module.EventLoopShutdownError):
-        notify_module.notify_one(loop, notifier)
-    with pytest.raises(notify_module.EventLoopShutdownError):
-        notify_module.notify_many(loop, [notifier])
+    with pytest.raises(EventLoopShutdownError):
+        notify_one(loop, queue)
+    with pytest.raises(EventLoopShutdownError):
+        notify_many(loop, [queue])

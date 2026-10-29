@@ -1,49 +1,27 @@
-"""Helpers for streaming token delivery.
+"""Helpers for streaming token histories without per-step full copies."""
 
-Streaming updates must not copy the full token history on every step.  These
-helpers expose read-only views over the engine-owned history so callers can
-serialize only the new suffix while keeping token order, logprob alignment
-and terminal metadata intact.
-"""
+from __future__ import annotations
 
-from typing import Any, Optional, Sequence
+from typing import Any, Sequence
 
 
-def token_history_view(token_ids: Optional[Sequence[int]]) -> Sequence[int]:
-    """Return a read-only view of ``token_ids`` without copying.
+def token_history_view(token_ids: Sequence[Any] | None, sent_count: int):
+    """Read-only view of the not-yet-sent suffix of a token history.
 
-    ``None`` and empty histories map to an empty tuple.  The returned object
-    must not be mutated by callers; it aliases the engine-owned buffer.
+    Streaming paths used to copy the complete token history on every update
+    (``list(token_ids)``), which is O(n) per step. Callers only ever consume
+    the suffix after ``sent_count``, so return a slice of the existing
+    sequence instead of a fresh full copy. The returned object aliases the
+    source buffer: callers must not mutate it, and must not retain it past
+    the next update of ``token_ids``.
     """
-    if not token_ids:
-        return ()
-    return token_ids
-
-
-def new_token_slice(
-    token_ids: Optional[Sequence[int]], sent_count: int
-) -> Sequence[int]:
-    """Return the tokens produced since ``sent_count`` without copying.
-
-    Slicing a list copies only the new suffix, never the full history.
-    """
-    if not token_ids:
+    if token_ids is None:
         return ()
     if sent_count <= 0:
         return token_ids
-    if sent_count >= len(token_ids):
-        return ()
     return token_ids[sent_count:]
 
 
-def aligned_logprob_slice(
-    logprobs: Optional[Sequence[Any]], sent_count: int
-) -> Sequence[Any]:
-    """Return the logprob entries aligned with :func:`new_token_slice`."""
-    if not logprobs:
-        return ()
-    if sent_count <= 0:
-        return logprobs
-    if sent_count >= len(logprobs):
-        return ()
-    return logprobs[sent_count:]
+def token_history_len(token_ids: Sequence[Any] | None) -> int:
+    """Length of a token history that may be ``None`` or empty."""
+    return 0 if token_ids is None else len(token_ids)
