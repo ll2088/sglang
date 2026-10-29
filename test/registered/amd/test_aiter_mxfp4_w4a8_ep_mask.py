@@ -21,6 +21,16 @@ def gate_valid_from_topk(expert_map, topk_ids):
     return (expert_map[topk_ids.long()] >= 0).to(torch.int32).contiguous()
 
 
+def gate_valid_from_routing(expert_map, routing_data):
+    topk_ids = getattr(routing_data, "topk_ids", None)
+    if topk_ids is None:
+        raise ValueError(
+            "expert-parallel AITER W4A8 gfx1250 MoE requires routing to expose "
+            "topk_ids so gate_valid can be built."
+        )
+    return gate_valid_from_topk(expert_map, topk_ids)
+
+
 def test_gate_valid_mask_matches_module_helper_when_available():
     """When the real module is importable, the CPU mirror must agree with it."""
     try:
@@ -136,6 +146,31 @@ def test_gate_valid_mask_sentinel_slot_is_invalid():
     expert_map = build_ep_expert_map(num_experts, 2, 1, torch.device("cpu"))
     topk_ids = torch.tensor([[num_experts]], dtype=torch.int32)
     assert gate_valid_from_topk(expert_map, topk_ids).item() == 0
+
+
+class _FakeRoutingData:
+    def __init__(self, topk_ids):
+        self.topk_ids = topk_ids
+
+
+class _FakeRoutingDataNoTopk:
+    pass
+
+
+def test_gate_valid_mask_from_routing_matches_topk_helper():
+    expert_map = build_ep_expert_map(8, 2, 1, torch.device("cpu"))
+    topk_ids = torch.tensor([[0, 2], [3, 5], [8, 1]], dtype=torch.int32)
+    routing_data = _FakeRoutingData(topk_ids)
+    assert torch.equal(
+        gate_valid_from_routing(expert_map, routing_data),
+        gate_valid_from_topk(expert_map, topk_ids),
+    )
+
+
+def test_gate_valid_mask_from_routing_requires_topk_ids():
+    expert_map = build_ep_expert_map(8, 2, 1, torch.device("cpu"))
+    with pytest.raises(ValueError, match="topk_ids"):
+        gate_valid_from_routing(expert_map, _FakeRoutingDataNoTopk())
 
 
 @pytest.mark.parametrize("ep_size", [2, 4])

@@ -205,6 +205,23 @@ def build_gate_valid_mask(
     return (expert_map[topk_ids.long()] >= 0).to(torch.int32).contiguous()
 
 
+def build_gate_valid_mask_from_routing(
+    expert_map: torch.Tensor, routing_data: object
+) -> torch.Tensor:
+    """Build the gate_valid mask from a routing result that exposes topk_ids.
+
+    Hash routing and regular routing both surface ``topk_ids`` on the routing
+    data, so this is the single entry point used by the EP forward path.
+    """
+    topk_ids = getattr(routing_data, "topk_ids", None)
+    if topk_ids is None:
+        raise ValueError(
+            "expert-parallel AITER W4A8 gfx1250 MoE requires routing to expose "
+            "topk_ids so gate_valid can be built."
+        )
+    return build_gate_valid_mask(expert_map, topk_ids)
+
+
 def aiter_w4a8_gfx1250_supports_parallel_config(
     use_all2all_kernels: bool,
     enable_eplb: bool,
@@ -307,11 +324,12 @@ def aiter_w4a8_gfx1250_forward(
         )
         # The routing kernel already produces gate_valid; keep the helper as the
         # single source of truth for the mask semantics and cross-check it.
-        assert torch.equal(
-            gate_valid,
-            build_gate_valid_mask(expert_map, routing_data.topk_ids)
-            if getattr(routing_data, "topk_ids", None) is not None
-            else gate_valid,
+        expected_gate_valid = build_gate_valid_mask_from_routing(
+            expert_map, routing_data
+        )
+        assert torch.equal(gate_valid, expected_gate_valid), (
+            "routing kernel gate_valid disagrees with build_gate_valid_mask; "
+            "refusing to run the EP combine with inconsistent masks."
         )
     else:
         # aiter routing on the raw router logits. renormalize=True (GPT-OSS)

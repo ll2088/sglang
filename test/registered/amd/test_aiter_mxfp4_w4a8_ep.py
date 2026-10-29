@@ -17,6 +17,7 @@ try:
         aiter_w4a8_gfx1250_supports_parallel_config,
         build_ep_expert_map,
         build_gate_valid_mask,
+        build_gate_valid_mask_from_routing,
     )
 
     _HAS_AITER_W4A8 = True
@@ -28,6 +29,7 @@ except Exception:  # pragma: no cover - depends on the CI image
     aiter_w4a8_gfx1250_supports_parallel_config = None
     build_ep_expert_map = None
     build_gate_valid_mask = None
+    build_gate_valid_mask_from_routing = None
     _HAS_AITER_W4A8 = False
 
 # The module-level import above is optional; the tests below use CPU mirrors
@@ -73,6 +75,18 @@ def _build_ep_expert_map(num_experts, num_local_experts, ep_rank, device):
 def _gate_valid_from_topk(expert_map, topk_ids):
     if _HAS_AITER_W4A8:
         return build_gate_valid_mask(expert_map, topk_ids)
+    return (expert_map[topk_ids.long()] >= 0).to(torch.int32).contiguous()
+
+
+def _gate_valid_from_routing(expert_map, routing_data):
+    if _HAS_AITER_W4A8:
+        return build_gate_valid_mask_from_routing(expert_map, routing_data)
+    topk_ids = getattr(routing_data, "topk_ids", None)
+    if topk_ids is None:
+        raise ValueError(
+            "expert-parallel AITER W4A8 gfx1250 MoE requires routing to expose "
+            "topk_ids so gate_valid can be built."
+        )
     return (expert_map[topk_ids.long()] >= 0).to(torch.int32).contiguous()
 
 
@@ -171,6 +185,39 @@ def test_gate_valid_mask_sentinel_slot_is_invalid():
     topk_ids = torch.tensor([[num_experts]], dtype=torch.int32)
     gate_valid = _gate_valid_from_topk(expert_map, topk_ids)
     assert gate_valid.item() == 0
+
+
+class _FakeRoutingData:
+    def __init__(self, topk_ids):
+        self.topk_ids = topk_ids
+
+
+class _FakeRoutingDataNoTopk:
+    pass
+
+
+def test_gate_valid_mask_from_routing_matches_topk_helper():
+    num_experts = 8
+    num_local_experts = 2
+    device = torch.device("cpu")
+    fn = build_ep_expert_map if _HAS_AITER_W4A8 else _build_ep_expert_map
+    expert_map = fn(num_experts, num_local_experts, 1, device)
+    topk_ids = torch.tensor([[0, 2], [3, 5], [num_experts, 1]], dtype=torch.int32)
+    routing_data = _FakeRoutingData(topk_ids)
+    assert torch.equal(
+        _gate_valid_from_routing(expert_map, routing_data),
+        _gate_valid_from_topk(expert_map, topk_ids),
+    )
+
+
+def test_gate_valid_mask_from_routing_requires_topk_ids():
+    num_experts = 8
+    num_local_experts = 2
+    device = torch.device("cpu")
+    fn = build_ep_expert_map if _HAS_AITER_W4A8 else _build_ep_expert_map
+    expert_map = fn(num_experts, num_local_experts, 1, device)
+    with pytest.raises(ValueError, match="topk_ids"):
+        _gate_valid_from_routing(expert_map, _FakeRoutingDataNoTopk())
 
 
 @pytest.mark.parametrize(
