@@ -192,6 +192,20 @@ def prepare_w4a8_gfx1250_weights(
     )
 
 
+def aiter_w4a8_gfx1250_supports_parallel_config(
+    use_all2all_kernels: bool,
+    enable_eplb: bool,
+    dp_size: int,
+) -> bool:
+    """Whether the gfx1250 W4A8 kernel supports the given parallel config.
+
+    Naive expert parallelism (no all-to-all, no EPLB, dp_size <= 1) is
+    supported via ``expert_map`` + ``gate_valid``. All-to-all kernels and
+    EPLB are not, because routing metadata is still global.
+    """
+    return not use_all2all_kernels and not enable_eplb and dp_size <= 1
+
+
 def aiter_w4a8_gfx1250_forward(
     hidden_states: torch.Tensor,
     router_logits: torch.Tensor,
@@ -233,6 +247,11 @@ def aiter_w4a8_gfx1250_forward(
         return hidden_states.new_empty(hidden_states.shape)
 
     if expert_map is not None:
+        if num_local_experts is None:
+            raise ValueError(
+                "expert_map requires num_local_experts for the AITER W4A8 "
+                "gfx1250 expert-parallel path."
+            )
         routing_data, gather_idx, scatter_idx, gate_valid = _ep_routing(
             routing_mod,
             router_logits,
