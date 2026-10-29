@@ -1,47 +1,66 @@
-import builtins
-import importlib
+"""Protobuf implementation warning tests (standard library only)."""
+
+import importlib.util
+import pathlib
+import sys
+import types
 
 import pytest
 
-from sglang.srt.utils import protobuf_impl
 
-
-@pytest.mark.parametrize("implementation", ["python", "upb", "cpp"])
-def test_warn_only_for_python(monkeypatch, implementation):
-    from google.protobuf.internal import api_implementation
-
-    calls = []
-    monkeypatch.setattr(api_implementation, "Type", lambda: implementation)
-    monkeypatch.setattr(
-        protobuf_impl.logger, "warning", lambda *a, **k: calls.append(a)
+def _load_protobuf_impl():
+    path = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "python"
+        / "sglang"
+        / "srt"
+        / "utils"
+        / "protobuf_impl.py"
     )
+    spec = importlib.util.spec_from_file_location("sglang_protobuf_impl", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="module")
+ def protobuf_impl():
+    return _load_protobuf_impl()
+
+
+def _install_fake_api(monkeypatch, implementation):
+    api = types.SimpleNamespace(Type=lambda: implementation)
+    internal = types.ModuleType("google.protobuf.internal")
+    internal.api_implementation = api
+    google = types.ModuleType("google")
+    protobuf = types.ModuleType("google.protobuf")
+    protobuf.internal = internal
+    google.protobuf = protobuf
+    monkeypatch.setitem(sys.modules, "google", google)
+    monkeypatch.setitem(sys.modules, "google.protobuf", protobuf)
+    monkeypatch.setitem(sys.modules, "google.protobuf.internal", internal)
+
+
+def test_python_implementation_warns(protobuf_impl, monkeypatch):
+    _install_fake_api(monkeypatch, "python")
+    warnings = []
+    monkeypatch.setattr(protobuf_impl.logger, "warning", warnings.append)
     protobuf_impl.warn_if_python_protobuf()
-    if implementation == "python":
-        assert len(calls) == 1
-        assert "PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=upb" in calls[0][0]
-    else:
-        assert calls == []
+    assert len(warnings) == 1
+    assert "PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=upb" in warnings[0]
 
 
-@pytest.mark.parametrize("missing", ["import", "Type"])
-def test_missing_api_does_not_raise(monkeypatch, missing):
-    from google.protobuf.internal import api_implementation
+def test_native_implementations_do_not_warn(protobuf_impl, monkeypatch):
+    for implementation in ("upb", "cpp"):
+        _install_fake_api(monkeypatch, implementation)
+        warnings = []
+        monkeypatch.setattr(protobuf_impl.logger, "warning", warnings.append)
+        protobuf_impl.warn_if_python_protobuf()
+        assert warnings == []
 
-    calls = []
-    monkeypatch.setattr(
-        protobuf_impl.logger, "warning", lambda *a, **k: calls.append(a)
-    )
-    if missing == "import":
-        real_import = builtins.__import__
 
-        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-            if name == "google.protobuf.internal" and "api_implementation" in fromlist:
-                raise ImportError("unavailable")
-            return real_import(name, globals, locals, fromlist, level)
-
-        monkeypatch.setattr(builtins, "__import__", fake_import)
-    else:
-        monkeypatch.delattr(api_implementation, "Type")
-    importlib.reload(protobuf_impl)
+def test_missing_api_does_not_raise(protobuf_impl, monkeypatch):
+    monkeypatch.setitem(sys.modules, "google", None)
+    monkeypatch.setitem(sys.modules, "google.protobuf", None)
+    monkeypatch.setitem(sys.modules, "google.protobuf.internal", None)
     protobuf_impl.warn_if_python_protobuf()
-    assert calls == []
