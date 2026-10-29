@@ -60,6 +60,10 @@ fn tool_parity_preserves_large_integer_number_arguments() {
             .and_then(|rest| rest.split(|c| c == ',' || c == '}').next())
             .unwrap();
         assert_eq!(limit.to_string(), expected, "large integer argument changed");
+        // 负数与 0 必须保留符号与精确值，不得被 float 近似。
+        if let Ok(expected_int) = expected.parse::<i64>() {
+            assert_eq!(limit.as_i64(), Some(expected_int), "large integer sign/value changed");
+        }
         // 与 Python 侧一致：JSON 往返后数值不变，且不是 float 近似值。
         let roundtrip: Value = serde_json::from_str(&limit.to_string()).unwrap();
         assert_eq!(&roundtrip, limit, "large integer argument changed on roundtrip");

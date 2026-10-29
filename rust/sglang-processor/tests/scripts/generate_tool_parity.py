@@ -81,6 +81,16 @@ def large_integer_nested_inputs():
     ]
 
 
+def large_integer_negative_inputs():
+    """负数大整数与 0 单独成组，便于 Rust 侧逐字段核对符号与精确值。"""
+    return [
+        [
+            '{"name": "lookup", "parameters": {"limit": %d}}' % value
+            for value in (-(2**63), -(2**53 + 1), 0)
+        ]
+    ]
+
+
 def calls(items):
     return [[c.tool_index, c.name, c.parameters] for c in items]
 
@@ -119,7 +129,11 @@ for path in sorted(FIXTURES.glob("*.json")):
     large_fixture = {
         "parser": fixture["parser"],
         "tools": [large_integer_tool()],
-        "inputs": large_integer_inputs() + large_integer_nested_inputs(),
+        "inputs": (
+            large_integer_inputs()
+            + large_integer_nested_inputs()
+            + large_integer_negative_inputs()
+        ),
     }
     tools = [Tool(**tool) for tool in large_fixture["tools"]]
     large_fixture["cases"] = [

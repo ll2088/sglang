@@ -120,6 +120,9 @@ def test_int64_boundaries_preserved(value, schema_type):
     assert isinstance(result, int), (value, schema_type, result)
     assert result == value, (value, schema_type, result)
     assert json.loads(json.dumps(result)) == value
+    # int64 边界与 2^53 边界不得经 float 中转。
+    if value not in (0,):
+        assert result != int(float(value)), (value, schema_type, result)
 
 
 @pytest.mark.parametrize("value", [2**63 - 1, -(2**63)])
@@ -129,6 +132,7 @@ def test_large_integer_in_nested_structures(value):
     result = coerce_to_schema_type(str(value), "number")
     assert isinstance(result, int)
     assert result == value
+    assert result != int(float(value))
 
 
 @pytest.mark.parametrize("value", IEEE754_UNSAFE_INTEGERS)
