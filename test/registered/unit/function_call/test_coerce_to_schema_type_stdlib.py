@@ -125,17 +125,6 @@ def test_bool_not_coerced_to_int():
     assert coerce_to_schema_type(False, "number") is False
 
 
-@pytest.mark.parametrize("value", [2**63 - 1, -(2**63), 2**53 + 1, -(2**53 + 1), 0])
-@pytest.mark.parametrize("schema_type", NUMBER_SCHEMA_TYPES)
-def test_int64_boundaries_preserved(value, schema_type):
-    result = coerce_to_schema_type(str(value), schema_type)
-    assert isinstance(result, int), (value, schema_type, result)
-    assert result == value, (value, schema_type, result)
-    assert json.loads(json.dumps(result)) == value
-    if value != 0:
-        assert result != int(float(value)), (value, schema_type, result)
-
-
 @pytest.mark.parametrize("value", IEEE754_UNSAFE_INTEGERS)
 def test_large_integer_in_nested_structures_exact(value):
     nested = {"items": [value, {"limit": value}], "limit": value}

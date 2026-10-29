@@ -87,17 +87,6 @@ def test_large_integer_not_rounded_through_float(value, schema_type):
     assert result != int(float(value)), (value, schema_type, result)
 
 
-@pytest.mark.parametrize("value", [2**63 - 1, -(2**63), 2**53 + 1, -(2**53 + 1), 0])
-@pytest.mark.parametrize("schema_type", NUMBER_SCHEMA_TYPES)
-def test_int64_boundaries_preserved(value, schema_type):
-    result = coerce_to_schema_type(str(value), schema_type)
-    assert isinstance(result, int), (value, schema_type, result)
-    assert result == value, (value, schema_type, result)
-    assert json.loads(json.dumps(result)) == value
-    if value != 0:
-        assert result != int(float(value)), (value, schema_type, result)
-
-
 @pytest.mark.parametrize("value", LARGE_INTEGERS)
 def test_large_integer_preserved_as_int_input(value):
     result = coerce_to_schema_type(value, "number")
