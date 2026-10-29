@@ -15,6 +15,10 @@ from sglang.srt.utils.protobuf_impl import warn_if_python_protobuf
 
 logger = logging.getLogger(__name__)
 
+# Best-effort startup diagnostic: warns once for pure Python protobuf and
+# never blocks startup when the implementation cannot be detected.
+warn_if_python_protobuf()
+
 # GPT-2 style byte-level BPE decoder table (char -> raw byte). Byte-level BPE
 # vocab tokens are stored as a printable-char mapping of the raw UTF-8 bytes
 # (see openai/gpt-2 bytes_to_unicode); converting a token id back to its raw
