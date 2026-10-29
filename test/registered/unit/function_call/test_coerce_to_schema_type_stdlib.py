@@ -19,8 +19,8 @@ UTILS_PATH = REPO_ROOT / "python" / "sglang" / "srt" / "function_call" / "utils.
 
 
 pytestmark = pytest.mark.skipif(
-    sys.version_info < (3, 10),
-    reason="sglang dependencies support Python 3.10+",
+    sys.version_info < (3, 10) or sys.version_info >= (3, 14),
+    reason="sglang dependencies support Python 3.10-3.12; run on a supported interpreter",
 )
 
 
