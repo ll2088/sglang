@@ -25,7 +25,15 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures/tool_parity"
 # Large integers that exceed the IEEE-754 exact range. JSON Schema ``number``
 # accepts integers, so both parsers must preserve them exactly instead of
 # routing them through ``float``.
-LARGE_INTEGER_VALUES = [2**53 + 1, -(2**53 + 1), 2**63 - 1, -(2**63)]
+LARGE_INTEGER_VALUES = [
+    2**53 + 1,
+    -(2**53 + 1),
+    9007199254740993,
+    1234567890123456789,
+    2**63 - 1,
+    -(2**63),
+    0,
+]
 
 
 def large_integer_tool():

@@ -60,6 +60,9 @@ fn tool_parity_preserves_large_integer_number_arguments() {
             .and_then(|rest| rest.split('}').next())
             .unwrap();
         assert_eq!(limit.to_string(), expected, "large integer argument changed");
+        // 与 Python 侧一致：JSON 往返后数值不变，且不是 float 近似值。
+        let roundtrip: Value = serde_json::from_str(&limit.to_string()).unwrap();
+        assert_eq!(&roundtrip, limit, "large integer argument changed on roundtrip");
     }
 }
 
