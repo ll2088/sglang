@@ -121,6 +121,18 @@ SMG/gRPC 路径包含三项优化，详见 `docs/protobuf.md`：
 
 环境变量 `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION` 必须在启动 Python 之前设置；导入 protobuf 后再修改不会改变已生效的实现。
 
+### 原生 protobuf
+
+SMG/gRPC 启动器在模型启动前检测 protobuf 实现：纯 Python 实现输出一次告警并继续启动，原生 `upb`/`cpp` 不告警；检测 API 不可用时跳过告警并继续启动。推荐在容器或部署配置中显式设置 `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=upb`，并确认所用 protobuf wheel 包含原生扩展。
+
+### 流式 token 历史零拷贝
+
+流式响应构造路径使用只读视图与后缀切片（`sglang.srt.utils.streaming.token_history_view`），避免每轮全量复制 token 历史；token 顺序、logprob 对齐与终止元数据保持不变。
+
+### 队列通知使用 call_soon_threadsafe
+
+跨线程结果队列通知改用 `loop.call_soon_threadsafe`（`sglang.srt.utils.async_queue.notify_one` / `notify_many`），保留顺序、`frozenset` 去重、事件循环归属与关闭处理（`EventLoopShutdownError`）。
+
 ### 测试与 CI 说明
 
 上述三项优化的单元测试只依赖标准库与 `pytest`，通过
