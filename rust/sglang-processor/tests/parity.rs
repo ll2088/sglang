@@ -57,12 +57,22 @@ fn tool_parity_preserves_large_integer_number_arguments() {
         let expected = case["chunks"][0]
             .as_str()
             .and_then(|chunk| chunk.split("\"limit\": ").nth(1))
-            .and_then(|rest| rest.split('}').next())
+            .and_then(|rest| rest.split(|c| c == ',' || c == '}').next())
             .unwrap();
         assert_eq!(limit.to_string(), expected, "large integer argument changed");
         // 与 Python 侧一致：JSON 往返后数值不变，且不是 float 近似值。
         let roundtrip: Value = serde_json::from_str(&limit.to_string()).unwrap();
         assert_eq!(&roundtrip, limit, "large integer argument changed on roundtrip");
+        if let Some(items) = parameters.get("items").and_then(|v| v.as_array()) {
+            assert_eq!(items.len(), 2, "nested items length changed");
+            assert_eq!(&items[0], limit, "nested array integer changed");
+            let nested_limit = &items[1]["limit"];
+            assert!(
+                nested_limit.is_i64() || nested_limit.is_u64(),
+                "nested large integer was not preserved as an integer: {nested_limit}"
+            );
+            assert_eq!(nested_limit, limit, "nested object integer changed");
+        }
     }
 }
 

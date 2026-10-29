@@ -35,6 +35,17 @@ LARGE_INTEGER_VALUES = [
     0,
 ]
 
+# Values that must never be routed through float: 2**53 + 1 is the first
+# integer not exactly representable as an IEEE-754 double.
+IEEE754_UNSAFE_INTEGER_VALUES = [
+    2**53 + 1,
+    -(2**53 + 1),
+    9007199254740993,
+    1234567890123456789,
+    2**63 - 1,
+    -(2**63),
+]
+
 
 def large_integer_tool():
     return {
@@ -55,6 +66,16 @@ def large_integer_inputs():
     return [
         [
             '{"name": "lookup", "parameters": {"limit": %d}}' % value
+            for value in LARGE_INTEGER_VALUES
+        ]
+    ]
+
+
+def large_integer_nested_inputs():
+    return [
+        [
+            '{"name": "lookup", "parameters": {"limit": %d, "items": [%d, {"limit": %d}]}}'
+            % (value, value, value)
             for value in LARGE_INTEGER_VALUES
         ]
     ]
@@ -98,7 +119,7 @@ for path in sorted(FIXTURES.glob("*.json")):
     large_fixture = {
         "parser": fixture["parser"],
         "tools": [large_integer_tool()],
-        "inputs": large_integer_inputs(),
+        "inputs": large_integer_inputs() + large_integer_nested_inputs(),
     }
     tools = [Tool(**tool) for tool in large_fixture["tools"]]
     large_fixture["cases"] = [
