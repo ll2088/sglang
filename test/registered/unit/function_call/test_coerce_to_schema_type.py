@@ -16,8 +16,8 @@ from sglang.srt.function_call.utils import coerce_to_schema_type
 # supported interpreters (3.10-3.12); a 3.14 interpreter breaks dependency
 # resolution for the wider sglang package before pytest even starts.
 pytestmark = pytest.mark.skipif(
-    sys.version_info >= (3, 14),
-    reason="sglang dependencies have no cp314 wheels; run on 3.10-3.12",
+    sys.version_info < (3, 10) or sys.version_info >= (3, 14),
+    reason="sglang dependencies support Python 3.10-3.12; run on a supported interpreter",
 )
 
 
