@@ -120,3 +120,18 @@ SMG/gRPC 路径包含三项优化，详见 `docs/protobuf.md`：
 - 队列通知使用 `call_soon_threadsafe`：`sglang.srt.utils.async_queue.notify_one` / `notify_many` 保留顺序、`frozenset` 去重、事件循环归属与关闭处理（`EventLoopShutdownError`）。
 
 环境变量 `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION` 必须在启动 Python 之前设置；导入 protobuf 后再修改不会改变已生效的实现。
+
+### 测试与 CI 说明
+
+上述三项优化的单元测试只依赖标准库与 `pytest`，通过
+`test/srt/_bootstrap_light.py` 在未安装完整 `sglang` 依赖时以轻量桩模块加载
+目标源码，因此 CI 无需执行 `pip install -e python` 即可运行：
+
+```bash
+pytest -q test/srt/test_protobuf_impl.py test/srt/test_streaming_zero_copy.py \
+    test/srt/test_async_queue_notify.py test/srt/test_entrypoint_imports.py \
+    test/srt/test_protobuf_warning.py test/srt/test_queue_notify_threadsafe.py
+```
+
+若需要验证真实 protobuf 实现，请在启动 Python 前设置
+`PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=upb` 并确保 protobuf wheel 含原生扩展。
