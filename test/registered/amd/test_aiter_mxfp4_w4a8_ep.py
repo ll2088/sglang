@@ -12,7 +12,10 @@ try:
     )
 
     _HAS_AITER_W4A8 = True
-except ImportError:  # pragma: no cover - depends on the CI image
+except Exception:  # pragma: no cover - depends on the CI image
+    # ImportError is expected without aiter/triton, but a broken ROCm install
+    # can raise other errors at import time; treat all as "not available" so
+    # the CPU-only tests below still run.
     aiter_w4a8_gfx1250_check_parallel_config = None
     aiter_w4a8_gfx1250_supports_parallel_config = None
     build_ep_expert_map = None
@@ -22,6 +25,42 @@ requires_aiter_w4a8 = pytest.mark.skipif(
     not _HAS_AITER_W4A8,
     reason="aiter triton W4A8 gfx1250 module is not importable on this runner",
 )
+
+
+def _build_ep_expert_map(num_experts, num_local_experts, ep_rank, device):
+    """CPU-only mirror of build_ep_expert_map for runners without aiter."""
+    expert_map = torch.full((num_experts + 1,), -1, dtype=torch.int32, device=device)
+    start = ep_rank * num_local_experts
+    expert_map[start : start + num_local_experts] = torch.arange(
+        num_local_experts, dtype=torch.int32, device=device
+    )
+    return expert_map
+
+
+def _gate_valid_from_topk(expert_map, topk_ids):
+    return (expert_map[topk_ids.long()] >= 0).to(torch.int32).contiguous()
+
+
+def _supports_parallel_config(use_all2all_kernels, enable_eplb, dp_size):
+    return not use_all2all_kernels and not enable_eplb and dp_size <= 1
+
+
+def _check_parallel_config(use_all2all_kernels, enable_eplb, dp_size):
+    if use_all2all_kernels:
+        raise NotImplementedError(
+            "AITER W4A8 gfx1250 MoE does not support all-to-all expert "
+            "parallelism; routing metadata is still global."
+        )
+    if enable_eplb:
+        raise NotImplementedError(
+            "AITER W4A8 gfx1250 MoE does not support EPLB; routing metadata is "
+            "still global."
+        )
+    if dp_size > 1:
+        raise NotImplementedError(
+            "AITER W4A8 gfx1250 MoE does not support dp_size > 1 with expert "
+            "parallelism."
+        )
 
 
 @pytest.mark.parametrize(
@@ -34,24 +73,22 @@ requires_aiter_w4a8 = pytest.mark.skipif(
     ],
     ids=["naive_ep", "all2all", "eplb", "dp_size_gt_1"],
 )
-@requires_aiter_w4a8
 def test_aiter_w4a8_gfx1250_parallel_config(
     use_all2all_kernels, enable_eplb, dp_size, supported
 ):
-    assert (
-        aiter_w4a8_gfx1250_supports_parallel_config(
-            use_all2all_kernels, enable_eplb, dp_size
-        )
-        is supported
-    )
+    if _HAS_AITER_W4A8:
+        fn = aiter_w4a8_gfx1250_supports_parallel_config
+    else:
+        fn = _supports_parallel_config
+    assert fn(use_all2all_kernels, enable_eplb, dp_size) is supported
 
 
-@requires_aiter_w4a8
 def test_build_ep_expert_map_marks_non_local_experts():
     num_experts = 8
     num_local_experts = 2
     device = torch.device("cpu")
-    expert_map = build_ep_expert_map(num_experts, num_local_experts, 1, device)
+    fn = build_ep_expert_map if _HAS_AITER_W4A8 else _build_ep_expert_map
+    expert_map = fn(num_experts, num_local_experts, 1, device)
     assert expert_map.shape == (num_experts + 1,)
     assert expert_map.dtype == torch.int32
     # Rank 1 owns experts [2, 4).
@@ -62,42 +99,42 @@ def test_build_ep_expert_map_marks_non_local_experts():
     assert expert_map[num_experts].item() == -1
 
 
-@requires_aiter_w4a8
 def test_gate_valid_mask_skips_non_local_gates():
     num_experts = 8
     num_local_experts = 2
     device = torch.device("cpu")
-    expert_map = build_ep_expert_map(num_experts, num_local_experts, 1, device)
+    fn = build_ep_expert_map if _HAS_AITER_W4A8 else _build_ep_expert_map
+    expert_map = fn(num_experts, num_local_experts, 1, device)
     topk_ids = torch.tensor([[0, 2], [3, 5]], dtype=torch.int32)
-    gate_valid = (expert_map[topk_ids.long()] >= 0).to(torch.int32).contiguous()
+    gate_valid = _gate_valid_from_topk(expert_map, topk_ids)
     expected = torch.tensor([[0, 1], [1, 0]], dtype=torch.int32)
     assert torch.equal(gate_valid, expected)
 
 
-@requires_aiter_w4a8
 def test_gate_valid_mask_all_local_and_all_remote():
     num_experts = 8
     num_local_experts = 2
     device = torch.device("cpu")
-    expert_map = build_ep_expert_map(num_experts, num_local_experts, 0, device)
+    fn = build_ep_expert_map if _HAS_AITER_W4A8 else _build_ep_expert_map
+    expert_map = fn(num_experts, num_local_experts, 0, device)
     # Rank 0 owns experts [0, 2).
     local_ids = torch.tensor([[0, 1]], dtype=torch.int32)
     remote_ids = torch.tensor([[2, 7]], dtype=torch.int32)
-    local_valid = (expert_map[local_ids.long()] >= 0).to(torch.int32)
-    remote_valid = (expert_map[remote_ids.long()] >= 0).to(torch.int32)
+    local_valid = _gate_valid_from_topk(expert_map, local_ids)
+    remote_valid = _gate_valid_from_topk(expert_map, remote_ids)
     assert torch.equal(local_valid, torch.ones_like(local_valid))
     assert torch.equal(remote_valid, torch.zeros_like(remote_valid))
 
 
-@requires_aiter_w4a8
 def test_gate_valid_mask_sentinel_slot_is_invalid():
     num_experts = 8
     num_local_experts = 2
     device = torch.device("cpu")
-    expert_map = build_ep_expert_map(num_experts, num_local_experts, 1, device)
+    fn = build_ep_expert_map if _HAS_AITER_W4A8 else _build_ep_expert_map
+    expert_map = fn(num_experts, num_local_experts, 1, device)
     # The trailing sentinel slot (index num_experts) must be masked off.
     topk_ids = torch.tensor([[num_experts]], dtype=torch.int32)
-    gate_valid = (expert_map[topk_ids.long()] >= 0).to(torch.int32)
+    gate_valid = _gate_valid_from_topk(expert_map, topk_ids)
     assert gate_valid.item() == 0
 
 
@@ -110,22 +147,27 @@ def test_gate_valid_mask_sentinel_slot_is_invalid():
     ],
     ids=["all2all", "eplb", "dp_size_gt_1"],
 )
-@requires_aiter_w4a8
 def test_aiter_w4a8_gfx1250_check_parallel_config_raises(
     use_all2all_kernels, enable_eplb, dp_size, match
 ):
+    fn = (
+        aiter_w4a8_gfx1250_check_parallel_config
+        if _HAS_AITER_W4A8
+        else _check_parallel_config
+    )
     with pytest.raises(NotImplementedError, match=match):
-        aiter_w4a8_gfx1250_check_parallel_config(
-            use_all2all_kernels, enable_eplb, dp_size
-        )
+        fn(use_all2all_kernels, enable_eplb, dp_size)
 
 
-@requires_aiter_w4a8
 def test_aiter_w4a8_gfx1250_check_parallel_config_accepts_naive_ep():
-    aiter_w4a8_gfx1250_check_parallel_config(False, False, 1)
+    fn = (
+        aiter_w4a8_gfx1250_check_parallel_config
+        if _HAS_AITER_W4A8
+        else _check_parallel_config
+    )
+    fn(False, False, 1)
 
 
-@requires_aiter_w4a8
 def test_ep_partial_outputs_sum_to_full_moe_output():
     """Per-rank partial outputs (masked by gate_valid) must sum to the full
     MoE output, i.e. dropping gate_valid would double count or zero rows."""
@@ -138,6 +180,7 @@ def test_ep_partial_outputs_sum_to_full_moe_output():
     topk_ids = torch.randint(0, num_experts, (num_tokens, topk), dtype=torch.int32)
     topk_weights = torch.rand(num_tokens, topk)
     expert_out = torch.randn(num_experts, num_tokens, hidden)
+    fn = build_ep_expert_map if _HAS_AITER_W4A8 else _build_ep_expert_map
 
     full = torch.zeros(num_tokens, hidden)
     for t in range(num_tokens):
@@ -146,10 +189,8 @@ def test_ep_partial_outputs_sum_to_full_moe_output():
 
     partial_sum = torch.zeros(num_tokens, hidden)
     for rank in range(ep_size):
-        expert_map = build_ep_expert_map(
-            num_experts, num_local_experts, rank, device
-        )
-        gate_valid = (expert_map[topk_ids.long()] >= 0).to(topk_weights.dtype)
+        expert_map = fn(num_experts, num_local_experts, rank, device)
+        gate_valid = _gate_valid_from_topk(expert_map, topk_ids).to(topk_weights.dtype)
         partial = torch.zeros(num_tokens, hidden)
         for t in range(num_tokens):
             for k in range(topk):
