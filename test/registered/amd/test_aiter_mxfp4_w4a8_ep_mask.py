@@ -2,6 +2,8 @@
 # the AITER MXFP4 W4A8/W4A16 MoE backends. These mirror the helpers in
 # aiter_mxfp4_w4a8_moe.py but do not import aiter/triton, so they run on any CI
 # runner that has torch installed.
+#
+# Run with a plain `python -m pytest` (no .venv, no ROCm, no aiter).
 import pytest
 import torch
 

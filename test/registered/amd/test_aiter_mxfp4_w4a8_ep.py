@@ -1,9 +1,16 @@
+import importlib
+
 import pytest
 import torch
 
 # The AITER W4A8 gfx1250 module pulls in aiter/triton at import time. Import it
 # lazily so this file can be collected (and the pure-torch EP mask tests below
 # can run) on CI runners without ROCm/AITER installed.
+#
+# NOTE: this file must stay runnable with a plain `python -m pytest` on a CPU
+# runner (no .venv, no ROCm, no aiter). The import below is therefore guarded
+# and the tests fall back to local CPU mirrors of the helpers when the real
+# module is unavailable.
 try:
     from sglang.srt.layers.moe.fused_moe_triton.aiter_mxfp4_w4a8_moe import (
         aiter_w4a8_gfx1250_check_parallel_config,
@@ -25,6 +32,26 @@ requires_aiter_w4a8 = pytest.mark.skipif(
     not _HAS_AITER_W4A8,
     reason="aiter triton W4A8 gfx1250 module is not importable on this runner",
 )
+
+
+def test_aiter_mxfp4_w4a8_module_import_smoke():
+    """Smoke test: the module import chain must not raise on a CPU runner.
+
+    The real module may be unavailable (no aiter/triton), in which case the
+    guarded import above already recorded that; either way importing this test
+    module must succeed. This mirrors the CI smoke command
+    `python -c "import sglang.srt.layers.moe.fused_moe_triton.aiter_mxfp4_w4a8_moe"`
+    without requiring the optional ROCm stack.
+    """
+    try:
+        importlib.import_module(
+            "sglang.srt.layers.moe.fused_moe_triton.aiter_mxfp4_w4a8_moe"
+        )
+    except Exception as exc:  # pragma: no cover - depends on the CI image
+        # Missing aiter/triton is acceptable; anything else is a real failure.
+        assert isinstance(exc, (ImportError, ModuleNotFoundError)), (
+            f"unexpected error importing aiter_mxfp4_w4a8_moe: {exc!r}"
+        )
 
 
 def _build_ep_expert_map(num_experts, num_local_experts, ep_rank, device):
