@@ -26,7 +26,6 @@ from typing import AsyncIterator
 from unittest.mock import Mock
 
 from sglang.srt.entrypoints.openai.protocol import RequestResponseMetadata
-from sglang.srt.entrypoints.openai.serving_responses import OpenAIServingResponses
 from sglang.srt.runtime_context import get_context, publish
 from sglang.srt.server_args import ServerArgs
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -123,10 +122,16 @@ def test_coerce_number_non_integer_semantics_unchanged():
     assert coerce_to_schema_type("123", "string") == "123"
 
 
-def make_serving(*, is_multimodal: bool = False) -> OpenAIServingResponses:
+def make_serving(*, is_multimodal: bool = False):
     """The serving layer reads its config from the bags, so the fixture
     publishes one. Idempotent: a caller that already published keeps its own,
-    which is how a test states a value the default record does not carry."""
+    which is how a test states a value the default record does not carry.
+
+    ``OpenAIServingResponses`` is imported lazily so that the pure
+    ``coerce_to_schema_type`` tests in this module do not pull in the full
+    serving stack (and its heavy optional dependencies)."""
+    from sglang.srt.entrypoints.openai.serving_responses import OpenAIServingResponses
+
     if not get_context().is_config_namespace_published("serving"):
         publish(ServerArgs(model_path="dummy"), role="tokenizer")
     return OpenAIServingResponses(
