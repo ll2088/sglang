@@ -1,10 +1,26 @@
 import pytest
 import torch
 
-from sglang.srt.layers.moe.fused_moe_triton.aiter_mxfp4_w4a8_moe import (
-    aiter_w4a8_gfx1250_check_parallel_config,
-    aiter_w4a8_gfx1250_supports_parallel_config,
-    build_ep_expert_map,
+# The AITER W4A8 gfx1250 module pulls in aiter/triton at import time. Import it
+# lazily so this file can be collected (and the pure-torch EP mask tests below
+# can run) on CI runners without ROCm/AITER installed.
+try:
+    from sglang.srt.layers.moe.fused_moe_triton.aiter_mxfp4_w4a8_moe import (
+        aiter_w4a8_gfx1250_check_parallel_config,
+        aiter_w4a8_gfx1250_supports_parallel_config,
+        build_ep_expert_map,
+    )
+
+    _HAS_AITER_W4A8 = True
+except ImportError:  # pragma: no cover - depends on the CI image
+    aiter_w4a8_gfx1250_check_parallel_config = None
+    aiter_w4a8_gfx1250_supports_parallel_config = None
+    build_ep_expert_map = None
+    _HAS_AITER_W4A8 = False
+
+requires_aiter_w4a8 = pytest.mark.skipif(
+    not _HAS_AITER_W4A8,
+    reason="aiter triton W4A8 gfx1250 module is not importable on this runner",
 )
 
 
@@ -18,6 +34,7 @@ from sglang.srt.layers.moe.fused_moe_triton.aiter_mxfp4_w4a8_moe import (
     ],
     ids=["naive_ep", "all2all", "eplb", "dp_size_gt_1"],
 )
+@requires_aiter_w4a8
 def test_aiter_w4a8_gfx1250_parallel_config(
     use_all2all_kernels, enable_eplb, dp_size, supported
 ):
@@ -29,6 +46,7 @@ def test_aiter_w4a8_gfx1250_parallel_config(
     )
 
 
+@requires_aiter_w4a8
 def test_build_ep_expert_map_marks_non_local_experts():
     num_experts = 8
     num_local_experts = 2
@@ -44,6 +62,7 @@ def test_build_ep_expert_map_marks_non_local_experts():
     assert expert_map[num_experts].item() == -1
 
 
+@requires_aiter_w4a8
 def test_gate_valid_mask_skips_non_local_gates():
     num_experts = 8
     num_local_experts = 2
@@ -55,6 +74,7 @@ def test_gate_valid_mask_skips_non_local_gates():
     assert torch.equal(gate_valid, expected)
 
 
+@requires_aiter_w4a8
 def test_gate_valid_mask_all_local_and_all_remote():
     num_experts = 8
     num_local_experts = 2
@@ -69,6 +89,7 @@ def test_gate_valid_mask_all_local_and_all_remote():
     assert torch.equal(remote_valid, torch.zeros_like(remote_valid))
 
 
+@requires_aiter_w4a8
 def test_gate_valid_mask_sentinel_slot_is_invalid():
     num_experts = 8
     num_local_experts = 2
@@ -89,6 +110,7 @@ def test_gate_valid_mask_sentinel_slot_is_invalid():
     ],
     ids=["all2all", "eplb", "dp_size_gt_1"],
 )
+@requires_aiter_w4a8
 def test_aiter_w4a8_gfx1250_check_parallel_config_raises(
     use_all2all_kernels, enable_eplb, dp_size, match
 ):
@@ -98,10 +120,12 @@ def test_aiter_w4a8_gfx1250_check_parallel_config_raises(
         )
 
 
+@requires_aiter_w4a8
 def test_aiter_w4a8_gfx1250_check_parallel_config_accepts_naive_ep():
     aiter_w4a8_gfx1250_check_parallel_config(False, False, 1)
 
 
+@requires_aiter_w4a8
 def test_ep_partial_outputs_sum_to_full_moe_output():
     """Per-rank partial outputs (masked by gate_valid) must sum to the full
     MoE output, i.e. dropping gate_valid would double count or zero rows."""
