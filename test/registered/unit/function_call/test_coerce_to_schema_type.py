@@ -21,6 +21,17 @@ LARGE_INTEGERS = [
     0,
 ]
 
+# Values that must never be routed through float: 2**53 + 1 is the first
+# integer not exactly representable as an IEEE-754 double.
+IEEE754_UNSAFE_INTEGERS = [
+    2**53 + 1,
+    -(2**53 + 1),
+    9007199254740993,
+    1234567890123456789,
+    2**63 - 1,
+    -(2**63),
+]
+
 NUMBER_SCHEMA_TYPES = ["number", "double", ["number", "string"]]
 
 
@@ -31,6 +42,20 @@ def test_large_integer_preserved(value, schema_type):
     assert isinstance(result, int), (value, schema_type, result)
     assert result == value, (value, schema_type, result)
     assert json.loads(json.dumps(result)) == value
+
+
+@pytest.mark.parametrize("value", IEEE754_UNSAFE_INTEGERS)
+@pytest.mark.parametrize("schema_type", NUMBER_SCHEMA_TYPES)
+def test_large_integer_not_rounded_through_float(value, schema_type):
+    """Guard against the regression where ``number`` went through ``float``.
+
+    ``float(value)`` would round these values, so asserting the exact int
+    (and that it differs from the float round-trip) pins the int-first path.
+    """
+    result = coerce_to_schema_type(str(value), schema_type)
+    assert isinstance(result, int), (value, schema_type, result)
+    assert result == value, (value, schema_type, result)
+    assert result != int(float(value)), (value, schema_type, result)
 
 
 @pytest.mark.parametrize("value", LARGE_INTEGERS)
@@ -104,6 +129,16 @@ def test_large_integer_in_nested_structures(value):
     result = coerce_to_schema_type(str(value), "number")
     assert isinstance(result, int)
     assert result == value
+
+
+@pytest.mark.parametrize("value", IEEE754_UNSAFE_INTEGERS)
+def test_large_integer_in_nested_structures_exact(value):
+    nested = {"items": [value, {"limit": value}], "limit": value}
+    assert json.loads(json.dumps(nested)) == nested
+    result = coerce_to_schema_type(str(value), "number")
+    assert isinstance(result, int)
+    assert result == value
+    assert result != int(float(value))
 
 
 def test_float_input_semantics_unchanged():
