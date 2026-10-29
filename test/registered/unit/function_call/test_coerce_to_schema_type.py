@@ -158,16 +158,6 @@ def test_integer_schema_still_parses_large_values():
     assert result == value
 
 
-@pytest.mark.parametrize("value", [2**63 - 1, -(2**63)])
-def test_large_integer_in_nested_structures(value):
-    nested = {"items": [value, {"limit": value}], "limit": value}
-    assert json.loads(json.dumps(nested)) == nested
-    result = coerce_to_schema_type(str(value), "number")
-    assert isinstance(result, int)
-    assert result == value
-    assert result != int(float(value))
-
-
 @pytest.mark.parametrize("value", IEEE754_UNSAFE_INTEGERS)
 def test_large_integer_in_nested_structures_exact(value):
     nested = {"items": [value, {"limit": value}], "limit": value}
