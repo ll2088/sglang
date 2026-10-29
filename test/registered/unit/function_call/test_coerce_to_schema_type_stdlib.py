@@ -6,9 +6,8 @@ that can import the pure helper module. They pin the int-first ``number``
 path so that large integer tool arguments are never routed through ``float``.
 """
 
-import importlib.util
+import ast
 import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -16,10 +15,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 UTILS_PATH = REPO_ROOT / "python" / "sglang" / "srt" / "function_call" / "utils.py"
-
-
-# The helper is stdlib-only, so these assertions run on every interpreter
-# the CI matrix provides (including 3.14). No version gate is needed here.
 
 
 LARGE_INTEGERS = [
@@ -53,8 +48,6 @@ def _load_coerce():
     isolated namespace. This keeps the test dependency-free while exercising
     the exact production source text.
     """
-    import ast
-
     source = UTILS_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)
     for node in tree.body:
@@ -160,8 +153,6 @@ def test_number_branch_tries_int_before_float():
     The ``number`` branch must call ``int()`` before ``float()`` so that
     large integer literals never round-trip through IEEE-754.
     """
-    import ast
-
     source = UTILS_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)
     fn = next(
