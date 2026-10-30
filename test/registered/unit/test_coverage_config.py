@@ -47,14 +47,13 @@ def _require_sysmon_core() -> None:
     try:
         import coverage as _coverage_module
 
-        version = tuple(
-            int(part) for part in _coverage_module.__version__.split(".")[:2]
-        )
+        raw_version = _coverage_module.__version__
+        version = tuple(int(part) for part in raw_version.split(".")[:2])
     except Exception as exc:  # pragma: no cover - depends on environment
         pytest.skip(f"cannot determine installed coverage version: {exc}")
     if version < (7, 4):
         pytest.skip(
-            f"coverage {_coverage_module.__version__} does not ship the sysmon core "
+            f"coverage {raw_version} does not ship the sysmon core "
             "(needs coverage >= 7.4)"
         )
     try:
@@ -65,6 +64,12 @@ def _require_sysmon_core() -> None:
         cov.stop()
     except Exception as exc:  # pragma: no cover - depends on environment
         pytest.skip(f"installed coverage cannot start the sysmon core: {exc}")
+    finally:
+        # Never leave a half-started collector behind for later tests.
+        try:
+            cov.stop()
+        except Exception:  # pragma: no cover - best effort cleanup
+            pass
 
 
 def _load_coveragerc() -> configparser.ConfigParser:
