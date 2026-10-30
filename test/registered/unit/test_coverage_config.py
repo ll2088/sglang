@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,14 @@ def _require_sysmon_core() -> None:
     except Exception as exc:  # pragma: no cover - depends on environment
         pytest.fail(f"cannot determine installed coverage version: {exc}")
     if version is None:
+        # Surface the unparsable version instead of silently skipping: a
+        # broken environment must be visible in the run output, not hidden
+        # behind a green skip.
+        warnings.warn(
+            f"cannot parse installed coverage version: {raw_version!r}; "
+            "skipping sysmon runtime checks",
+            stacklevel=2,
+        )
         pytest.skip(
             f"cannot parse installed coverage version: {raw_version!r}"
         )
@@ -173,6 +182,21 @@ def test_coveragerc_core_is_sysmon_or_env_override():
     effective = os.environ.get("COVERAGE_CORE", "").strip() or configured
     assert effective == "sysmon", (
         f"effective coverage core is {effective!r}, expected 'sysmon'"
+    )
+
+
+def test_coveragerc_core_env_override_is_known_core():
+    """A ``COVERAGE_CORE`` override must name a core coverage understands.
+
+    The upstream change relies on ``COVERAGE_CORE=sysmon`` in CI. An unknown
+    value would make coverage warn and fall back to its default core, which
+    silently defeats the optimization, so reject it here.
+    """
+    env_override = os.environ.get("COVERAGE_CORE", "").strip()
+    if not env_override:
+        pytest.skip("COVERAGE_CORE is not set in this environment")
+    assert env_override in {"sysmon", "ctrace", "pytrace"}, (
+        f"COVERAGE_CORE={env_override!r} is not a known coverage core"
     )
 
 
