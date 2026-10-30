@@ -29,11 +29,22 @@ def test_testpaths_matches_run_suite_scan_root():
     section = _load_pytest_ini()
     testpaths = [p.strip() for p in section.get("testpaths", "").splitlines() if p.strip()]
     assert testpaths, "testpaths must not be empty"
+    # testpaths are resolved relative to the ini file's directory (test/).
     resolved = {os.path.normpath(os.path.join(TEST_DIR, p)) for p in testpaths}
     # run_suite.py scans test/registered/**/*.py; testpaths must cover it.
     assert os.path.normpath(REGISTERED_DIR) in resolved or any(
         os.path.normpath(REGISTERED_DIR).startswith(r + os.sep) for r in resolved
     ), f"testpaths {testpaths} does not cover {REGISTERED_DIR}"
+
+
+def test_rootdir_is_repo_root():
+    section = _load_pytest_ini()
+    rootdir = section.get("rootdir", "").strip()
+    assert rootdir, "rootdir must be set"
+    resolved = os.path.normpath(os.path.join(TEST_DIR, rootdir))
+    assert resolved == os.path.normpath(REPO_ROOT), (
+        f"rootdir {rootdir!r} resolves to {resolved}, expected {REPO_ROOT}"
+    )
 
 
 def test_python_files_matches_registered_tests():
@@ -52,7 +63,19 @@ def test_python_files_matches_registered_tests():
 def test_collection_nonzero_from_repo_root_and_test_dir():
     def _collect(cwd):
         proc = subprocess.run(
-            [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:randomly"],
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "--collect-only",
+                "-q",
+                "-p",
+                "no:randomly",
+                "--rootdir",
+                REPO_ROOT,
+                "-c",
+                PYTEST_INI,
+            ],
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -80,3 +103,39 @@ def test_collection_nonzero_from_repo_root_and_test_dir():
     assert root_count == test_count, (
         f"collection mismatch: repo root={root_count}, test dir={test_count}"
     )
+
+
+def test_registered_suite_paths_exist_and_collectable():
+    """Every file run_suite.py would discover must exist and be collectable."""
+    import glob
+
+    files = [
+        f
+        for f in glob.glob(
+            os.path.join(REGISTERED_DIR, "**", "*.py"), recursive=True
+        )
+        if os.path.basename(f) not in ("conftest.py", "__init__.py")
+    ]
+    assert files, f"no registered test files found under {REGISTERED_DIR}"
+    for path in files:
+        assert os.path.isfile(path), f"registered suite path missing: {path}"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "-p",
+            "no:randomly",
+            "--rootdir",
+            REPO_ROOT,
+            "-c",
+            PYTEST_INI,
+            REGISTERED_DIR,
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
