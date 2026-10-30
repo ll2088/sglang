@@ -45,9 +45,18 @@ def _require_sysmon_core() -> None:
     if sys.version_info < (3, 12):
         pytest.skip("sysmon coverage core requires Python 3.12+")
     try:
-        from coverage.core import Core  # noqa: F401
-    except Exception:  # pragma: no cover - very old coverage layouts
-        pass
+        import coverage as _coverage_module
+
+        version = tuple(
+            int(part) for part in _coverage_module.__version__.split(".")[:2]
+        )
+    except Exception as exc:  # pragma: no cover - depends on environment
+        pytest.skip(f"cannot determine installed coverage version: {exc}")
+    if version < (7, 4):
+        pytest.skip(
+            f"coverage {_coverage_module.__version__} does not ship the sysmon core "
+            "(needs coverage >= 7.4)"
+        )
     try:
         from coverage import coverage as _coverage_cls
 
