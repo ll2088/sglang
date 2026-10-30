@@ -22,6 +22,25 @@ def _coverage_available() -> bool:
     return importlib.util.find_spec("coverage") is not None
 
 
+def _parse_coverage_version(raw_version: str):
+    """Return ``(major, minor)`` for a coverage version string, or ``None``.
+
+    Coverage version strings are normally ``"7.4.0"``, but development or
+    vendored builds can carry suffixes that are not plain integers. Parsing
+    must never raise here: an unparsable version only means the runtime
+    sysmon checks cannot be trusted, so the caller skips them.
+    """
+    parts = []
+    for part in raw_version.split(".")[:2]:
+        digits = "".join(ch for ch in part if ch.isdigit())
+        if not digits:
+            return None
+        parts.append(int(digits))
+    if len(parts) < 2:
+        return None
+    return tuple(parts)
+
+
 def _require_coverage() -> None:
     """Skip the runtime checks when coverage is not installed.
 
@@ -48,9 +67,11 @@ def _require_sysmon_core() -> None:
         import coverage as _coverage_module
 
         raw_version = _coverage_module.__version__
-        version = tuple(int(part) for part in raw_version.split(".")[:2])
+        version = _parse_coverage_version(raw_version)
     except Exception as exc:  # pragma: no cover - depends on environment
         pytest.skip(f"cannot determine installed coverage version: {exc}")
+    if version is None:
+        pytest.skip(f"cannot parse installed coverage version: {raw_version!r}")
     if version < (7, 4):
         pytest.skip(
             f"coverage {raw_version} does not ship the sysmon core "
@@ -60,6 +81,7 @@ def _require_sysmon_core() -> None:
     # that know the name; older releases warn and fall back to the default
     # core, which would make the runtime assertions below pass vacuously.
     assert version >= (7, 4), raw_version
+    cov = None
     try:
         from coverage import coverage as _coverage_cls
 
@@ -70,10 +92,11 @@ def _require_sysmon_core() -> None:
         pytest.skip(f"installed coverage cannot start the sysmon core: {exc}")
     finally:
         # Never leave a half-started collector behind for later tests.
-        try:
-            cov.stop()
-        except Exception:  # pragma: no cover - best effort cleanup
-            pass
+        if cov is not None:
+            try:
+                cov.stop()
+            except Exception:  # pragma: no cover - best effort cleanup
+                pass
 
 
 def _load_coveragerc() -> configparser.ConfigParser:
