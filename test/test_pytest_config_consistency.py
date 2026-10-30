@@ -181,6 +181,26 @@ def _suite_dicts_from_ast(tree):
     return suite_dicts
 
 
+def test_run_suite_list_matches_pytest_config():
+    """`run_suite.py --list` must succeed without importing sglang and agree
+    with the pytest.ini discovery config (testpaths/python_files)."""
+    proc = subprocess.run(
+        [sys.executable, RUN_SUITE, "--list"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    assert lines, "run_suite.py --list produced no suites"
+    for line in lines:
+        backend, _, suite = line.partition("\t")
+        assert backend and suite, f"malformed --list line: {line!r}"
+    # Discovery config must still be present and consistent with the scan root.
+    assert _testpaths(), "testpaths must be set"
+    assert _python_files(), "python_files must be set"
+
+
 def test_run_suite_suite_registry_resolves():
     """run_suite.py's suite registry must resolve without importing sglang."""
     # Parse the suite dicts by AST so this check needs no sglang runtime and

@@ -483,9 +483,28 @@ def _parse_timeout_override(value: str) -> tuple[str, float]:
     return path, timeout
 
 
+def list_suites() -> int:
+    """Print every registered suite per backend without importing sglang.
+
+    Used by the config-consistency checks so suite registration can be
+    validated in environments where the sglang runtime is not installed.
+    """
+    valid_by_backend = _valid_suites_by_backend()
+    for backend in sorted(valid_by_backend, key=lambda b: b.name):
+        for suite in sorted(valid_by_backend[backend]):
+            print(f"{backend.name.lower()}\t{suite}")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run CI test suites from test/registered/"
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        default=False,
+        help="List registered suites per backend and exit (no sglang import).",
     )
     parser.add_argument(
         "--hw",
@@ -601,6 +620,9 @@ def main():
         ),
     )
     args = parser.parse_args()
+
+    if args.list:
+        sys.exit(list_suites())
 
     if args.fork_worker_batch_size <= 0:
         parser.error("--fork-worker-batch-size must be positive")
