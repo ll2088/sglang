@@ -37,6 +37,12 @@ def test_coveragerc_core_is_valid():
     assert core in {"", "sysmon", "ctrace", "pytrace"}, core
 
 
+def test_coveragerc_core_is_sysmon():
+    """The repository opts into the sysmon core; keep that explicit."""
+    parser = _load_coveragerc()
+    assert parser.get("run", "core", fallback="").strip() == "sysmon"
+
+
 def test_coveragerc_report_section():
     parser = _load_coveragerc()
     assert parser.has_section("report")
@@ -82,3 +88,56 @@ def test_sysmon_core_runs_and_reports(tmp_path):
     )
     assert report.returncode == 0, report.stderr
     assert "sample.py" in report.stdout
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="sysmon coverage core requires Python 3.12+",
+)
+def test_sysmon_matches_default_core_lines(tmp_path):
+    """sysmon must record the same executed lines as the default core."""
+    pytest.importorskip("coverage")
+
+    script = tmp_path / "sample.py"
+    script.write_text(
+        "def f(x):\n"
+        "    if x > 0:\n"
+        "        return x + 1\n"
+        "    return 0\n"
+        "\n"
+        "f(1)\n"
+        "f(-1)\n",
+        encoding="utf-8",
+    )
+
+    def _run_with_core(core: str) -> set[int]:
+        coverage_file = tmp_path / f".coverage.{core}"
+        env = dict(os.environ)
+        env["COVERAGE_CORE"] = core
+        env["COVERAGE_FILE"] = str(coverage_file)
+        run = subprocess.run(
+            [sys.executable, "-m", "coverage", "run", str(script)],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert run.returncode == 0, run.stderr
+        json_out = subprocess.run(
+            [sys.executable, "-m", "coverage", "json", "-o", "-"],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert json_out.returncode == 0, json_out.stderr
+        import json
+
+        data = json.loads(json_out.stdout)
+        files = data["files"]
+        entry = next(v for k, v in files.items() if k.endswith("sample.py"))
+        return set(entry["executed_lines"])
+
+    sysmon_lines = _run_with_core("sysmon")
+    default_lines = _run_with_core("ctrace")
+    assert sysmon_lines == default_lines
