@@ -6,6 +6,7 @@ coverage, they only verify that the configuration is well-formed and that the
 """
 
 import configparser
+import importlib.util
 import os
 import subprocess
 import sys
@@ -15,6 +16,10 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 COVERAGERC = REPO_ROOT / ".coveragerc"
+
+
+def _coverage_available() -> bool:
+    return importlib.util.find_spec("coverage") is not None
 
 
 def _load_coveragerc() -> configparser.ConfigParser:
@@ -60,8 +65,11 @@ def test_coveragerc_report_section():
     sys.version_info < (3, 12),
     reason="sysmon coverage core requires Python 3.12+",
 )
+@pytest.mark.skipif(
+    not _coverage_available(),
+    reason="coverage is not installed in this environment",
+)
 def test_sysmon_core_runs_and_reports(tmp_path):
-    pytest.importorskip("coverage")
 
     script = tmp_path / "sample.py"
     script.write_text("def f(x):\n    return x + 1\n\nf(1)\n", encoding="utf-8")
@@ -94,9 +102,12 @@ def test_sysmon_core_runs_and_reports(tmp_path):
     sys.version_info < (3, 12),
     reason="sysmon coverage core requires Python 3.12+",
 )
+@pytest.mark.skipif(
+    not _coverage_available(),
+    reason="coverage is not installed in this environment",
+)
 def test_sysmon_matches_default_core_lines(tmp_path):
     """sysmon must record the same executed lines as the default core."""
-    pytest.importorskip("coverage")
 
     script = tmp_path / "sample.py"
     script.write_text(
