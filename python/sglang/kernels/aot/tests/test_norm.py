@@ -74,6 +74,47 @@ def rms_norm_fp64_two_pass(x, w, eps=1e-6):
     return x64 * torch.rsqrt(var + eps) * w.double()
 
 
+def rms_norm_fp32_one_pass(x, w, eps=1e-6):
+    """FP32 one-pass RMSNorm reference: E[x^2] (cancellation-prone)."""
+    x32 = x.float()
+    var = x32.pow(2).mean(dim=-1, keepdim=True)
+    return x32 * torch.rsqrt(var + eps) * w.float()
+
+
+def make_large_mean_small_variance(batch_size, hidden_size, dtype, device="cuda"):
+    """Rows with |mean| ~ 1e4 and variance ~ 1e-4, where one-pass FP32 variance cancels.
+
+    The spread is chosen so that E[x^2] ~ 1e8 while the true variance is ~1e-4;
+    in FP32 the one-pass E[x^2] - mean^2 form loses all significant digits and
+    can even go negative.
+    """
+    row = torch.full((hidden_size,), 1.0e4, dtype=torch.float64)
+    # Two entries deviate by 1e-2, giving var ~ 2 * (1e-2)^2 / hidden_size.
+    row[:2] = 1.0e4 - 1.0e-2
+    x = torch.stack([row, -row]).repeat((batch_size + 1) // 2, 1)[:batch_size]
+    return x.to(device=device, dtype=dtype)
+
+
+def _require_cuda():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+
+
+def rms_norm_fp64_two_pass(x, w, eps=1e-6):
+    """FP64 RMSNorm reference computed from centered values.
+
+    RMSNorm uses E[x^2] (no mean subtraction), but computing it as
+    E[(x - mean)^2] + mean^2 in FP64 keeps the reference numerically stable
+    for rows with a large mean and a tiny spread, which is exactly the case
+    where the one-pass FP32 form cancels.
+    """
+    x64 = x.double()
+    mean = x64.mean(dim=-1, keepdim=True)
+    centered = x64 - mean
+    var = (centered * centered).mean(dim=-1, keepdim=True) + mean * mean
+    return x64 * torch.rsqrt(var + eps) * w.double()
+
+
 def layer_norm_fp64_two_pass(x, w, b, eps=1e-6):
     """FP64 LayerNorm reference using centered two-pass variance.
 
@@ -178,6 +219,83 @@ def test_fused_add_rmsnorm(batch_size, hidden_size, dtype):
 
     torch.testing.assert_close(x_fused, x_native, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(residual_fused, residual_native, rtol=1e-3, atol=1e-3)
+
+
+LARGE_MEAN_SMALL_VARIANCE_CASES = [
+    (2, 4096, torch.bfloat16),
+    (4, 8192, torch.bfloat16),
+    (2, 4096, torch.float16),
+]
+
+
+@pytest.mark.parametrize("batch_size,hidden_size,dtype", LARGE_MEAN_SMALL_VARIANCE_CASES)
+@pytest.mark.parametrize("eps", [1e-6, 1e-5])
+def test_rmsnorm_large_mean_small_variance(batch_size, hidden_size, dtype, eps):
+    _require_cuda()
+    x = make_large_mean_small_variance(batch_size, hidden_size, dtype)
+    w = torch.ones(hidden_size, dtype=dtype, device="cuda")
+
+    y_ref = rms_norm_fp64_two_pass(x, w, eps)
+    enable_pdl = is_arch_support_pdl()
+    y = sgl_kernel.rmsnorm(x, w, eps, enable_pdl=enable_pdl)
+
+    assert torch.isfinite(y).all()
+    torch.testing.assert_close(y.double(), y_ref, rtol=1e-2, atol=2e-3)
+
+
+@pytest.mark.parametrize("batch_size,hidden_size,dtype", LARGE_MEAN_SMALL_VARIANCE_CASES)
+@pytest.mark.parametrize("eps", [1e-6, 1e-5])
+def test_fused_add_rmsnorm_large_mean_small_variance(batch_size, hidden_size, dtype, eps):
+    _require_cuda()
+    # residual accumulation pushes the row to a large mean with tiny spread.
+    x = torch.zeros(batch_size, hidden_size, dtype=dtype, device="cuda")
+    residual = make_large_mean_small_variance(batch_size, hidden_size, dtype)
+    weight = torch.ones(hidden_size, dtype=dtype, device="cuda")
+
+    x_ref = (x.float() + residual.float()).to(dtype)
+    y_ref = rms_norm_fp64_two_pass(x_ref, weight, eps)
+
+    x_fused = x.clone()
+    residual_fused = residual.clone()
+    enable_pdl = is_arch_support_pdl()
+    sgl_kernel.fused_add_rmsnorm(
+        x_fused, residual_fused, weight, eps, enable_pdl=enable_pdl
+    )
+
+    assert torch.isfinite(x_fused).all()
+    torch.testing.assert_close(x_fused.double(), y_ref, rtol=1e-2, atol=2e-3)
+    torch.testing.assert_close(residual_fused, x_ref, rtol=1e-3, atol=1e-3)
+
+
+@pytest.mark.parametrize("batch_size,hidden_size,dtype", LARGE_MEAN_SMALL_VARIANCE_CASES)
+def test_two_pass_vs_one_pass_variance(batch_size, hidden_size, dtype):
+    _require_cuda()
+    # The one-pass FP32 reference can cancel to a negative variance; the two-pass
+    # reference must stay finite and match the kernel within tolerance.
+    eps = 1e-6
+    x = make_large_mean_small_variance(batch_size, hidden_size, dtype)
+    w = torch.ones(hidden_size, dtype=dtype, device="cuda")
+
+    y_two_pass = rms_norm_fp64_two_pass(x, w, eps)
+    y_one_pass = rms_norm_fp32_one_pass(x, w, eps)
+
+    assert torch.isfinite(y_two_pass).all()
+
+    # The one-pass FP32 path is expected to be numerically unstable here. When it
+    # produces finite values, its error must be strictly larger than the kernel's
+    # error against the FP64 two-pass reference; when it produces non-finite
+    # values that is itself evidence of the cancellation bug.
+    enable_pdl = is_arch_support_pdl()
+    y = sgl_kernel.rmsnorm(x, w, eps, enable_pdl=enable_pdl)
+    assert torch.isfinite(y).all()
+    torch.testing.assert_close(y.double(), y_two_pass, rtol=1e-2, atol=2e-3)
+
+    kernel_err = (y.double() - y_two_pass).abs().max().item()
+    if torch.isfinite(y_one_pass).all():
+        one_pass_err = (y_one_pass.double() - y_two_pass).abs().max().item()
+        assert one_pass_err > kernel_err, (
+            f"one-pass FP32 error {one_pass_err} should exceed kernel error {kernel_err}"
+        )
 
 
 PRODUCTION_LIKE_NORM_CASES = [
