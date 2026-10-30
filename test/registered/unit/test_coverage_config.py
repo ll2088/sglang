@@ -42,15 +42,19 @@ def _parse_coverage_version(raw_version: str):
 
 
 def _require_coverage() -> None:
-    """Skip the runtime checks when coverage is not installed.
+    """Fail loudly when coverage is not installed.
 
     The configuration assertions above still run everywhere; only the
-    subprocess-based sysmon checks need the coverage package. Skipping with a
-    clear reason keeps environment problems from being reported as code
-    failures.
+    subprocess-based sysmon checks need the coverage package. A missing
+    coverage package is an environment problem, not a reason to skip: the
+    verification commands install coverage explicitly, so silently skipping
+    here would hide a broken environment behind a green run.
     """
     if not _coverage_available():
-        pytest.skip("coverage is not installed; skipping sysmon runtime checks")
+        pytest.fail(
+            "coverage is not installed; install it before running the "
+            "sysmon coverage checks"
+        )
 
 
 def _require_sysmon_core() -> None:
@@ -69,11 +73,11 @@ def _require_sysmon_core() -> None:
         raw_version = _coverage_module.__version__
         version = _parse_coverage_version(raw_version)
     except Exception as exc:  # pragma: no cover - depends on environment
-        pytest.skip(f"cannot determine installed coverage version: {exc}")
+        pytest.fail(f"cannot determine installed coverage version: {exc}")
     if version is None:
-        pytest.skip(f"cannot parse installed coverage version: {raw_version!r}")
+        pytest.fail(f"cannot parse installed coverage version: {raw_version!r}")
     if version < (7, 4):
-        pytest.skip(
+        pytest.fail(
             f"coverage {raw_version} does not ship the sysmon core "
             "(needs coverage >= 7.4)"
         )
@@ -81,7 +85,7 @@ def _require_sysmon_core() -> None:
     # implementations (e.g. PyPy) may report a matching version but lack the
     # underlying API, so probe it explicitly before starting the core.
     if not hasattr(sys, "monitoring"):
-        pytest.skip("sys.monitoring is not available in this interpreter")
+        pytest.fail("sys.monitoring is not available in this interpreter")
     # ``core = sysmon`` in .coveragerc is only honoured by coverage releases
     # that know the name; older releases warn and fall back to the default
     # core, which would make the runtime assertions below pass vacuously.
@@ -93,7 +97,7 @@ def _require_sysmon_core() -> None:
         cov.start()
         cov.stop()
     except Exception as exc:  # pragma: no cover - depends on environment
-        pytest.skip(f"installed coverage cannot start the sysmon core: {exc}")
+        pytest.fail(f"installed coverage cannot start the sysmon core: {exc}")
     finally:
         # Never leave a half-started collector behind for later tests.
         if cov is not None:
@@ -221,6 +225,10 @@ def test_sysmon_core_falls_back_on_old_python(tmp_path):
     _require_coverage()
     if sys.version_info >= (3, 12):
         pytest.skip("fallback only applies to Python < 3.12")
+    # On Python < 3.12 the sysmon core is unavailable; coverage must warn and
+    # keep its default core rather than fail. The assertion below is
+    # intentionally permissive because the warning text is coverage-version
+    # dependent, but the run must still succeed.
 
     script = tmp_path / "sample.py"
     script.write_text("x = 1\n", encoding="utf-8")
