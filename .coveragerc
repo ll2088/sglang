@@ -1,5 +1,9 @@
 [run]
 source = python/sglang/srt
+# Use sys.monitoring (Python 3.12+) instead of the default C tracer: it records the
+# same lines at a fraction of the overhead on import-heavy worker/subprocess runs.
+# On older Pythons coverage warns and falls back to its default core.
+core = sysmon
 omit =
     */test/*
     */__pycache__/*
