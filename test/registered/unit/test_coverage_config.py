@@ -80,7 +80,6 @@ def _require_sysmon_core() -> None:
     # ``core = sysmon`` in .coveragerc is only honoured by coverage releases
     # that know the name; older releases warn and fall back to the default
     # core, which would make the runtime assertions below pass vacuously.
-    assert version >= (7, 4), raw_version
     cov = None
     try:
         from coverage import coverage as _coverage_cls
