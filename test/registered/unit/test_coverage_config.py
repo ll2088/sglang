@@ -34,6 +34,30 @@ def _require_coverage() -> None:
         pytest.skip("coverage is not installed; skipping sysmon runtime checks")
 
 
+def _require_sysmon_core() -> None:
+    """Skip when the installed coverage cannot provide the sysmon core.
+
+    ``core = sysmon`` needs Python 3.12+ and a coverage release that ships the
+    ``sys.monitoring`` core. Older environments fall back to the default core
+    with a warning, so the runtime assertions below would be meaningless there.
+    """
+    _require_coverage()
+    if sys.version_info < (3, 12):
+        pytest.skip("sysmon coverage core requires Python 3.12+")
+    try:
+        from coverage.core import Core  # noqa: F401
+    except Exception:  # pragma: no cover - very old coverage layouts
+        pass
+    try:
+        from coverage import coverage as _coverage_cls
+
+        cov = _coverage_cls(core="sysmon")
+        cov.start()
+        cov.stop()
+    except Exception as exc:  # pragma: no cover - depends on environment
+        pytest.skip(f"installed coverage cannot start the sysmon core: {exc}")
+
+
 def _load_coveragerc() -> configparser.ConfigParser:
     parser = configparser.ConfigParser()
     assert COVERAGERC.is_file(), f"missing {COVERAGERC}"
@@ -78,7 +102,7 @@ def test_coveragerc_report_section():
     reason="sysmon coverage core requires Python 3.12+",
 )
 def test_sysmon_core_runs_and_reports(tmp_path):
-    _require_coverage()
+    _require_sysmon_core()
 
     script = tmp_path / "sample.py"
     script.write_text("def f(x):\n    return x + 1\n\nf(1)\n", encoding="utf-8")
@@ -113,7 +137,7 @@ def test_sysmon_core_runs_and_reports(tmp_path):
 )
 def test_sysmon_matches_default_core_lines(tmp_path):
     """sysmon must record the same executed lines as the default core."""
-    _require_coverage()
+    _require_sysmon_core()
 
     script = tmp_path / "sample.py"
     script.write_text(
