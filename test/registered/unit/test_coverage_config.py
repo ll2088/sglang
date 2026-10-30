@@ -56,6 +56,10 @@ def _require_sysmon_core() -> None:
             f"coverage {raw_version} does not ship the sysmon core "
             "(needs coverage >= 7.4)"
         )
+    # ``core = sysmon`` in .coveragerc is only honoured by coverage releases
+    # that know the name; older releases warn and fall back to the default
+    # core, which would make the runtime assertions below pass vacuously.
+    assert version >= (7, 4), raw_version
     try:
         from coverage import coverage as _coverage_cls
 
@@ -96,6 +100,26 @@ def test_coveragerc_core_is_sysmon():
     """The repository opts into the sysmon core; keep that explicit."""
     parser = _load_coveragerc()
     assert parser.get("run", "core", fallback="").strip() == "sysmon"
+
+
+def test_coveragerc_core_matches_env_override():
+    """CI sets COVERAGE_CORE=sysmon; the config must agree with that override.
+
+    The upstream change enables the sysmon core through the environment in CI
+    lanes. This repository keeps the same choice in ``.coveragerc`` so local
+    runs and CI share one core. If the two ever diverge, coverage silently
+    uses the environment value and the config assertion above becomes
+    misleading, so pin the relationship here.
+    """
+    parser = _load_coveragerc()
+    configured = parser.get("run", "core", fallback="").strip()
+    env_override = os.environ.get("COVERAGE_CORE", "").strip()
+    if env_override:
+        assert env_override == configured, (
+            f"COVERAGE_CORE={env_override!r} overrides .coveragerc core={configured!r}"
+        )
+    else:
+        assert configured == "sysmon"
 
 
 def test_coveragerc_report_section():
