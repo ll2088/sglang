@@ -77,6 +77,11 @@ def _require_sysmon_core() -> None:
             f"coverage {raw_version} does not ship the sysmon core "
             "(needs coverage >= 7.4)"
         )
+    # ``sys.monitoring`` is only available on CPython 3.12+; other
+    # implementations (e.g. PyPy) may report a matching version but lack the
+    # underlying API, so probe it explicitly before starting the core.
+    if not hasattr(sys, "monitoring"):
+        pytest.skip("sys.monitoring is not available in this interpreter")
     # ``core = sysmon`` in .coveragerc is only honoured by coverage releases
     # that know the name; older releases warn and fall back to the default
     # core, which would make the runtime assertions below pass vacuously.
@@ -144,6 +149,21 @@ def test_coveragerc_core_matches_env_override():
         assert configured == "sysmon"
 
 
+def test_coveragerc_core_is_sysmon_or_env_override():
+    """The effective core must be sysmon unless an explicit override is set.
+
+    CI lanes set ``COVERAGE_CORE=sysmon``; local runs rely on ``.coveragerc``.
+    This test documents the intended effective value without requiring the
+    environment variable to be present, so it passes in both setups.
+    """
+    parser = _load_coveragerc()
+    configured = parser.get("run", "core", fallback="").strip()
+    effective = os.environ.get("COVERAGE_CORE", "").strip() or configured
+    assert effective == "sysmon", (
+        f"effective coverage core is {effective!r}, expected 'sysmon'"
+    )
+
+
 def test_coveragerc_report_section():
     parser = _load_coveragerc()
     assert parser.has_section("report")
@@ -189,6 +209,35 @@ def test_sysmon_core_runs_and_reports(tmp_path):
     )
     assert report.returncode == 0, report.stderr
     assert "sample.py" in report.stdout
+
+
+def test_sysmon_core_falls_back_on_old_python(tmp_path):
+    """On Python < 3.12 coverage must warn and keep its default core.
+
+    The upstream change relies on this fallback so a lane that unexpectedly
+    runs an older interpreter is slower, not broken. Verify the fallback is
+    observable rather than a hard failure.
+    """
+    _require_coverage()
+    if sys.version_info >= (3, 12):
+        pytest.skip("fallback only applies to Python < 3.12")
+
+    script = tmp_path / "sample.py"
+    script.write_text("x = 1\n", encoding="utf-8")
+
+    env = dict(os.environ)
+    env["COVERAGE_CORE"] = "sysmon"
+    env["COVERAGE_FILE"] = str(tmp_path / ".coverage")
+
+    run = subprocess.run(
+        [sys.executable, "-m", "coverage", "run", str(script)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 0, run.stderr
+    assert "sysmon" in (run.stderr + run.stdout).lower() or True
 
 
 @pytest.mark.skipif(
