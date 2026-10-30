@@ -1,4 +1,5 @@
 import argparse
+import ast
 import glob
 import json
 import math
@@ -6,15 +7,10 @@ import os
 import sys
 from typing import Dict, List, Optional
 
-import tabulate
-
-from sglang.test.ci.ci_register import (
-    CIRegistry,
-    HWBackend,
-    auto_partition,
-    collect_tests,
-)
-from sglang.test.ci.ci_utils import run_unittest_files
+# NOTE: sglang runtime imports (ci_register / ci_utils / tabulate) are deferred
+# into the functions that need them so that `--list` and the suite-registry
+# consistency checks can run in a lightweight environment without installing
+# the full sglang dependency tree (see test/test_pytest_config_consistency.py).
 
 HW_MAPPING = {
     "cpu": HWBackend.CPU,
@@ -261,7 +257,13 @@ def _valid_suites_by_backend() -> dict:
     return result
 
 
-def validate_all_suites(all_tests: List[CIRegistry]):
+def _backend_name(backend) -> str:
+    """Return the lowercase backend name for both HWBackend members and the
+    plain string keys produced by AST parsing (used by `--list`)."""
+    return getattr(backend, "name", str(backend)).lower()
+
+
+def validate_all_suites(all_tests: List["CIRegistry"]):
     """Fail fast if any test is registered to a suite that doesn't belong to its backend."""
     valid_by_backend = _valid_suites_by_backend()
     errors = []
@@ -278,11 +280,11 @@ def validate_all_suites(all_tests: List[CIRegistry]):
 
 
 def filter_tests(
-    ci_tests: List[CIRegistry],
-    hw: HWBackend,
+    ci_tests: List["CIRegistry"],
+    hw: "HWBackend",
     suites: List[str],
     nightly: bool = False,
-) -> tuple[List[CIRegistry], List[CIRegistry]]:
+) -> tuple[List["CIRegistry"], List["CIRegistry"]]:
     # `suites` may hold more than one suite (comma-separated --suite): the
     # matched tests are unioned so a single runner can partition several
     # suites as one balanced pool (e.g. base-b + base-c on a Xeon SPR box).
@@ -307,8 +309,10 @@ def filter_tests(
 
 
 def pretty_print_tests(
-    args, ci_tests: List[CIRegistry], skipped_tests: List[CIRegistry]
+    args, ci_tests: List["CIRegistry"], skipped_tests: List["CIRegistry"]
 ):
+    import tabulate
+
     hw = HW_MAPPING[args.hw]
     suite = args.suite
     nightly = args.nightly
@@ -390,6 +394,16 @@ def load_only_file_list(list_path: str, repo_root: str) -> set:
 
 
 def run_a_suite(args):
+    # Deferred heavy imports: only the actual suite runner needs sglang.
+    import tabulate
+
+    from sglang.test.ci.ci_register import (
+        HWBackend,
+        auto_partition,
+        collect_tests,
+    )
+    from sglang.test.ci.ci_utils import run_unittest_files
+
     hw = HW_MAPPING[args.hw]
     # --suite accepts a comma-separated list; the matched tests are unioned
     # into one pool so a single runner can LPT-partition several suites
@@ -488,11 +502,30 @@ def list_suites() -> int:
 
     Used by the config-consistency checks so suite registration can be
     validated in environments where the sglang runtime is not installed.
+    The suite dicts are parsed from this file's AST so that importing this
+    module never pulls in sglang.test.ci (and therefore torch).
     """
-    valid_by_backend = _valid_suites_by_backend()
-    for backend in sorted(valid_by_backend, key=lambda b: b.name):
+    with open(os.path.abspath(__file__), encoding="utf-8") as f:
+        tree = ast.parse(f.read(), filename=__file__)
+    valid_by_backend = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if not isinstance(target, ast.Name) or not target.id.endswith("_SUITES"):
+                continue
+            try:
+                mapping = ast.literal_eval(node.value)
+            except ValueError:
+                continue
+            if not isinstance(mapping, dict):
+                continue
+            for backend, suites in mapping.items():
+                valid_by_backend.setdefault(_backend_name(backend), set()).update(
+                    suites
+                )
+    for backend in sorted(valid_by_backend):
         for suite in sorted(valid_by_backend[backend]):
-            print(f"{backend.name.lower()}\t{suite}")
+            print(f"{backend}\t{suite}")
     return 0
 
 

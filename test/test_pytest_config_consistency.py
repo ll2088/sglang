@@ -121,6 +121,8 @@ def test_registered_suite_paths_exist_and_collectable():
     assert files, f"no registered test files found under {REGISTERED_DIR}"
     for path in files:
         assert os.path.isfile(path), f"registered suite path missing: {path}"
+    if pytest is None:  # pragma: no cover - pytest is the runner itself
+        return
     proc = subprocess.run(
         _collect_args([REGISTERED_DIR]),
         cwd=REPO_ROOT,
@@ -131,6 +133,9 @@ def test_registered_suite_paths_exist_and_collectable():
 
 
 def test_collection_nonzero_from_repo_root_and_test_dir():
+    if pytest is None:  # pragma: no cover - pytest is the runner itself
+        return
+
     def _collect(cwd):
         return subprocess.run(
             _collect_args(),
@@ -201,6 +206,24 @@ def test_run_suite_list_matches_pytest_config():
     assert _python_files(), "python_files must be set"
 
 
+def test_run_suite_list_does_not_import_sglang():
+    """`--list` must work in a lightweight env without the sglang runtime.
+
+    This guards the CI setup: the config-consistency job installs only pytest
+    (no `pip install -e python`), so importing sglang here would fail the job
+    before any assertion runs.
+    """
+    proc = subprocess.run(
+        [sys.executable, RUN_SUITE, "--list"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ModuleNotFoundError" not in proc.stderr, proc.stderr
+    assert "ImportError" not in proc.stderr, proc.stderr
+
+
 def test_run_suite_suite_registry_resolves():
     """run_suite.py's suite registry must resolve without importing sglang."""
     # Parse the suite dicts by AST so this check needs no sglang runtime and
@@ -238,6 +261,33 @@ def test_run_suite_registered_suite_paths_exist():
         assert any(fnmatch.fnmatch(name, pat) for pat in patterns), (
             f"registered suite path {path} not collectable by python_files {patterns}"
         )
+
+
+def test_run_suite_list_covers_all_registered_suites():
+    """`--list` output must cover every suite in the AST-parsed registries."""
+    tree = _load_run_suite_ast()
+    suite_dicts = _suite_dicts_from_ast(tree)
+    expected = set()
+    for mapping in suite_dicts.values():
+        for backend, suites in mapping.items():
+            name = getattr(backend, "name", str(backend)).lower()
+            for suite in suites:
+                expected.add((name, suite))
+    proc = subprocess.run(
+        [sys.executable, RUN_SUITE, "--list"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    listed = set()
+    for line in proc.stdout.splitlines():
+        if not line.strip():
+            continue
+        backend, _, suite = line.partition("\t")
+        listed.add((backend, suite))
+    missing = expected - listed
+    assert not missing, f"--list missing suites: {sorted(missing)}"
 
 
 def _legacy_run_suite_suite_registry_resolves():
