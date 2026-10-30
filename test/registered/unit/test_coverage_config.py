@@ -45,8 +45,13 @@ def _sysmon_runtime_supported() -> bool:
     ``sys.monitoring`` exists on CPython 3.12+, so the runtime probes run on
     every 3.12+ interpreter. The configuration assertions run everywhere
     regardless, so an older interpreter still validates ``.coveragerc``.
+
+    The check is capability-based rather than version-based: some builds
+    (e.g. newer CPython releases or alternate implementations) may expose
+    ``sys.monitoring`` without matching the exact version tuple we expect,
+    and a version-only gate would then skip the runtime checks silently.
     """
-    return sys.version_info[:2] >= (3, 12)
+    return hasattr(sys, "monitoring")
 
 
 def _require_coverage() -> None:
@@ -256,12 +261,12 @@ def test_sysmon_core_falls_back_on_old_python(tmp_path):
     observable rather than a hard failure.
     """
     _require_coverage()
-    if sys.version_info >= (3, 12):
-        pytest.skip("fallback only applies to Python < 3.12")
-    # On Python < 3.12 the sysmon core is unavailable; coverage must warn and
-    # keep its default core rather than fail. The assertion below is
-    # intentionally permissive because the warning text is coverage-version
-    # dependent, but the run must still succeed.
+    if hasattr(sys, "monitoring"):
+        pytest.skip("fallback only applies to interpreters without sys.monitoring")
+    # On interpreters without sys.monitoring the sysmon core is unavailable;
+    # coverage must warn and keep its default core rather than fail. The
+    # assertion below is intentionally permissive because the warning text is
+    # coverage-version dependent, but the run must still succeed.
 
     script = tmp_path / "sample.py"
     script.write_text("x = 1\n", encoding="utf-8")
