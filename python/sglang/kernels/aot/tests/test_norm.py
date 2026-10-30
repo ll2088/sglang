@@ -60,18 +60,24 @@ def assert_close_norm(actual, expected, dtype):
 
 
 def rms_norm_fp64_two_pass(x, w, eps=1e-6):
-    """FP64 two-pass RMSNorm reference (centered variance)."""
+    """FP64 RMSNorm reference computed from centered values.
+
+    RMSNorm uses E[x^2] (no mean subtraction), but computing it as
+    E[(x - mean)^2] + mean^2 in FP64 keeps the reference numerically stable
+    for rows with a large mean and a tiny spread, which is exactly the case
+    where the one-pass FP32 form cancels.
+    """
     x64 = x.double()
     mean = x64.mean(dim=-1, keepdim=True)
-    var = ((x64 - mean) ** 2).mean(dim=-1, keepdim=True)
+    centered = x64 - mean
+    var = (centered * centered).mean(dim=-1, keepdim=True) + mean * mean
     return x64 * torch.rsqrt(var + eps) * w.double()
 
 
 def rms_norm_fp32_one_pass(x, w, eps=1e-6):
-    """FP32 one-pass RMSNorm reference: E[x^2] - mean^2 (cancellation-prone)."""
+    """FP32 one-pass RMSNorm reference: E[x^2] (cancellation-prone)."""
     x32 = x.float()
-    mean = x32.mean(dim=-1, keepdim=True)
-    var = x32.pow(2).mean(dim=-1, keepdim=True) - mean * mean
+    var = x32.pow(2).mean(dim=-1, keepdim=True)
     return x32 * torch.rsqrt(var + eps) * w.float()
 
 
@@ -81,6 +87,11 @@ def make_large_mean_small_variance(batch_size, hidden_size, dtype, device="cuda"
     row[:2] = 1.0e4 - 1.0e-2
     x = torch.stack([row, -row]).repeat((batch_size + 1) // 2, 1)[:batch_size]
     return x.to(device=device, dtype=dtype)
+
+
+def _require_cuda():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
 
 
 @pytest.mark.parametrize("batch_size", [1, 19, 99, 989])
@@ -144,6 +155,7 @@ LARGE_MEAN_SMALL_VARIANCE_CASES = [
 @pytest.mark.parametrize("batch_size,hidden_size,dtype", LARGE_MEAN_SMALL_VARIANCE_CASES)
 @pytest.mark.parametrize("eps", [1e-6, 1e-5])
 def test_rmsnorm_large_mean_small_variance(batch_size, hidden_size, dtype, eps):
+    _require_cuda()
     x = make_large_mean_small_variance(batch_size, hidden_size, dtype)
     w = torch.ones(hidden_size, dtype=dtype, device="cuda")
 
@@ -158,6 +170,7 @@ def test_rmsnorm_large_mean_small_variance(batch_size, hidden_size, dtype, eps):
 @pytest.mark.parametrize("batch_size,hidden_size,dtype", LARGE_MEAN_SMALL_VARIANCE_CASES)
 @pytest.mark.parametrize("eps", [1e-6, 1e-5])
 def test_fused_add_rmsnorm_large_mean_small_variance(batch_size, hidden_size, dtype, eps):
+    _require_cuda()
     # residual accumulation pushes the row to a large mean with tiny spread.
     x = torch.zeros(batch_size, hidden_size, dtype=dtype, device="cuda")
     residual = make_large_mean_small_variance(batch_size, hidden_size, dtype)
@@ -180,6 +193,7 @@ def test_fused_add_rmsnorm_large_mean_small_variance(batch_size, hidden_size, dt
 
 @pytest.mark.parametrize("batch_size,hidden_size,dtype", LARGE_MEAN_SMALL_VARIANCE_CASES)
 def test_two_pass_vs_one_pass_variance(batch_size, hidden_size, dtype):
+    _require_cuda()
     # The one-pass FP32 reference can cancel to a negative variance; the two-pass
     # reference must stay finite and match the kernel within tolerance.
     eps = 1e-6
@@ -202,6 +216,7 @@ def test_two_pass_vs_one_pass_variance(batch_size, hidden_size, dtype):
 
 @pytest.mark.parametrize("batch_size,hidden_size,dtype", PRODUCTION_LIKE_NORM_CASES)
 def test_norm_production_like_shapes(batch_size, hidden_size, dtype):
+    _require_cuda()
     x = torch.randn(batch_size, hidden_size, dtype=dtype, device="cuda")
     w = torch.randn(hidden_size, dtype=dtype, device="cuda")
 
@@ -223,6 +238,7 @@ PRODUCTION_LIKE_FUSED_ADD_RMSNORM_CASES = [
     "batch_size,hidden_size,dtype", PRODUCTION_LIKE_FUSED_ADD_RMSNORM_CASES
 )
 def test_fused_add_rmsnorm_production_like_shapes(batch_size, hidden_size, dtype):
+    _require_cuda()
     eps = 1e-6
 
     x = torch.randn(batch_size, hidden_size, dtype=dtype, device="cuda")
