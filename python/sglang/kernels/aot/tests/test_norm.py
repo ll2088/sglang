@@ -59,6 +59,30 @@ def assert_close_norm(actual, expected, dtype):
         torch.testing.assert_close(actual, expected, rtol=1e-3, atol=1e-3)
 
 
+def rms_norm_fp64_two_pass(x, w, eps=1e-6):
+    """FP64 two-pass RMSNorm reference (centered variance)."""
+    x64 = x.double()
+    mean = x64.mean(dim=-1, keepdim=True)
+    var = ((x64 - mean) ** 2).mean(dim=-1, keepdim=True)
+    return x64 * torch.rsqrt(var + eps) * w.double()
+
+
+def rms_norm_fp32_one_pass(x, w, eps=1e-6):
+    """FP32 one-pass RMSNorm reference: E[x^2] - mean^2 (cancellation-prone)."""
+    x32 = x.float()
+    mean = x32.mean(dim=-1, keepdim=True)
+    var = x32.pow(2).mean(dim=-1, keepdim=True) - mean * mean
+    return x32 * torch.rsqrt(var + eps) * w.float()
+
+
+def make_large_mean_small_variance(batch_size, hidden_size, dtype, device="cuda"):
+    """Rows with |mean| ~ 1e4 and tiny spread, where one-pass FP32 variance cancels."""
+    row = torch.full((hidden_size,), 1.0e4, dtype=torch.float64)
+    row[:2] = 1.0e4 - 1.0e-2
+    x = torch.stack([row, -row]).repeat((batch_size + 1) // 2, 1)[:batch_size]
+    return x.to(device=device, dtype=dtype)
+
+
 @pytest.mark.parametrize("batch_size", [1, 19, 99, 989])
 @pytest.mark.parametrize("hidden_size", [111, 500, 1024, 3072, 3584, 4096, 8192, 16384])
 @pytest.mark.parametrize("dtype", [torch.float16])
@@ -108,6 +132,72 @@ PRODUCTION_LIKE_NORM_CASES = [
     (1240, 1536, torch.bfloat16),
     (7807, 128, torch.bfloat16),
 ]
+
+
+LARGE_MEAN_SMALL_VARIANCE_CASES = [
+    (2, 4096, torch.bfloat16),
+    (4, 8192, torch.bfloat16),
+    (2, 4096, torch.float16),
+]
+
+
+@pytest.mark.parametrize("batch_size,hidden_size,dtype", LARGE_MEAN_SMALL_VARIANCE_CASES)
+@pytest.mark.parametrize("eps", [1e-6, 1e-5])
+def test_rmsnorm_large_mean_small_variance(batch_size, hidden_size, dtype, eps):
+    x = make_large_mean_small_variance(batch_size, hidden_size, dtype)
+    w = torch.ones(hidden_size, dtype=dtype, device="cuda")
+
+    y_ref = rms_norm_fp64_two_pass(x, w, eps)
+    enable_pdl = is_arch_support_pdl()
+    y = sgl_kernel.rmsnorm(x, w, eps, enable_pdl=enable_pdl)
+
+    assert torch.isfinite(y).all()
+    torch.testing.assert_close(y.double(), y_ref, rtol=1e-2, atol=2e-3)
+
+
+@pytest.mark.parametrize("batch_size,hidden_size,dtype", LARGE_MEAN_SMALL_VARIANCE_CASES)
+@pytest.mark.parametrize("eps", [1e-6, 1e-5])
+def test_fused_add_rmsnorm_large_mean_small_variance(batch_size, hidden_size, dtype, eps):
+    # residual accumulation pushes the row to a large mean with tiny spread.
+    x = torch.zeros(batch_size, hidden_size, dtype=dtype, device="cuda")
+    residual = make_large_mean_small_variance(batch_size, hidden_size, dtype)
+    weight = torch.ones(hidden_size, dtype=dtype, device="cuda")
+
+    x_ref = (x.float() + residual.float()).to(dtype)
+    y_ref = rms_norm_fp64_two_pass(x_ref, weight, eps)
+
+    x_fused = x.clone()
+    residual_fused = residual.clone()
+    enable_pdl = is_arch_support_pdl()
+    sgl_kernel.fused_add_rmsnorm(
+        x_fused, residual_fused, weight, eps, enable_pdl=enable_pdl
+    )
+
+    assert torch.isfinite(x_fused).all()
+    torch.testing.assert_close(x_fused.double(), y_ref, rtol=1e-2, atol=2e-3)
+    torch.testing.assert_close(residual_fused, x_ref, rtol=1e-3, atol=1e-3)
+
+
+@pytest.mark.parametrize("batch_size,hidden_size,dtype", LARGE_MEAN_SMALL_VARIANCE_CASES)
+def test_two_pass_vs_one_pass_variance(batch_size, hidden_size, dtype):
+    # The one-pass FP32 reference can cancel to a negative variance; the two-pass
+    # reference must stay finite and match the kernel within tolerance.
+    eps = 1e-6
+    x = make_large_mean_small_variance(batch_size, hidden_size, dtype)
+    w = torch.ones(hidden_size, dtype=dtype, device="cuda")
+
+    y_two_pass = rms_norm_fp64_two_pass(x, w, eps)
+    y_one_pass = rms_norm_fp32_one_pass(x, w, eps)
+
+    assert torch.isfinite(y_two_pass).all()
+    # One-pass path is expected to be numerically unstable here; document it.
+    one_pass_err = (y_one_pass.double() - y_two_pass).abs().max().item()
+    assert one_pass_err > 1e-2 or not torch.isfinite(y_one_pass).all()
+
+    enable_pdl = is_arch_support_pdl()
+    y = sgl_kernel.rmsnorm(x, w, eps, enable_pdl=enable_pdl)
+    assert torch.isfinite(y).all()
+    torch.testing.assert_close(y.double(), y_two_pass, rtol=1e-2, atol=2e-3)
 
 
 @pytest.mark.parametrize("batch_size,hidden_size,dtype", PRODUCTION_LIKE_NORM_CASES)
