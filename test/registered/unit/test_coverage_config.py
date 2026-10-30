@@ -54,6 +54,27 @@ def _sysmon_runtime_supported() -> bool:
     return hasattr(sys, "monitoring")
 
 
+def _sysmon_core_available() -> bool:
+    """Whether the installed coverage can actually start the sysmon core.
+
+    ``sys.monitoring`` alone is not enough: the coverage release must also
+    ship the ``sysmon`` core (coverage >= 7.4). Probing the core directly
+    keeps the runtime tests honest on newer interpreters such as 3.14, where
+    ``sys.monitoring`` exists but an old coverage would silently fall back.
+    """
+    if not _sysmon_runtime_supported() or not _coverage_available():
+        return False
+    try:
+        from coverage import coverage as _coverage_cls
+
+        cov = _coverage_cls(core="sysmon")
+        cov.start()
+        cov.stop()
+        return True
+    except Exception:
+        return False
+
+
 def _require_coverage() -> None:
     """Fail loudly when coverage is not installed.
 
@@ -108,7 +129,7 @@ def _require_sysmon_core() -> None:
     # implementations (e.g. PyPy) may report a matching version but lack the
     # underlying API, so probe it explicitly before starting the core.
     if not hasattr(sys, "monitoring"):
-        pytest.fail("sys.monitoring is not available in this interpreter")
+        pytest.skip("sys.monitoring is not available in this interpreter")
     # ``core = sysmon`` in .coveragerc is only honoured by coverage releases
     # that know the name; older releases warn and fall back to the default
     # core, which would make the runtime assertions below pass vacuously.
@@ -206,6 +227,20 @@ def test_coveragerc_core_env_override_is_known_core():
     )
 
 
+def test_coveragerc_core_matches_ci_env_contract():
+    """The CI contract is ``COVERAGE_CORE=sysmon``; the config must agree.
+
+    This is a pure configuration check that runs on every interpreter,
+    including the Python 3.14 CI image, so a broken environment cannot hide
+    a divergence between ``.coveragerc`` and the CI environment variable.
+    """
+    parser = _load_coveragerc()
+    configured = parser.get("run", "core", fallback="").strip()
+    assert configured == "sysmon", (
+        f".coveragerc core is {configured!r}, expected 'sysmon' to match CI"
+    )
+
+
 def test_coveragerc_report_section():
     parser = _load_coveragerc()
     assert parser.has_section("report")
@@ -220,8 +255,8 @@ def test_coveragerc_report_section():
 
 
 @pytest.mark.skipif(
-    not _sysmon_runtime_supported(),
-    reason="sysmon coverage core runtime checks need CPython 3.12+",
+    not _sysmon_core_available(),
+    reason="sysmon coverage core runtime checks need CPython 3.12+ and coverage >= 7.4",
 )
 def test_sysmon_core_runs_and_reports(tmp_path):
     _require_sysmon_core()
@@ -290,8 +325,8 @@ def test_sysmon_core_falls_back_on_old_python(tmp_path):
 
 
 @pytest.mark.skipif(
-    not _sysmon_runtime_supported(),
-    reason="sysmon coverage core runtime checks need CPython 3.12+",
+    not _sysmon_core_available(),
+    reason="sysmon coverage core runtime checks need CPython 3.12+ and coverage >= 7.4",
 )
 def test_sysmon_matches_default_core_lines(tmp_path):
     """sysmon must record the same executed lines as the default core."""
