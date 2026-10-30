@@ -348,15 +348,12 @@ def test_sysmon_core_falls_back_on_old_python(tmp_path):
         capture_output=True,
         text=True,
     )
+    # The run must succeed: an unavailable core is a warning, not a failure.
     assert run.returncode == 0, run.stderr
-    # The warning text is coverage-version dependent; only require that the
-    # run succeeded and did not hard-fail on the unavailable core.
+    # The warning text is coverage-version dependent and some releases emit
+    # no warning at all on unsupported interpreters, so only check the text
+    # when coverage actually printed something.
     combined = (run.stderr + run.stdout).lower()
-    # The warning text is coverage-version dependent; only require that the
-    # run succeeded and did not hard-fail on the unavailable core. Some
-    # coverage releases emit no warning at all on unsupported interpreters,
-    # so an empty output is acceptable as long as the run exited cleanly.
-    assert run.returncode == 0, run.stderr
     if combined:
         assert "sysmon" in combined or "core" in combined, combined
 
