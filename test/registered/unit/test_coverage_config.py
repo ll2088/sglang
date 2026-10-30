@@ -7,6 +7,7 @@ coverage, they only verify that the configuration is well-formed and that the
 
 import configparser
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -277,7 +278,10 @@ def test_sysmon_core_falls_back_on_old_python(tmp_path):
         text=True,
     )
     assert run.returncode == 0, run.stderr
-    assert "sysmon" in (run.stderr + run.stdout).lower() or True
+    # The warning text is coverage-version dependent; only require that the
+    # run succeeded and did not hard-fail on the unavailable core.
+    combined = (run.stderr + run.stdout).lower()
+    assert "sysmon" in combined or "core" in combined, combined
 
 
 @pytest.mark.skipif(
@@ -321,8 +325,6 @@ def test_sysmon_matches_default_core_lines(tmp_path):
             text=True,
         )
         assert json_out.returncode == 0, json_out.stderr
-        import json
-
         data = json.loads(json_out.stdout)
         files = data["files"]
         entry = next(v for k, v in files.items() if k.endswith("sample.py"))
