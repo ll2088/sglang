@@ -45,6 +45,33 @@ def _registered_files():
     ]
 
 
+def _collect_args(extra=None):
+    """Shared pytest argv for collection subprocesses.
+
+    `-p no:cacheprovider` keeps repeated runs independent of any stale
+    `.pytest_cache` state, and `-p no:randomly` removes ordering plugins so
+    the collected node-id set is deterministic across invocations.
+    """
+    args = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "--collect-only",
+        "-q",
+        "-p",
+        "no:randomly",
+        "-p",
+        "no:cacheprovider",
+        "--rootdir",
+        REPO_ROOT,
+        "-c",
+        PYTEST_INI,
+    ]
+    if extra:
+        args.extend(extra)
+    return args
+
+
 def test_pytest_ini_has_discovery_config():
     section = _load_pytest_ini()
     assert section.get("testpaths", "").strip(), "testpaths must be set"
@@ -95,20 +122,7 @@ def test_registered_suite_paths_exist_and_collectable():
     for path in files:
         assert os.path.isfile(path), f"registered suite path missing: {path}"
     proc = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "--collect-only",
-            "-q",
-            "-p",
-            "no:randomly",
-            "--rootdir",
-            REPO_ROOT,
-            "-c",
-            PYTEST_INI,
-            REGISTERED_DIR,
-        ],
+        _collect_args([REGISTERED_DIR]),
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -119,19 +133,7 @@ def test_registered_suite_paths_exist_and_collectable():
 def test_collection_nonzero_from_repo_root_and_test_dir():
     def _collect(cwd):
         return subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pytest",
-                "--collect-only",
-                "-q",
-                "-p",
-                "no:randomly",
-                "--rootdir",
-                REPO_ROOT,
-                "-c",
-                PYTEST_INI,
-            ],
+            _collect_args(),
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -244,6 +246,21 @@ def _legacy_run_suite_suite_registry_resolves():
                 )
                 total += 1
     assert total > 0, "run_suite.py registers no suites"
+
+
+def test_testpaths_exactly_matches_run_suite_scan_root():
+    """testpaths must resolve to exactly the directory run_suite.py scans.
+
+    run_suite.py globs `test/registered/**/*.py`; if testpaths pointed at a
+    parent (e.g. `.`) or a sibling, `pytest` and `run_suite.py` would collect
+    different sets and the CI suite would silently diverge.
+    """
+    testpaths = _testpaths()
+    assert testpaths, "testpaths must not be empty"
+    resolved = {os.path.normpath(os.path.join(TEST_DIR, p)) for p in testpaths}
+    assert resolved == {os.path.normpath(REGISTERED_DIR)}, (
+        f"testpaths {sorted(resolved)} must be exactly {REGISTERED_DIR}"
+    )
 
 
 def test_run_suite_hw_mapping_covers_suite_backends():
