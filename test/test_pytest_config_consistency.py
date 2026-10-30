@@ -6,7 +6,10 @@ import os
 import subprocess
 import sys
 
-import pytest
+try:
+    import pytest
+except ImportError:  # pragma: no cover - pytest is the runner itself
+    pytest = None
 
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TEST_DIR)
@@ -75,7 +78,9 @@ def test_python_files_matches_registered_tests():
     assert patterns, "python_files must not be empty"
     files = _registered_files()
     if not files:
-        pytest.skip("no registered test files present in this checkout")
+        if pytest is not None:
+            pytest.skip("no registered test files present in this checkout")
+        return
     for path in files:
         name = os.path.basename(path)
         assert any(fnmatch.fnmatch(name, pat) for pat in patterns), (
