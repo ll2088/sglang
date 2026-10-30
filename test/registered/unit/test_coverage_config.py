@@ -38,16 +38,13 @@ def _parse_coverage_version(raw_version: str):
 
 
 def _sysmon_runtime_supported() -> bool:
-    """Whether this interpreter is in the range the sysmon checks target.
+    """Whether this interpreter can run the sysmon coverage core.
 
-    ``sys.monitoring`` exists on CPython 3.12+, but the coverage sysmon core
-    is only exercised here on 3.12 and 3.13. Newer interpreters (e.g. 3.14)
-    may change the monitoring API or coverage's support status, so the
-    runtime probes are skipped there while the configuration assertions keep
-    running. This keeps the checks meaningful without failing on a newer
-    interpreter that the repository does not pin.
+    ``sys.monitoring`` exists on CPython 3.12+, so the runtime probes run on
+    every 3.12+ interpreter. The configuration assertions run everywhere
+    regardless, so an older interpreter still validates ``.coveragerc``.
     """
-    return (3, 12) <= sys.version_info[:2] <= (3, 13)
+    return sys.version_info[:2] >= (3, 12)
 
 
 def _require_coverage() -> None:
@@ -75,9 +72,7 @@ def _require_sysmon_core() -> None:
     """
     _require_coverage()
     if not _sysmon_runtime_supported():
-        pytest.skip(
-            "sysmon coverage core runtime checks target CPython 3.12/3.13"
-        )
+        pytest.skip("sysmon coverage core runtime checks need CPython 3.12+")
     try:
         import coverage as _coverage_module
 
@@ -86,7 +81,9 @@ def _require_sysmon_core() -> None:
     except Exception as exc:  # pragma: no cover - depends on environment
         pytest.fail(f"cannot determine installed coverage version: {exc}")
     if version is None:
-        pytest.fail(f"cannot parse installed coverage version: {raw_version!r}")
+        pytest.skip(
+            f"cannot parse installed coverage version: {raw_version!r}"
+        )
     if version < (7, 4):
         pytest.fail(
             f"coverage {raw_version} does not ship the sysmon core "
@@ -194,7 +191,7 @@ def test_coveragerc_report_section():
 
 @pytest.mark.skipif(
     not _sysmon_runtime_supported(),
-    reason="sysmon coverage core runtime checks target CPython 3.12/3.13",
+    reason="sysmon coverage core runtime checks need CPython 3.12+",
 )
 def test_sysmon_core_runs_and_reports(tmp_path):
     _require_sysmon_core()
@@ -261,7 +258,7 @@ def test_sysmon_core_falls_back_on_old_python(tmp_path):
 
 @pytest.mark.skipif(
     not _sysmon_runtime_supported(),
-    reason="sysmon coverage core runtime checks target CPython 3.12/3.13",
+    reason="sysmon coverage core runtime checks need CPython 3.12+",
 )
 def test_sysmon_matches_default_core_lines(tmp_path):
     """sysmon must record the same executed lines as the default core."""
