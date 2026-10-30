@@ -1,3 +1,4 @@
+import ast
 import configparser
 import fnmatch
 import glob
@@ -154,13 +155,65 @@ def test_collection_nonzero_from_repo_root_and_test_dir():
     )
 
 
+def _load_run_suite_ast():
+    assert os.path.isfile(RUN_SUITE), f"missing {RUN_SUITE}"
+    with open(RUN_SUITE, encoding="utf-8") as f:
+        return ast.parse(f.read(), filename=RUN_SUITE)
+
+
+def _suite_dicts_from_ast(tree):
+    suite_dicts = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and target.id.endswith("_SUITES"):
+                try:
+                    suite_dicts[target.id] = ast.literal_eval(node.value)
+                except ValueError:
+                    continue
+    return suite_dicts
+
+
 def test_run_suite_suite_registry_resolves():
     """run_suite.py's suite registry must resolve without importing sglang."""
-    assert os.path.isfile(RUN_SUITE), f"missing {RUN_SUITE}"
     # Parse the suite dicts by AST so this check needs no sglang runtime and
     # no GPU/torch import chain.
-    import ast
+    tree = _load_run_suite_ast()
+    suite_dicts = _suite_dicts_from_ast(tree)
 
+    assert suite_dicts, "no *_SUITES registries found in run_suite.py"
+    total = 0
+    for name, mapping in suite_dicts.items():
+        assert isinstance(mapping, dict), f"{name} is not a dict"
+        for backend, suites in mapping.items():
+            assert isinstance(suites, list), f"{name}[{backend}] is not a list"
+            for suite in suites:
+                assert isinstance(suite, str) and suite, (
+                    f"{name}[{backend}] has invalid suite entry: {suite!r}"
+                )
+                total += 1
+    assert total > 0, "run_suite.py registers no suites"
+
+
+def test_run_suite_registered_suite_paths_exist():
+    """Every suite registered in run_suite.py must resolve to a real scan root."""
+    tree = _load_run_suite_ast()
+    suite_dicts = _suite_dicts_from_ast(tree)
+    assert suite_dicts, "no *_SUITES registries found in run_suite.py"
+    # run_suite.py scans test/registered/**/*.py; the scan root must exist and
+    # contain at least one discoverable test file for suites to resolve.
+    assert os.path.isdir(REGISTERED_DIR), f"missing scan root {REGISTERED_DIR}"
+    files = _registered_files()
+    assert files, f"no registered test files under {REGISTERED_DIR}"
+    patterns = _python_files()
+    for path in files:
+        name = os.path.basename(path)
+        assert any(fnmatch.fnmatch(name, pat) for pat in patterns), (
+            f"registered suite path {path} not collectable by python_files {patterns}"
+        )
+
+
+def _legacy_run_suite_suite_registry_resolves():
     with open(RUN_SUITE, encoding="utf-8") as f:
         tree = ast.parse(f.read(), filename=RUN_SUITE)
 
