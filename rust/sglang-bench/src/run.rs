@@ -714,6 +714,41 @@ mod tests {
         assert!(build_headers(&args).is_err());
     }
 
+    /// A mixed run (server-reported and fallback prompt lengths) aggregates
+    /// to the sum of the effective per-request values, with no negative or
+    /// duplicated contribution.
+    #[test]
+    fn mixed_prompt_len_sources_aggregate_correctly() {
+        let outputs = vec![
+            RequestOutput {
+                success: true,
+                prompt_len: 128,
+                dataset_prompt_len: 100,
+                dataset_text_prompt_len: 100,
+                output_len: 1,
+                ..Default::default()
+            },
+            RequestOutput {
+                success: true,
+                prompt_len: 0,
+                dataset_prompt_len: 50,
+                dataset_text_prompt_len: 50,
+                output_len: 1,
+                ..Default::default()
+            },
+            RequestOutput {
+                success: false,
+                prompt_len: 999,
+                dataset_prompt_len: 999,
+                ..Default::default()
+            },
+        ];
+        let metrics = metrics::calculate(&outputs, &[0, 0, 0], 1.0);
+        assert_eq!(metrics.completed, 2);
+        assert_eq!(metrics.total_input, 128);
+        assert_eq!(metrics.total_input_text, 150);
+    }
+
     /// CI flushes the cache for SGLang backends so the measured run does not
     /// inherit the warmup's prefixes; `--flush-cache` forces it everywhere.
     #[test]

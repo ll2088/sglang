@@ -159,7 +159,11 @@ pub fn calculate(
             continue;
         }
         output_lens.push(output.output_len);
-        total_input += output.dataset_prompt_len;
+        // Prefer the server-reported prompt length; the dataset row's value
+        // is the fallback when the server omitted it or sent a placeholder
+        // zero. Text/vision splits stay client-side, since the server does
+        // not break its count down that way.
+        total_input += output.prompt_len;
         total_input_text += output.dataset_text_prompt_len;
         total_input_vision += output.dataset_vision_prompt_len;
         if output.output_len > 1 {
@@ -571,6 +575,42 @@ mod tests {
         assert!((std_dev(&[1.0, 2.0, 3.0, 4.0]) - 1.118_033_988_749_895).abs() < 1e-12);
         assert_eq!(std_dev(&[5.0]), 0.0);
         assert_eq!(std_dev(&[]), 0.0);
+    }
+
+    /// The server-reported prompt length wins over the dataset estimate, and
+    /// a zero or missing server count falls back to the estimate without
+    /// double counting.
+    #[test]
+    fn total_input_prefers_server_prompt_len() {
+        let outputs = vec![
+            RequestOutput {
+                success: true,
+                prompt_len: 128,
+                dataset_prompt_len: 100,
+                dataset_text_prompt_len: 100,
+                output_len: 1,
+                ..Default::default()
+            },
+            RequestOutput {
+                success: true,
+                prompt_len: 0,
+                dataset_prompt_len: 50,
+                dataset_text_prompt_len: 50,
+                output_len: 1,
+                ..Default::default()
+            },
+            RequestOutput {
+                success: true,
+                prompt_len: 40,
+                dataset_prompt_len: 40,
+                dataset_text_prompt_len: 40,
+                output_len: 1,
+                ..Default::default()
+            },
+        ];
+        let metrics = calculate(&outputs, &[0, 0, 0], 1.0);
+        assert_eq!(metrics.total_input, 128 + 0 + 40);
+        assert_eq!(metrics.total_input_text, 100 + 50 + 40);
     }
 
     /// A request contributes one TPOT sample only when it produced more than

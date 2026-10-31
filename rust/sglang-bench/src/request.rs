@@ -563,12 +563,18 @@ fn completion_tokens(data: &Value) -> Option<usize> {
 }
 
 /// Take the prompt length from the server, the only side that knows it:
-/// `usage.prompt_tokens` on the OpenAI routes, `meta_info.prompt_tokens` on
-/// the native one. A server that reports neither leaves the row's value.
+/// `usage.prompt_tokens` on the OpenAI routes, `usage.input_tokens` on the
+/// Responses-style routes, and `meta_info.prompt_tokens` on the native one.
+/// A server that reports neither, or reports a placeholder zero, leaves the
+/// row's value.
 fn record_server_prompt_len(data: &Value, output: &mut RequestOutput) {
     let reported = data.get("usage").or_else(|| data.get("meta_info"));
     let Some(tokens) = reported
-        .and_then(|reported| reported.get("prompt_tokens"))
+        .and_then(|reported| {
+            reported
+                .get("prompt_tokens")
+                .or_else(|| reported.get("input_tokens"))
+        })
         .and_then(Value::as_u64)
     else {
         return;
@@ -741,6 +747,65 @@ mod tests {
         // An empty-text usage frame does not update the length, matching the
         // Python parser, which reads usage only beside a non-empty delta.
         assert_eq!(output.output_len, 16);
+    }
+
+    /// The server's `usage.prompt_tokens` replaces the client-side estimate,
+    /// so input-token totals count what the server actually processed.
+    #[test]
+    fn usage_prompt_tokens_override_prompt_len() {
+        let output = feed_all(
+            Api::OpenaiChat,
+            &[
+                r#"data: {"choices":[{"delta":{"content":"a"}}]}"#,
+                r#"data: {"choices":[],"usage":{"completion_tokens":1,"prompt_tokens":128}}"#,
+                "data: [DONE]",
+            ],
+        );
+        assert!(output.success, "{}", output.error);
+        assert_eq!(output.prompt_len, 128);
+    }
+
+    /// OpenAI-compatible Responses routes report `usage.input_tokens`; it is
+    /// the same server count under a different key.
+    #[test]
+    fn usage_input_tokens_override_prompt_len() {
+        let output = feed_all(
+            Api::OpenaiChat,
+            &[
+                r#"data: {"choices":[{"delta":{"content":"a"}}]}"#,
+                r#"data: {"choices":[],"usage":{"completion_tokens":1,"input_tokens":96}}"#,
+                "data: [DONE]",
+            ],
+        );
+        assert!(output.success, "{}", output.error);
+        assert_eq!(output.prompt_len, 96);
+    }
+
+    /// A placeholder zero must not replace the client estimate, and a missing
+    /// count leaves it untouched.
+    #[test]
+    fn zero_or_missing_prompt_tokens_keep_client_estimate() {
+        let zero = feed_all(
+            Api::OpenaiChat,
+            &[
+                r#"data: {"choices":[{"delta":{"content":"a"}}]}"#,
+                r#"data: {"choices":[],"usage":{"completion_tokens":1,"prompt_tokens":0}}"#,
+                "data: [DONE]",
+            ],
+        );
+        assert!(zero.success, "{}", zero.error);
+        assert_eq!(zero.prompt_len, 0);
+
+        let missing = feed_all(
+            Api::OpenaiChat,
+            &[
+                r#"data: {"choices":[{"delta":{"content":"a"}}]}"#,
+                r#"data: {"choices":[],"usage":{"completion_tokens":1}}"#,
+                "data: [DONE]",
+            ],
+        );
+        assert!(missing.success, "{}", missing.error);
+        assert_eq!(missing.prompt_len, 0);
     }
 
     /// A chat stream may close with a usage-only frame that carries no
