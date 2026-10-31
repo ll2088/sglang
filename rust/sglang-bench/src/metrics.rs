@@ -613,6 +613,51 @@ mod tests {
         assert_eq!(metrics.total_input_text, 100 + 50 + 40);
     }
 
+    /// A mixed run sums each request's server count once, falling back to the
+    /// client estimate only where the server reported nothing, and never
+    /// double counts a request that carries both.
+    #[test]
+    fn mixed_server_and_fallback_prompt_lens_sum_once() {
+        let outputs = vec![
+            RequestOutput {
+                success: true,
+                prompt_len: 128,
+                dataset_prompt_len: 100,
+                dataset_text_prompt_len: 100,
+                output_len: 1,
+                ..Default::default()
+            },
+            RequestOutput {
+                success: true,
+                prompt_len: 0,
+                dataset_prompt_len: 50,
+                dataset_text_prompt_len: 50,
+                output_len: 1,
+                ..Default::default()
+            },
+            RequestOutput {
+                success: true,
+                prompt_len: 96,
+                dataset_prompt_len: 80,
+                dataset_text_prompt_len: 80,
+                output_len: 1,
+                ..Default::default()
+            },
+            RequestOutput {
+                success: false,
+                prompt_len: 999,
+                dataset_prompt_len: 999,
+                ..Default::default()
+            },
+        ];
+        let metrics = calculate(&outputs, &[0, 0, 0, 0], 2.0);
+        assert_eq!(metrics.completed, 3);
+        assert_eq!(metrics.total_input, 128 + 0 + 96);
+        assert_eq!(metrics.total_input_text, 100 + 50 + 80);
+        assert_eq!(metrics.input_throughput, (128.0 + 96.0) / 2.0);
+        assert_eq!(metrics.total_throughput, (128.0 + 96.0 + 3.0) / 2.0);
+    }
+
     /// A request contributes one TPOT sample only when it produced more than
     /// one token, and ITLs pool across requests.
     #[test]

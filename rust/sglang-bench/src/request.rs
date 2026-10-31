@@ -765,6 +765,34 @@ mod tests {
         assert_eq!(output.prompt_len, 128);
     }
 
+    /// The server count must win over a non-zero client estimate, not merely
+    /// be recorded when the estimate happens to be zero.
+    #[test]
+    fn server_prompt_tokens_beat_a_nonzero_client_estimate() {
+        let mut output = RequestOutput {
+            prompt_len: 100,
+            dataset_prompt_len: 100,
+            ..Default::default()
+        };
+        let start = Instant::now();
+        let mut state = StreamState::new(Api::OpenaiChat, 16);
+        state.feed(
+            br#"data: {"choices":[{"delta":{"content":"a"}}]}"#,
+            start,
+            &mut output,
+        );
+        state.feed(
+            br#"data: {"choices":[],"usage":{"completion_tokens":1,"prompt_tokens":128}}"#,
+            start,
+            &mut output,
+        );
+        state.feed(b"data: [DONE]", start, &mut output);
+        assert!(state.finish(&mut output).is_ok());
+        assert_eq!(output.prompt_len, 128);
+        // The dataset estimate is kept separately for the text/vision split.
+        assert_eq!(output.dataset_prompt_len, 100);
+    }
+
     /// OpenAI-compatible Responses routes report `usage.input_tokens`; it is
     /// the same server count under a different key.
     #[test]
@@ -779,6 +807,53 @@ mod tests {
         );
         assert!(output.success, "{}", output.error);
         assert_eq!(output.prompt_len, 96);
+    }
+
+    /// `input_tokens` also wins over a non-zero client estimate, and a
+    /// placeholder zero under either key leaves the estimate in place.
+    #[test]
+    fn input_tokens_override_and_zero_falls_back() {
+        let mut output = RequestOutput {
+            prompt_len: 100,
+            dataset_prompt_len: 100,
+            ..Default::default()
+        };
+        let start = Instant::now();
+        let mut state = StreamState::new(Api::OpenaiChat, 16);
+        state.feed(
+            br#"data: {"choices":[{"delta":{"content":"a"}}]}"#,
+            start,
+            &mut output,
+        );
+        state.feed(
+            br#"data: {"choices":[],"usage":{"completion_tokens":1,"input_tokens":96}}"#,
+            start,
+            &mut output,
+        );
+        state.feed(b"data: [DONE]", start, &mut output);
+        assert!(state.finish(&mut output).is_ok());
+        assert_eq!(output.prompt_len, 96);
+
+        let mut zero = RequestOutput {
+            prompt_len: 100,
+            dataset_prompt_len: 100,
+            ..Default::default()
+        };
+        let start = Instant::now();
+        let mut state = StreamState::new(Api::OpenaiChat, 16);
+        state.feed(
+            br#"data: {"choices":[{"delta":{"content":"a"}}]}"#,
+            start,
+            &mut zero,
+        );
+        state.feed(
+            br#"data: {"choices":[],"usage":{"completion_tokens":1,"input_tokens":0}}"#,
+            start,
+            &mut zero,
+        );
+        state.feed(b"data: [DONE]", start, &mut zero);
+        assert!(state.finish(&mut zero).is_ok());
+        assert_eq!(zero.prompt_len, 100);
     }
 
     /// A placeholder zero must not replace the client estimate, and a missing
