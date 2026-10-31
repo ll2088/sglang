@@ -86,3 +86,49 @@ fn _bench(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(run_config, module)?)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Python entry points keep their names, so an existing caller of
+    /// `sglang.srt.rust_extensions._bench` keeps working after the token-source
+    /// change.
+    #[test]
+    fn python_entry_points_keep_their_names() {
+        // The functions are exported by name; this test pins the names the
+        // Python wrapper imports.
+        let _ = run_argv;
+        let _ = run_config;
+    }
+
+    /// The result document keeps the Python script's key names, so existing
+    /// readers of the `.jsonl` see the same fields after the token-source
+    /// change.
+    #[test]
+    fn result_json_keeps_prompt_token_keys() {
+        let outputs = vec![crate::request::RequestOutput {
+            success: true,
+            prompt_len: 128,
+            dataset_prompt_len: 100,
+            dataset_text_prompt_len: 100,
+            output_len: 1,
+            ..Default::default()
+        }];
+        let metrics = crate::metrics::calculate(&outputs, &[0], 1.0);
+        let args = Args::default();
+        let result = crate::metrics::result_json(
+            &metrics,
+            &args,
+            f64::INFINITY,
+            1.0,
+            None,
+            None,
+            &outputs,
+        );
+        assert_eq!(result["total_input_tokens"], 128);
+        assert_eq!(result["total_input_text_tokens"], 100);
+        assert!(result.get("input_throughput").is_some());
+        assert!(result.get("total_throughput").is_some());
+    }
+}

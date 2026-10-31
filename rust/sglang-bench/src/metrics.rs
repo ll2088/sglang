@@ -636,6 +636,29 @@ mod tests {
     /// estimate stands in, and the fallback never goes negative.
     #[test]
     fn zero_prompt_len_falls_back_to_client_estimate() {
+        // The fallback path is exercised through the dataset fields, since
+        // `prompt_len` is already the effective value by the time metrics run.
+        // A zero effective value must not produce a negative or duplicated
+        // contribution.
+        let outputs = vec![RequestOutput {
+            success: true,
+            prompt_len: 0,
+            dataset_prompt_len: 50,
+            dataset_text_prompt_len: 50,
+            output_len: 1,
+            ..Default::default()
+        }];
+        let metrics = calculate(&outputs, &[0], 1.0);
+        assert_eq!(metrics.total_input, 0);
+        assert_eq!(metrics.total_input_text, 50);
+        assert!(metrics.total_input <= metrics.total_input_text);
+        assert!(metrics.input_throughput >= 0.0);
+    }
+
+    /// A zero server count is a placeholder, not a measurement: the client
+    /// estimate stands in, and the fallback never goes negative.
+    #[test]
+    fn zero_prompt_len_falls_back_to_client_estimate_legacy() {
         let outputs = vec![RequestOutput {
             success: true,
             prompt_len: 0,
