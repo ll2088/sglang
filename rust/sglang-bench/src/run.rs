@@ -752,6 +752,45 @@ mod tests {
         assert_eq!(metrics.input_throughput, 128.0);
     }
 
+    /// The per-request mean input length is the effective (server-or-fallback)
+    /// sum divided by the completed count, so a mixed run reports the same
+    /// average a reader would compute from the result document.
+    #[test]
+    fn mixed_prompt_len_sources_report_consistent_mean() {
+        let outputs = vec![
+            RequestOutput {
+                success: true,
+                prompt_len: 128,
+                dataset_prompt_len: 100,
+                dataset_text_prompt_len: 100,
+                output_len: 1,
+                ..Default::default()
+            },
+            RequestOutput {
+                success: true,
+                prompt_len: 0,
+                dataset_prompt_len: 50,
+                dataset_text_prompt_len: 50,
+                output_len: 1,
+                ..Default::default()
+            },
+            RequestOutput {
+                success: true,
+                prompt_len: 96,
+                dataset_prompt_len: 80,
+                dataset_text_prompt_len: 80,
+                output_len: 1,
+                ..Default::default()
+            },
+        ];
+        let metrics = metrics::calculate(&outputs, &[0, 0, 0], 2.0);
+        assert_eq!(metrics.completed, 3);
+        assert_eq!(metrics.total_input, 128 + 0 + 96);
+        let mean = metrics.total_input as f64 / metrics.completed as f64;
+        assert!((mean - (128.0 + 0.0 + 96.0) / 3.0).abs() < 1e-12);
+        assert_eq!(metrics.input_throughput, (128.0 + 96.0) / 2.0);
+    }
+
     /// CI flushes the cache for SGLang backends so the measured run does not
     /// inherit the warmup's prefixes; `--flush-cache` forces it everywhere.
     #[test]

@@ -650,6 +650,39 @@ mod tests {
         assert!(metrics.total_input <= metrics.total_input_text);
     }
 
+    /// The result document keeps the Python script's key names and never
+    /// renames or drops a token field, so existing `.jsonl` readers keep
+    /// working after the token-source change.
+    #[test]
+    fn result_json_keeps_all_token_keys() {
+        let outputs = vec![RequestOutput {
+            success: true,
+            prompt_len: 128,
+            dataset_prompt_len: 100,
+            dataset_text_prompt_len: 100,
+            dataset_vision_prompt_len: 0,
+            output_len: 1,
+            ..Default::default()
+        }];
+        let metrics = calculate(&outputs, &[0], 1.0);
+        let args = Args::default();
+        let result = result_json(&metrics, &args, f64::INFINITY, 1.0, None, None, &outputs);
+        for key in [
+            "total_input_tokens",
+            "total_input_text_tokens",
+            "total_input_vision_tokens",
+            "total_output_tokens",
+            "total_output_tokens_retokenized",
+            "input_throughput",
+            "output_throughput",
+            "total_throughput",
+        ] {
+            assert!(result.get(key).is_some(), "missing key {key}");
+        }
+        assert_eq!(result["total_input_tokens"], 128);
+        assert_eq!(result["total_input_text_tokens"], 100);
+    }
+
     /// A mixed run sums each request's server count once, falling back to the
     /// client estimate only where the server reported nothing, and never
     /// double counts a request that carries both.
