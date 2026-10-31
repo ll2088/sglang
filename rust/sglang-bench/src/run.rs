@@ -830,6 +830,45 @@ mod tests {
         assert_eq!(metrics.input_throughput, (128.0 + 96.0) / 2.0);
     }
 
+    /// A mixed run where the server reported a non-zero count for some
+    /// requests and the client estimate stands for others aggregates to the
+    /// sum of the effective values, with the mean over completed requests.
+    #[test]
+    fn mixed_server_and_fallback_prompt_lens_aggregate() {
+        let outputs = vec![
+            RequestOutput {
+                success: true,
+                prompt_len: 128,
+                dataset_prompt_len: 100,
+                dataset_text_prompt_len: 100,
+                output_len: 1,
+                ..Default::default()
+            },
+            RequestOutput {
+                success: true,
+                prompt_len: 50,
+                dataset_prompt_len: 50,
+                dataset_text_prompt_len: 50,
+                output_len: 1,
+                ..Default::default()
+            },
+            RequestOutput {
+                success: true,
+                prompt_len: 96,
+                dataset_prompt_len: 80,
+                dataset_text_prompt_len: 80,
+                output_len: 1,
+                ..Default::default()
+            },
+        ];
+        let metrics = metrics::calculate(&outputs, &[0, 0, 0], 2.0);
+        assert_eq!(metrics.completed, 3);
+        assert_eq!(metrics.total_input, 128 + 50 + 96);
+        let mean = metrics.total_input as f64 / metrics.completed as f64;
+        assert!((mean - (128.0 + 50.0 + 96.0) / 3.0).abs() < 1e-12);
+        assert_eq!(metrics.input_throughput, (128.0 + 50.0 + 96.0) / 2.0);
+    }
+
     /// CI flushes the cache for SGLang backends so the measured run does not
     /// inherit the warmup's prefixes; `--flush-cache` forces it everywhere.
     #[test]

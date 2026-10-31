@@ -131,4 +131,55 @@ mod tests {
         assert!(result.get("input_throughput").is_some());
         assert!(result.get("total_throughput").is_some());
     }
+
+    /// The CLI surface and the report field names stay backward compatible:
+    /// the long flags the Python wrapper passes still parse, and the result
+    /// document keeps every token key it had before the token-source change.
+    #[test]
+    fn cli_and_report_fields_stay_compatible() {
+        let args = Args::try_parse_from([
+            "sglang-bench",
+            "--backend",
+            "vllm",
+            "--num-prompts",
+            "4",
+            "--random-input-len",
+            "16",
+            "--random-output-len",
+            "8",
+        ])
+        .expect("the documented flags still parse");
+        let outputs = vec![crate::request::RequestOutput {
+            success: true,
+            prompt_len: 128,
+            dataset_prompt_len: 100,
+            dataset_text_prompt_len: 100,
+            dataset_vision_prompt_len: 0,
+            output_len: 1,
+            ..Default::default()
+        }];
+        let metrics = crate::metrics::calculate(&outputs, &[0], 1.0);
+        let result = crate::metrics::result_json(
+            &metrics,
+            &args,
+            f64::INFINITY,
+            1.0,
+            None,
+            None,
+            &outputs,
+        );
+        for key in [
+            "total_input_tokens",
+            "total_input_text_tokens",
+            "total_input_vision_tokens",
+            "total_output_tokens",
+            "total_output_tokens_retokenized",
+            "input_throughput",
+            "output_throughput",
+            "total_throughput",
+        ] {
+            assert!(result.get(key).is_some(), "missing key {key}");
+        }
+        assert_eq!(result["total_input_tokens"], 128);
+    }
 }

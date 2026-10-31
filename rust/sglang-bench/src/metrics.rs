@@ -673,6 +673,37 @@ mod tests {
         assert!(metrics.total_input <= metrics.total_input_text);
     }
 
+    /// A missing server count (represented by the effective `prompt_len`
+    /// staying at the client estimate) is counted exactly once, and a zero
+    /// effective value never produces a negative contribution.
+    #[test]
+    fn missing_or_zero_prompt_len_never_double_counts() {
+        let outputs = vec![
+            RequestOutput {
+                success: true,
+                prompt_len: 100,
+                dataset_prompt_len: 100,
+                dataset_text_prompt_len: 100,
+                output_len: 1,
+                ..Default::default()
+            },
+            RequestOutput {
+                success: true,
+                prompt_len: 0,
+                dataset_prompt_len: 0,
+                dataset_text_prompt_len: 0,
+                output_len: 1,
+                ..Default::default()
+            },
+        ];
+        let metrics = calculate(&outputs, &[0, 0], 1.0);
+        assert_eq!(metrics.completed, 2);
+        assert_eq!(metrics.total_input, 100);
+        assert_eq!(metrics.total_input_text, 100);
+        assert!(metrics.input_throughput >= 0.0);
+        assert!(metrics.total_throughput >= 0.0);
+    }
+
     /// The result document keeps the Python script's key names and never
     /// renames or drops a token field, so existing `.jsonl` readers keep
     /// working after the token-source change.
