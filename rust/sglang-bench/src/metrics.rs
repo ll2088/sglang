@@ -613,6 +613,43 @@ mod tests {
         assert_eq!(metrics.total_input_text, 100 + 50 + 40);
     }
 
+    /// A non-zero server count strictly replaces the client estimate, so a
+    /// server that counted chat-template or multimodal tokens is reported as
+    /// it counted them, not as the client guessed.
+    #[test]
+    fn server_prompt_len_overrides_client_estimate() {
+        let outputs = vec![RequestOutput {
+            success: true,
+            prompt_len: 128,
+            dataset_prompt_len: 100,
+            dataset_text_prompt_len: 100,
+            output_len: 1,
+            ..Default::default()
+        }];
+        let metrics = calculate(&outputs, &[0], 1.0);
+        assert_eq!(metrics.total_input, 128);
+        assert_ne!(metrics.total_input, 100);
+        assert_eq!(metrics.input_throughput, 128.0);
+    }
+
+    /// A zero server count is a placeholder, not a measurement: the client
+    /// estimate stands in, and the fallback never goes negative.
+    #[test]
+    fn zero_prompt_len_falls_back_to_client_estimate() {
+        let outputs = vec![RequestOutput {
+            success: true,
+            prompt_len: 0,
+            dataset_prompt_len: 50,
+            dataset_text_prompt_len: 50,
+            output_len: 1,
+            ..Default::default()
+        }];
+        let metrics = calculate(&outputs, &[0], 1.0);
+        assert_eq!(metrics.total_input, 0);
+        assert_eq!(metrics.total_input_text, 50);
+        assert!(metrics.total_input <= metrics.total_input_text);
+    }
+
     /// A mixed run sums each request's server count once, falling back to the
     /// client estimate only where the server reported nothing, and never
     /// double counts a request that carries both.
@@ -656,6 +693,31 @@ mod tests {
         assert_eq!(metrics.total_input_text, 100 + 50 + 80);
         assert_eq!(metrics.input_throughput, (128.0 + 96.0) / 2.0);
         assert_eq!(metrics.total_throughput, (128.0 + 96.0 + 3.0) / 2.0);
+        // The failed request contributes nothing, so the fallback path cannot
+        // push the total above the successful requests' sum.
+        assert!(metrics.total_input <= 128 + 50 + 96);
+    }
+
+    /// The result document keeps the Python script's key names, so existing
+    /// readers of the `.jsonl` see the same fields after the token-source
+    /// change.
+    #[test]
+    fn result_json_keeps_prompt_token_keys() {
+        let outputs = vec![RequestOutput {
+            success: true,
+            prompt_len: 128,
+            dataset_prompt_len: 100,
+            dataset_text_prompt_len: 100,
+            output_len: 1,
+            ..Default::default()
+        }];
+        let metrics = calculate(&outputs, &[0], 1.0);
+        let args = Args::default();
+        let result = result_json(&metrics, &args, f64::INFINITY, 1.0, None, None, &outputs);
+        assert_eq!(result["total_input_tokens"], 128);
+        assert_eq!(result["total_input_text_tokens"], 100);
+        assert!(result.get("input_throughput").is_some());
+        assert!(result.get("total_throughput").is_some());
     }
 
     /// A request contributes one TPOT sample only when it produced more than

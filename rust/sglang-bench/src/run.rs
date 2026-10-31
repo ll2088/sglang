@@ -747,6 +747,9 @@ mod tests {
         assert_eq!(metrics.completed, 2);
         assert_eq!(metrics.total_input, 128);
         assert_eq!(metrics.total_input_text, 150);
+        // The failed request's 999 must not leak into any aggregate.
+        assert!(metrics.total_input < 999);
+        assert_eq!(metrics.input_throughput, 128.0);
     }
 
     /// CI flushes the cache for SGLang backends so the measured run does not
