@@ -655,6 +655,37 @@ mod tests {
         assert!(metrics.input_throughput >= 0.0);
     }
 
+    /// A missing server count (effective `prompt_len` equals the client
+    /// estimate) is counted exactly once, and a zero effective value never
+    /// produces a negative contribution.
+    #[test]
+    fn missing_prompt_len_keeps_client_estimate_once() {
+        let outputs = vec![
+            RequestOutput {
+                success: true,
+                prompt_len: 100,
+                dataset_prompt_len: 100,
+                dataset_text_prompt_len: 100,
+                output_len: 1,
+                ..Default::default()
+            },
+            RequestOutput {
+                success: true,
+                prompt_len: 0,
+                dataset_prompt_len: 0,
+                dataset_text_prompt_len: 0,
+                output_len: 1,
+                ..Default::default()
+            },
+        ];
+        let metrics = calculate(&outputs, &[0, 0], 1.0);
+        assert_eq!(metrics.completed, 2);
+        assert_eq!(metrics.total_input, 100);
+        assert_eq!(metrics.total_input_text, 100);
+        assert!(metrics.input_throughput >= 0.0);
+        assert!(metrics.total_throughput >= 0.0);
+    }
+
     /// A zero server count is a placeholder, not a measurement: the client
     /// estimate stands in, and the fallback never goes negative.
     #[test]
