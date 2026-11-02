@@ -15,7 +15,7 @@ import torch
 from sglang.kernels.ops.quantization import fp4_fake_quant
 
 
-@pytest.mark.parametrize("numel", [0, 16, 32, 48, 1024])
+@pytest.mark.parametrize("numel", [0, 1, 15, 16, 17, 32, 48, 1024])
 @pytest.mark.parametrize("blocks_per_program", [1, 2, 32, 64, 128])
 def test_batched_matches_per_block_cpu(numel, blocks_per_program):
     """Batched-block processing must be bit-identical to per-block on CPU."""
