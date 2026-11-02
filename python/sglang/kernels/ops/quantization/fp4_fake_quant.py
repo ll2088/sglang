@@ -54,6 +54,18 @@ def _block_offsets(num_blocks: int, blocks_per_program: int, device) -> torch.Te
     return torch.arange(num_blocks, dtype=torch.int64, device=device)
 
 
+def _element_offsets(
+    block_idx: torch.Tensor, block_size: int, device
+) -> torch.Tensor:
+    """int64 element offsets for a group of blocks, shape [num_blocks, block_size].
+
+    Mirrors the kernel's ``block_idx[:, None] * BLOCK_SIZE + arange(BLOCK_SIZE)``
+    arithmetic in int64 so element indices past 2**31 do not wrap.
+    """
+    elem = torch.arange(block_size, dtype=torch.int64, device=device)
+    return block_idx.to(torch.int64)[:, None] * block_size + elem[None, :]
+
+
 def round_fp4(x: torch.Tensor) -> torch.Tensor:
     """Round fp32 values in [-6, 6] onto the e2m1 grid with round-to-nearest-even."""
     magnitude = x.abs()
@@ -97,7 +109,6 @@ def fake_quant_fp4_batched(
     # int64 offsets: stacked MoE weights can exceed 2**31 elements.
     block_idx = _block_offsets(num_blocks, blocks_per_program, x.device)
     scale = block_scale(x, block_size, FP4_MAX, FP4_AMAX_FLOOR).reshape(-1)
-    elem_offsets = torch.arange(block_size, device=x.device, dtype=torch.int64)
 
     # Process one program (blocks_per_program blocks) at a time so the
     # temporary index tensor stays bounded even for >2**31-element inputs.
@@ -105,7 +116,7 @@ def fake_quant_fp4_batched(
     for start in range(0, num_blocks, blocks_per_program):
         program_blocks = block_idx[start : start + blocks_per_program]
         block_mask = program_blocks < num_blocks
-        idx = program_blocks[:, None] * block_size + elem_offsets[None, :]
+        idx = _element_offsets(program_blocks, block_size, x.device)
 
         program_scale = scale.index_select(
             0, program_blocks.clamp_max(num_blocks - 1)

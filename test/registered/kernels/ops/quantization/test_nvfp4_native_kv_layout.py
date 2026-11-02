@@ -381,6 +381,13 @@ def test_fp4_fake_quant_batched_kv_layout_parity():
         fp4_fake_quant.fake_quant_fp4(tail),
     )
 
+    # int64 element offsets must stay correct past the 2**31 boundary.
+    num_blocks = 2**31 // 16 + 1024
+    offsets = fp4_fake_quant._block_offsets(num_blocks, 64, "cpu")
+    elem = fp4_fake_quant._element_offsets(offsets[-1:], 16, "cpu")
+    assert elem.dtype == torch.int64
+    assert elem[0, 0].item() > 2**31
+
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
