@@ -315,5 +315,36 @@ def test_fp4_fake_quant_over_int32_numel():
     assert torch.equal(got[-4096:], tail)
 
 
+def test_fp4_fake_quant_int64_offset_arithmetic():
+    """The batched layout must compute block offsets in int64 past 2**31.
+
+    This does not allocate a >2**31-element tensor; it checks the offset
+    arithmetic that the kernel and the pure-torch path share.
+    """
+    num_blocks = 2**31 // 16 + 1024
+    offsets = fp4_fake_quant._block_offsets(num_blocks, 64, "cpu")
+    assert offsets.dtype == torch.int64
+    assert offsets.numel() == num_blocks
+    assert offsets[-1].item() == num_blocks - 1
+    # Element offsets for the last block must exceed int32 range.
+    last_element = offsets[-1].item() * 16
+    assert last_element > 2**31
+
+
+def test_fp4_fake_quant_exported_from_quantization_package():
+    """fp4_fake_quant must be importable from the quantization package."""
+    from sglang.kernels.ops import quantization
+
+    assert "fp4_fake_quant" in quantization.__all__
+    assert quantization.fp4_fake_quant is fp4_fake_quant
+    for name in (
+        "fake_quant_fp4",
+        "fake_quant_fp4_batched",
+        "fake_quant_compressed_kv",
+        "STATIC_FP4_BLOCKS_PER_PROGRAM",
+    ):
+        assert hasattr(quantization.fp4_fake_quant, name)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "-s"]))

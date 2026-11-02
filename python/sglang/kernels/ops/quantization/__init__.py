@@ -11,6 +11,7 @@ from sglang.kernels.spec import (
     KernelBackend,
     KernelSpec,
 )
+from sglang.kernels.ops.quantization import fp4_fake_quant
 
 if TYPE_CHECKING:
     import torch
@@ -92,6 +93,7 @@ def sgl_per_token_group_quant_8bit(
 __all__ = [
     "sgl_per_token_quant_fp8",
     "sgl_per_token_group_quant_8bit",
+    "fp4_fake_quant",
 ]
 
 

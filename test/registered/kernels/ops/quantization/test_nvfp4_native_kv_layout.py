@@ -374,6 +374,13 @@ def test_fp4_fake_quant_batched_kv_layout_parity():
     got_flat = fp4_fake_quant.fake_quant_fp4_batched(flat)
     assert torch.equal(got_flat, ref_flat)
 
+    # Tail beyond a non-divisible block count must match per-block output.
+    tail = flat[: 100 * 16]
+    assert torch.equal(
+        fp4_fake_quant.fake_quant_fp4_batched(tail),
+        fp4_fake_quant.fake_quant_fp4(tail),
+    )
+
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
