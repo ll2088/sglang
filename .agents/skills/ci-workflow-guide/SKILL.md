@@ -183,6 +183,12 @@ describes what each one does.
 
 **PR only**: Condition `github.event_name == 'pull_request' && !inputs.target_stage` — scheduled runs and manual dispatches skip these entirely, allowing parallel execution.
 
+**GPU CI gating**: GPU CI runs only for PRs that target `main`. A PR whose base branch is
+not `main` (a stacked PR based on another PR's branch) skips GPU CI; only the bottom PR
+of a stack runs it once it targets `main`. The gate reads the PR's base branch and its
+merge-base against `main` to decide whether the PR is stacked, so retargeting to `main`
+needs a new push or a full re-run to take effect.
+
 ---
 
 ## Cross-Job Fail-Fast (`check-pr-test-health` action)

@@ -70,6 +70,11 @@ Do not mark the goal complete until the completion check at the end of this skil
 
 Known SGLang gates:
 
+- GPU CI runs only for PRs that target `main`. A PR whose base branch is not `main`
+  (a stacked PR based on another PR's branch) skips GPU CI; only the bottom PR of a
+  stack runs it once it targets `main`. The gate reads the PR's base branch and its
+  merge-base against `main` to decide whether the PR is stacked, so retargeting to
+  `main` needs a new push or a full re-run to take effect.
 - `pr-test.yml` requires the `run-ci` label for relevant PR changes. If its existing gate job failed because the label was absent, add `run-ci` when authorized and rerun failed jobs in that existing run; adding the label alone does not necessarily create a new `pr-test.yml` run.
 - `pr-test-extra.yml` requires both `run-ci` and `run-ci-extra`. It listens for relevant label events, so adding a missing label may create a fresh run. Prefer that fresh current-head run; rerun failed jobs in an existing current run only when needed.
 - AMD-extra workflows may use the same `run-ci` plus `run-ci-extra` gate. Verify the actual selected file.
