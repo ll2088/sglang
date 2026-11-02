@@ -270,6 +270,20 @@ def test_fp4_fake_quant_batched_matches_per_block():
         )
 
 
+def test_fp4_fake_quant_batched_matches_per_block_flat():
+    """Batched-block processing must be bit-identical on a flat tensor."""
+    torch.manual_seed(10)
+    x = torch.randn(4096 * 12288, dtype=torch.bfloat16, device="cuda")
+    ref = fp4_fake_quant.fake_quant_fp4(x)
+    for blocks_per_program in (1, 2, 32, 64, 128):
+        got = fp4_fake_quant.fake_quant_fp4_batched(
+            x, blocks_per_program=blocks_per_program
+        )
+        assert torch.equal(got, ref), (
+            f"blocks_per_program={blocks_per_program} diverged from per-block"
+        )
+
+
 def test_fp4_fake_quant_batched_tail_mask():
     """Non-divisible block counts exercise the tail mask."""
     torch.manual_seed(1)
@@ -330,6 +344,15 @@ def test_fp4_fake_quant_int64_offset_arithmetic():
     # Element offsets for the last block must exceed int32 range.
     last_element = offsets[-1].item() * 16
     assert last_element > 2**31
+
+
+def test_fp4_fake_quant_int64_element_offsets():
+    """Element offsets for the last block must exceed int32 range."""
+    num_blocks = 2**31 // 16 + 1024
+    offsets = fp4_fake_quant._block_offsets(num_blocks, 64, "cpu")
+    elem = fp4_fake_quant._element_offsets(offsets[-1:], 16, "cpu")
+    assert elem.dtype == torch.int64
+    assert elem[0, 0].item() > 2**31
 
 
 def test_fp4_fake_quant_exported_from_quantization_package():

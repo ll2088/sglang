@@ -388,6 +388,15 @@ def test_fp4_fake_quant_batched_kv_layout_parity():
     assert elem.dtype == torch.int64
     assert elem[0, 0].item() > 2**31
 
+    # Batched output must match per-block on the flattened KV view.
+    for blocks_per_program in (1, 2, 32, 64, 128):
+        got_flat = fp4_fake_quant.fake_quant_fp4_batched(
+            flat, blocks_per_program=blocks_per_program
+        )
+        assert torch.equal(got_flat, ref_flat), (
+            f"blocks_per_program={blocks_per_program} diverged on flat KV view"
+        )
+
 
 @torch.inference_mode()
 def test_fp4_fake_quant_batched_kv_layout_int64_offsets():
