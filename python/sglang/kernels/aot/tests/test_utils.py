@@ -30,5 +30,22 @@ def test_peak_gpu_mem_increase_noop_is_zero():
     assert _peak_gpu_mem_increase(_noop) == 0
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a CUDA GPU")
+def test_peak_gpu_mem_increase_counts_freed_temporaries():
+    n_bytes = 4 * 1024 * 1024
+
+    def _allocate_and_free():
+        tmp = torch.empty(n_bytes, dtype=torch.uint8, device="cuda")
+        del tmp
+
+    # Warm up the allocator so the measurement is not polluted by first-use overhead.
+    torch.empty(n_bytes, dtype=torch.uint8, device="cuda")
+    torch.cuda.synchronize()
+
+    mem_increase = _peak_gpu_mem_increase(_allocate_and_free)
+    assert mem_increase >= n_bytes
+    assert mem_increase < n_bytes * 2
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__]))
