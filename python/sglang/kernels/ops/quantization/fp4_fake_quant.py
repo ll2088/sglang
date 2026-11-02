@@ -98,11 +98,8 @@ def fake_quant_fp4_batched(
         raise ValueError("blocks_per_program must be positive")
     flat = x.float().reshape(-1)
     numel = flat.numel()
-    if numel % block_size != 0:
-        raise ValueError(
-            f"numel {numel} is not a multiple of block_size {block_size}"
-        )
-    num_blocks = numel // block_size
+    # The tail may be shorter than one block; the kernel masks it the same way.
+    num_blocks = (numel + block_size - 1) // block_size
     if num_blocks == 0:
         return x.clone()
 
@@ -125,15 +122,18 @@ def fake_quant_fp4_batched(
             block_mask, program_scale, torch.zeros_like(program_scale)
         )
 
+        elem_mask = idx < numel
         gathered = flat.index_select(0, idx.reshape(-1).clamp_max(numel - 1))
         gathered = gathered.reshape(program_blocks.numel(), block_size)
         gathered = torch.where(
-            block_mask[:, None], gathered, torch.zeros_like(gathered)
+            block_mask[:, None] & elem_mask, gathered, torch.zeros_like(gathered)
         )
 
         scaled = gathered / program_scale.unsqueeze(-1)
         deq = round_fp4(scaled.clamp(-FP4_MAX, FP4_MAX)) * program_scale.unsqueeze(-1)
-        deq = torch.where(block_mask[:, None], deq, torch.zeros_like(deq))
+        deq = torch.where(
+            block_mask[:, None] & elem_mask, deq, torch.zeros_like(deq)
+        )
         out.index_copy_(0, idx.reshape(-1), deq.reshape(-1))
 
     return out.reshape(x.shape).to(x.dtype)
