@@ -347,5 +347,26 @@ def test_fp4_fake_quant_exported_from_quantization_package():
         assert hasattr(quantization.fp4_fake_quant, name)
 
 
+def test_fp4_fake_quant_int64_offset_arithmetic_grouped():
+    """Grouped offsets must match the flat int64 layout for any grouping."""
+    num_blocks = 2**31 // 16 + 1024
+    flat = fp4_fake_quant._block_offsets(num_blocks, 1, "cpu")
+    for blocks_per_program in (2, 32, 64, 128):
+        grouped = fp4_fake_quant._block_offsets(
+            num_blocks, blocks_per_program, "cpu"
+        )
+        assert grouped.dtype == torch.int64
+        assert torch.equal(grouped, flat)
+
+
+def test_fp4_fake_quant_invalid_blocks_per_program():
+    """Non-positive batching must be rejected rather than silently misbehave."""
+    x = torch.randn(64, dtype=torch.bfloat16)
+    with pytest.raises(ValueError):
+        fp4_fake_quant.fake_quant_fp4_batched(x, blocks_per_program=0)
+    with pytest.raises(ValueError):
+        fp4_fake_quant._block_offsets(16, 0, "cpu")
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "-s"]))

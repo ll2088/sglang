@@ -417,5 +417,23 @@ def test_fp4_fake_quant_batched_kv_layout_int64_offsets():
     )
 
 
+@torch.inference_mode()
+def test_fp4_fake_quant_batched_kv_layout_boundaries():
+    """Empty, single-block and non-aligned KV views must match per-block."""
+    from sglang.kernels.ops.quantization import fp4_fake_quant
+
+    torch.manual_seed(8)
+    for numel in (0, 16, 17, 32, 48, 1024):
+        x = torch.randn(numel, dtype=torch.bfloat16, device="cuda")
+        ref = fp4_fake_quant.fake_quant_fp4(x)
+        for blocks_per_program in (1, 2, 32, 64, 128):
+            got = fp4_fake_quant.fake_quant_fp4_batched(
+                x, blocks_per_program=blocks_per_program
+            )
+            assert torch.equal(got, ref), (
+                f"numel={numel} blocks_per_program={blocks_per_program} diverged"
+            )
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
