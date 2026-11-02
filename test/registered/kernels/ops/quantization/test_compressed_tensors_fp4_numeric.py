@@ -331,6 +331,24 @@ def test_fp4_fake_quant_int64_offset_arithmetic():
     assert last_element > 2**31
 
 
+@pytest.mark.parametrize("numel", [0, 16, 32, 48, 1024])
+@pytest.mark.parametrize("blocks_per_program", [1, 64])
+def test_fp4_fake_quant_batched_cpu_boundaries(numel, blocks_per_program):
+    """CPU-only boundary coverage for the batched layout.
+
+    Empty, single-block, non-aligned and block-boundary lengths must match the
+    per-block reference without requiring CUDA or Triton, so the int64 offset
+    and tail-mask logic is exercised even when the GPU environment is broken.
+    """
+    torch.manual_seed(2)
+    x = torch.randn(numel, dtype=torch.bfloat16)
+    ref = fp4_fake_quant.fake_quant_fp4(x)
+    got = fp4_fake_quant.fake_quant_fp4_batched(
+        x, blocks_per_program=blocks_per_program
+    )
+    assert torch.equal(got, ref)
+
+
 def test_fp4_fake_quant_exported_from_quantization_package():
     """fp4_fake_quant must be importable from the quantization package."""
     from sglang.kernels.ops import quantization
