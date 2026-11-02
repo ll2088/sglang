@@ -270,6 +270,26 @@ def test_fp4_fake_quant_batched_matches_per_block():
         )
 
 
+def test_fp4_fake_quant_batched_matches_per_block_int64_offsets():
+    """Batched-block processing must be bit-identical to per-block when the
+    int64 offset arithmetic is exercised past the 2**31-element boundary.
+
+    This does not allocate a >2**31-element tensor; it checks the offset
+    arithmetic that the kernel and the pure-torch path share.
+    """
+    num_blocks = 2**31 // 16 + 1024
+    offsets = fp4_fake_quant._block_offsets(num_blocks, 64, "cpu")
+    assert offsets.dtype == torch.int64
+    assert offsets.numel() == num_blocks
+    assert offsets[-1].item() == num_blocks - 1
+    last_element = offsets[-1].item() * 16
+    assert last_element > 2**31
+
+    elem = fp4_fake_quant._element_offsets(offsets[-1:], 16, "cpu")
+    assert elem.dtype == torch.int64
+    assert elem[0, 0].item() > 2**31
+
+
 def test_fp4_fake_quant_batched_matches_per_block_flat():
     """Batched-block processing must be bit-identical on a flat tensor."""
     torch.manual_seed(10)
@@ -292,6 +312,103 @@ def test_fp4_fake_quant_batched_tail_mask():
     ref = fp4_fake_quant.fake_quant_fp4(x)
     got = fp4_fake_quant.fake_quant_fp4_batched(x, blocks_per_program=64)
     assert torch.equal(got, ref)
+
+
+@pytest.mark.parametrize("numel", [0, 16, 32, 48, 1024])
+@pytest.mark.parametrize("blocks_per_program", [1, 2, 32, 64, 128])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_fp4_fake_quant_batched_boundaries(numel, blocks_per_program, dtype, device):
+    """Empty, single-block, non-aligned and block-boundary lengths."""
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    torch.manual_seed(2)
+    x = torch.randn(numel, dtype=dtype, device=device)
+    ref = fp4_fake_quant.fake_quant_fp4(x)
+    got = fp4_fake_quant.fake_quant_fp4_batched(
+        x, blocks_per_program=blocks_per_program
+    )
+    assert torch.equal(got, ref)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+@pytest.mark.skipif(
+    not torch.cuda.is_available()
+    or torch.cuda.get_device_properties(0).total_memory < 2**31 * 2,
+    reason="needs >4 GiB of device memory for the int64 offset regression",
+)
+def test_fp4_fake_quant_over_int32_numel():
+    """int64 offsets must stay correct past the 2**31-element boundary."""
+    torch.manual_seed(3)
+    numel = 2**31 + 2**20
+    x = torch.randn(numel, dtype=torch.bfloat16, device="cuda")
+    ref = fp4_fake_quant.fake_quant_fp4(x)
+    got = fp4_fake_quant.fake_quant_fp4_batched(x)
+    assert torch.equal(got, ref)
+    # The tail beyond the int32 boundary must match a standalone slice.
+    tail = fp4_fake_quant.fake_quant_fp4(x[-4096:])
+    assert torch.equal(got[-4096:], tail)
+
+
+def test_fp4_fake_quant_int64_offset_arithmetic():
+    """The batched layout must compute block offsets in int64 past 2**31.
+
+    This does not allocate a >2**31-element tensor; it checks the offset
+    arithmetic that the kernel and the pure-torch path share.
+    """
+    num_blocks = 2**31 // 16 + 1024
+    offsets = fp4_fake_quant._block_offsets(num_blocks, 64, "cpu")
+    assert offsets.dtype == torch.int64
+    assert offsets.numel() == num_blocks
+    assert offsets[-1].item() == num_blocks - 1
+    # Element offsets for the last block must exceed int32 range.
+    last_element = offsets[-1].item() * 16
+    assert last_element > 2**31
+
+
+def test_fp4_fake_quant_int64_element_offsets():
+    """Element offsets for the last block must exceed int32 range."""
+    num_blocks = 2**31 // 16 + 1024
+    offsets = fp4_fake_quant._block_offsets(num_blocks, 64, "cpu")
+    elem = fp4_fake_quant._element_offsets(offsets[-1:], 16, "cpu")
+    assert elem.dtype == torch.int64
+    assert elem[0, 0].item() > 2**31
+
+
+def test_fp4_fake_quant_exported_from_quantization_package():
+    """fp4_fake_quant must be importable from the quantization package."""
+    from sglang.kernels.ops import quantization
+
+    assert "fp4_fake_quant" in quantization.__all__
+    assert quantization.fp4_fake_quant is fp4_fake_quant
+    for name in (
+        "fake_quant_fp4",
+        "fake_quant_fp4_batched",
+        "fake_quant_compressed_kv",
+        "STATIC_FP4_BLOCKS_PER_PROGRAM",
+    ):
+        assert hasattr(quantization.fp4_fake_quant, name)
+
+
+def test_fp4_fake_quant_int64_offset_arithmetic_grouped():
+    """Grouped offsets must match the flat int64 layout for any grouping."""
+    num_blocks = 2**31 // 16 + 1024
+    flat = fp4_fake_quant._block_offsets(num_blocks, 1, "cpu")
+    for blocks_per_program in (2, 32, 64, 128):
+        grouped = fp4_fake_quant._block_offsets(
+            num_blocks, blocks_per_program, "cpu"
+        )
+        assert grouped.dtype == torch.int64
+        assert torch.equal(grouped, flat)
+
+
+def test_fp4_fake_quant_invalid_blocks_per_program():
+    """Non-positive batching must be rejected rather than silently misbehave."""
+    x = torch.randn(64, dtype=torch.bfloat16)
+    with pytest.raises(ValueError):
+        fp4_fake_quant.fake_quant_fp4_batched(x, blocks_per_program=0)
+    with pytest.raises(ValueError):
+        fp4_fake_quant._block_offsets(16, 0, "cpu")
 
 
 def test_fp4_fake_quant_batched_matches_per_block_int64_offsets():

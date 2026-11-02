@@ -444,5 +444,95 @@ def test_fp4_fake_quant_batched_kv_layout_boundaries():
             )
 
 
+@torch.inference_mode()
+def test_fp4_fake_quant_batched_kv_layout_parity():
+    """Batched-block fake quant must match per-block on KV-shaped tensors."""
+    from sglang.kernels.ops.quantization import fp4_fake_quant
+
+    torch.manual_seed(5)
+    pages, page_size, heads, head_dim = 4, 16, 4, 128
+    x = torch.randn(
+        pages, page_size, heads, head_dim, dtype=torch.bfloat16, device="cuda"
+    )
+    ref = fp4_fake_quant.fake_quant_fp4(x)
+    got = fp4_fake_quant.fake_quant_fp4_batched(x)
+    assert torch.equal(got, ref)
+
+    # int64 offsets on a flattened view that crosses many blocks.
+    flat = x.reshape(-1)
+    ref_flat = fp4_fake_quant.fake_quant_fp4(flat)
+    got_flat = fp4_fake_quant.fake_quant_fp4_batched(flat)
+    assert torch.equal(got_flat, ref_flat)
+
+    # Tail beyond a non-divisible block count must match per-block output.
+    tail = flat[: 100 * 16]
+    assert torch.equal(
+        fp4_fake_quant.fake_quant_fp4_batched(tail),
+        fp4_fake_quant.fake_quant_fp4(tail),
+    )
+
+    # int64 element offsets must stay correct past the 2**31 boundary.
+    num_blocks = 2**31 // 16 + 1024
+    offsets = fp4_fake_quant._block_offsets(num_blocks, 64, "cpu")
+    elem = fp4_fake_quant._element_offsets(offsets[-1:], 16, "cpu")
+    assert elem.dtype == torch.int64
+    assert elem[0, 0].item() > 2**31
+
+    # Batched output must match per-block on the flattened KV view.
+    for blocks_per_program in (1, 2, 32, 64, 128):
+        got_flat = fp4_fake_quant.fake_quant_fp4_batched(
+            flat, blocks_per_program=blocks_per_program
+        )
+        assert torch.equal(got_flat, ref_flat), (
+            f"blocks_per_program={blocks_per_program} diverged on flat KV view"
+        )
+
+
+@torch.inference_mode()
+def test_fp4_fake_quant_batched_kv_layout_int64_offsets():
+    """KV-shaped tensors must match per-block output under int64 offsets."""
+    from sglang.kernels.ops.quantization import fp4_fake_quant
+
+    torch.manual_seed(6)
+    pages, page_size, heads, head_dim = 4, 16, 4, 128
+    x = torch.randn(
+        pages, page_size, heads, head_dim, dtype=torch.bfloat16, device="cuda"
+    )
+    ref = fp4_fake_quant.fake_quant_fp4(x)
+    for blocks_per_program in (1, 2, 32, 64, 128):
+        got = fp4_fake_quant.fake_quant_fp4_batched(
+            x, blocks_per_program=blocks_per_program
+        )
+        assert torch.equal(got, ref), (
+            f"blocks_per_program={blocks_per_program} diverged on KV layout"
+        )
+
+    # Non-divisible tail on a flattened KV view.
+    flat = x.reshape(-1)
+    tail = flat[: 100 * 16]
+    assert torch.equal(
+        fp4_fake_quant.fake_quant_fp4_batched(tail),
+        fp4_fake_quant.fake_quant_fp4(tail),
+    )
+
+
+@torch.inference_mode()
+def test_fp4_fake_quant_batched_kv_layout_boundaries():
+    """Empty, single-block and non-aligned KV views must match per-block."""
+    from sglang.kernels.ops.quantization import fp4_fake_quant
+
+    torch.manual_seed(8)
+    for numel in (0, 16, 17, 32, 48, 1024):
+        x = torch.randn(numel, dtype=torch.bfloat16, device="cuda")
+        ref = fp4_fake_quant.fake_quant_fp4(x)
+        for blocks_per_program in (1, 2, 32, 64, 128):
+            got = fp4_fake_quant.fake_quant_fp4_batched(
+                x, blocks_per_program=blocks_per_program
+            )
+            assert torch.equal(got, ref), (
+                f"numel={numel} blocks_per_program={blocks_per_program} diverged"
+            )
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

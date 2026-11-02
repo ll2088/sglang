@@ -100,7 +100,7 @@ def test_exported_symbols_cpu():
         "fake_quant_compressed_kv",
         "STATIC_FP4_BLOCKS_PER_PROGRAM",
     ):
-        assert hasattr(fp4_fake_quant, name)
+        assert hasattr(quantization.fp4_fake_quant, name)
 
 
 if __name__ == "__main__":
