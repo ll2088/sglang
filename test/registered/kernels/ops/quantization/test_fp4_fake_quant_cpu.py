@@ -38,6 +38,19 @@ def test_batched_tail_mask_cpu():
     assert torch.equal(got, ref)
 
 
+@pytest.mark.parametrize("num_blocks", [1, 2, 63, 64, 65, 100, 129])
+@pytest.mark.parametrize("blocks_per_program", [1, 2, 32, 64, 128])
+def test_batched_tail_mask_all_groupings_cpu(num_blocks, blocks_per_program):
+    """Every grouping must reproduce per-block output across tail boundaries."""
+    torch.manual_seed(4)
+    x = torch.randn(num_blocks * 16, dtype=torch.bfloat16)
+    ref = fp4_fake_quant.fake_quant_fp4(x)
+    got = fp4_fake_quant.fake_quant_fp4_batched(
+        x, blocks_per_program=blocks_per_program
+    )
+    assert torch.equal(got, ref)
+
+
 def test_int64_offset_arithmetic_cpu():
     """Block offsets must be int64 and exceed int32 range past 2**31 elements."""
     num_blocks = 2**31 // 16 + 1024
@@ -48,6 +61,24 @@ def test_int64_offset_arithmetic_cpu():
     assert offsets[-1].item() == num_blocks - 1
     last_element = offsets[-1].item() * 16
     assert last_element > 2**31
+
+
+def test_int64_offset_arithmetic_grouped_cpu():
+    """Grouped offsets must match the flat int64 layout for any grouping."""
+    num_blocks = 2**31 // 16 + 1024
+    flat = fp4_fake_quant._block_offsets(num_blocks, 1, "cpu")
+    for blocks_per_program in (2, 32, 64, 128):
+        grouped = fp4_fake_quant._block_offsets(
+            num_blocks, blocks_per_program, "cpu"
+        )
+        assert grouped.dtype == torch.int64
+        assert torch.equal(grouped, flat)
+
+
+def test_invalid_blocks_per_program_offsets_cpu():
+    """Non-positive grouping must be rejected by the offset helper."""
+    with pytest.raises(ValueError):
+        fp4_fake_quant._block_offsets(16, 0, "cpu")
 
 
 def test_invalid_blocks_per_program_cpu():

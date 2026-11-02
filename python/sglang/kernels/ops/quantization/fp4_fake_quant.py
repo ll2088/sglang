@@ -44,7 +44,13 @@ def _block_offsets(num_blocks: int, blocks_per_program: int, device) -> torch.Te
     int64 so stacked MoE weights with more than 2**31 elements do not overflow.
     This helper reproduces that arithmetic on the host side so the pure-torch
     reference and the kernel agree bit-for-bit.
+
+    ``blocks_per_program`` is accepted for signature parity with the kernel
+    layout; the returned offsets are the flat int64 block indices in program
+    order, which is identical for any positive grouping.
     """
+    if blocks_per_program <= 0:
+        raise ValueError("blocks_per_program must be positive")
     return torch.arange(num_blocks, dtype=torch.int64, device=device)
 
 
@@ -90,23 +96,36 @@ def fake_quant_fp4_batched(
 
     # int64 offsets: stacked MoE weights can exceed 2**31 elements.
     block_idx = _block_offsets(num_blocks, blocks_per_program, x.device)
-    block_mask = block_idx < num_blocks
-    idx = block_idx[:, None] * block_size + torch.arange(
-        block_size, device=x.device, dtype=torch.int64
-    )[None, :]
-
     scale = block_scale(x, block_size, FP4_MAX, FP4_AMAX_FLOOR).reshape(-1)
-    scale = scale.index_select(0, block_idx.clamp_max(num_blocks - 1))
-    scale = torch.where(block_mask, scale, torch.zeros_like(scale))
+    elem_offsets = torch.arange(block_size, device=x.device, dtype=torch.int64)
 
-    gathered = flat.index_select(0, idx.reshape(-1).clamp_max(numel - 1))
-    gathered = gathered.reshape(num_blocks, block_size)
-    gathered = torch.where(block_mask[:, None], gathered, torch.zeros_like(gathered))
+    # Process one program (blocks_per_program blocks) at a time so the
+    # temporary index tensor stays bounded even for >2**31-element inputs.
+    out = torch.empty_like(flat)
+    for start in range(0, num_blocks, blocks_per_program):
+        program_blocks = block_idx[start : start + blocks_per_program]
+        block_mask = program_blocks < num_blocks
+        idx = program_blocks[:, None] * block_size + elem_offsets[None, :]
 
-    scaled = gathered / scale.unsqueeze(-1)
-    deq = round_fp4(scaled.clamp(-FP4_MAX, FP4_MAX)) * scale.unsqueeze(-1)
-    deq = torch.where(block_mask[:, None], deq, torch.zeros_like(deq))
-    return deq.reshape(x.shape).to(x.dtype)
+        program_scale = scale.index_select(
+            0, program_blocks.clamp_max(num_blocks - 1)
+        )
+        program_scale = torch.where(
+            block_mask, program_scale, torch.zeros_like(program_scale)
+        )
+
+        gathered = flat.index_select(0, idx.reshape(-1).clamp_max(numel - 1))
+        gathered = gathered.reshape(program_blocks.numel(), block_size)
+        gathered = torch.where(
+            block_mask[:, None], gathered, torch.zeros_like(gathered)
+        )
+
+        scaled = gathered / program_scale.unsqueeze(-1)
+        deq = round_fp4(scaled.clamp(-FP4_MAX, FP4_MAX)) * program_scale.unsqueeze(-1)
+        deq = torch.where(block_mask[:, None], deq, torch.zeros_like(deq))
+        out.index_copy_(0, idx.reshape(-1), deq.reshape(-1))
+
+    return out.reshape(x.shape).to(x.dtype)
 
 
 def fake_quant_compressed_kv(x: torch.Tensor) -> torch.Tensor:
