@@ -9,40 +9,44 @@ from utils import _peak_gpu_mem_increase
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a CUDA GPU")
 def test_peak_gpu_mem_increase_counts_allocations():
     n_bytes = 4 * 1024 * 1024
+    device = torch.cuda.current_device()
 
     def _allocate():
-        return torch.empty(n_bytes, dtype=torch.uint8, device="cuda")
+        return torch.empty(n_bytes, dtype=torch.uint8, device=device)
 
     # Warm up the allocator so the measurement is not polluted by first-use overhead.
     _allocate()
-    torch.cuda.synchronize()
+    torch.cuda.synchronize(device)
 
-    mem_increase = _peak_gpu_mem_increase(_allocate)
+    mem_increase = _peak_gpu_mem_increase(_allocate, device=device)
     assert mem_increase >= n_bytes
     assert mem_increase < n_bytes * 2
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a CUDA GPU")
 def test_peak_gpu_mem_increase_noop_is_zero():
+    device = torch.cuda.current_device()
+
     def _noop():
         return None
 
-    assert _peak_gpu_mem_increase(_noop) == 0
+    assert _peak_gpu_mem_increase(_noop, device=device) == 0
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a CUDA GPU")
 def test_peak_gpu_mem_increase_counts_freed_temporaries():
     n_bytes = 4 * 1024 * 1024
+    device = torch.cuda.current_device()
 
     def _allocate_and_free():
-        tmp = torch.empty(n_bytes, dtype=torch.uint8, device="cuda")
+        tmp = torch.empty(n_bytes, dtype=torch.uint8, device=device)
         del tmp
 
     # Warm up the allocator so the measurement is not polluted by first-use overhead.
-    torch.empty(n_bytes, dtype=torch.uint8, device="cuda")
-    torch.cuda.synchronize()
+    torch.empty(n_bytes, dtype=torch.uint8, device=device)
+    torch.cuda.synchronize(device)
 
-    mem_increase = _peak_gpu_mem_increase(_allocate_and_free)
+    mem_increase = _peak_gpu_mem_increase(_allocate_and_free, device=device)
     assert mem_increase >= n_bytes
     assert mem_increase < n_bytes * 2
 
