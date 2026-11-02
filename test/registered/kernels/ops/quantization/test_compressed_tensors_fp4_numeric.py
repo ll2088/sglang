@@ -294,6 +294,26 @@ def test_fp4_fake_quant_batched_tail_mask():
     assert torch.equal(got, ref)
 
 
+def test_fp4_fake_quant_batched_matches_per_block_int64_offsets():
+    """Batched-block processing must be bit-identical to per-block when the
+    int64 offset arithmetic is exercised past the 2**31-element boundary.
+
+    This does not allocate a >2**31-element tensor; it checks the offset
+    arithmetic that the kernel and the pure-torch path share.
+    """
+    num_blocks = 2**31 // 16 + 1024
+    offsets = fp4_fake_quant._block_offsets(num_blocks, 64, "cpu")
+    assert offsets.dtype == torch.int64
+    assert offsets.numel() == num_blocks
+    assert offsets[-1].item() == num_blocks - 1
+    last_element = offsets[-1].item() * 16
+    assert last_element > 2**31
+
+    elem = fp4_fake_quant._element_offsets(offsets[-1:], 16, "cpu")
+    assert elem.dtype == torch.int64
+    assert elem[0, 0].item() > 2**31
+
+
 @pytest.mark.parametrize("numel", [0, 16, 32, 48, 1024])
 @pytest.mark.parametrize("blocks_per_program", [1, 2, 32, 64, 128])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
