@@ -136,8 +136,9 @@ SMG/gRPC 启动器在模型启动前检测 protobuf 实现：纯 Python 实现�
 ### 测试与 CI 说明
 
 上述三项优化的单元测试只依赖标准库与 `pytest`，通过
-`test/srt/conftest.py` 在未安装完整 `sglang` 依赖时以轻量桩模块加载目标源码，
-因此 CI 无需执行 `pip install -e python` 即可运行：
+`test/srt/conftest.py` 与 `test/srt/_bootstrap_light.py` 在未安装完整 `sglang`
+依赖时以轻量桩模块加载目标源码，因此 CI 无需执行 `pip install -e python`
+即可运行（验证命令只需设置 `PYTHONPATH=python:test/srt`）：
 
 ```bash
 PYTHONPATH=python:test/srt python -m pytest -q \

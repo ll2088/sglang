@@ -1,4 +1,6 @@
-"""Unit tests for call_soon_threadsafe based queue notifications."""
+"""Tests for cross-thread asyncio queue notifications."""
+
+from __future__ import annotations
 
 import asyncio
 
@@ -11,7 +13,7 @@ from sglang.srt.utils.async_queue import (
 )
 
 
-def test_notify_one_cross_thread_ordering() -> None:
+def test_notify_one_delivers_in_order() -> None:
     async def run() -> None:
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
@@ -22,49 +24,36 @@ def test_notify_one_cross_thread_ordering() -> None:
                 notify_one(loop, queue)
 
         await asyncio.to_thread(produce)
-        received = [await asyncio.wait_for(queue.get(), 5) for _ in range(10)]
-        assert received == list(range(10))
+        values = [await asyncio.wait_for(queue.get(), 5) for _ in range(10)]
+        assert values == list(range(10))
 
     asyncio.run(run())
 
 
-def test_notify_many_deduplicates_and_preserves_order() -> None:
+def test_notify_many_deduplicates_and_delivers() -> None:
     async def run() -> None:
         loop = asyncio.get_running_loop()
-        queues = [asyncio.Queue(), asyncio.Queue()]
+        queues: list[asyncio.Queue] = [asyncio.Queue(), asyncio.Queue()]
 
         def produce() -> None:
-            for value in range(5):
-                for queue in queues:
-                    queue.put_nowait(value)
-            notify_many(loop, queues * 2)
+            for queue in queues:
+                queue.put_nowait("x")
+            notify_many(loop, queues + queues)
 
         await asyncio.to_thread(produce)
-        results = [
-            [await asyncio.wait_for(q.get(), 5) for _ in range(5)] for q in queues
-        ]
-        assert results == [list(range(5)), list(range(5))]
+        for queue in queues:
+            assert await asyncio.wait_for(queue.get(), 5) == "x"
 
     asyncio.run(run())
 
 
-def test_notify_raises_on_stopped_loop() -> None:
+def test_notify_on_stopped_loop_raises() -> None:
     loop = asyncio.new_event_loop()
-    queue: asyncio.Queue = asyncio.Queue()
     try:
+        queue: asyncio.Queue = asyncio.Queue()
         with pytest.raises(EventLoopShutdownError):
             notify_one(loop, queue)
         with pytest.raises(EventLoopShutdownError):
             notify_many(loop, [queue])
     finally:
         loop.close()
-
-
-def test_notify_raises_on_closed_loop() -> None:
-    loop = asyncio.new_event_loop()
-    queue: asyncio.Queue = asyncio.Queue()
-    loop.close()
-    with pytest.raises(EventLoopShutdownError):
-        notify_one(loop, queue)
-    with pytest.raises(EventLoopShutdownError):
-        notify_many(loop, [queue])

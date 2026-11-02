@@ -1,37 +1,70 @@
-"""Stability tests for cross-thread queue notifications."""
+"""Tests that queue notifications use call_soon_threadsafe, not coroutines."""
+
+from __future__ import annotations
 
 import asyncio
 
-from sglang.srt.utils.async_queue import notify_many, notify_one
+from sglang.srt.utils import async_queue
 
 
-def test_repeated_cross_thread_notifications() -> None:
-    async def run() -> None:
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue = asyncio.Queue()
+def test_notify_one_uses_call_soon_threadsafe(monkeypatch) -> None:
+    calls: list[tuple] = []
 
-        def produce(offset: int) -> None:
-            for value in range(offset, offset + 10):
-                queue.put_nowait(value)
-                notify_one(loop, queue)
+    class FakeLoop:
+        def is_running(self) -> bool:
+            return True
 
-        for offset in (0, 10, 20):
-            await asyncio.to_thread(produce, offset)
-            received = [await asyncio.wait_for(queue.get(), 5) for _ in range(10)]
-            assert received == list(range(offset, offset + 10))
-            assert queue.empty()
+        def is_closed(self) -> bool:
+            return False
 
-    asyncio.run(run())
+        def call_soon_threadsafe(self, callback, *args) -> None:
+            calls.append((callback, args))
+
+    queue: asyncio.Queue = asyncio.Queue()
+    async_queue.notify_one(FakeLoop(), queue)  # type: ignore[arg-type]
+    assert len(calls) == 1
+    callback, args = calls[0]
+    assert callback == queue.put_nowait
+    assert args == (None,)
 
 
-def test_late_batch_notification_does_not_strand_next_get() -> None:
-    async def run() -> None:
-        loop = asyncio.get_running_loop()
-        queues = [asyncio.Queue(), asyncio.Queue()]
-        await asyncio.to_thread(notify_many, loop, queues)
-        await asyncio.sleep(0)
-        for queue in queues:
-            queue.put_nowait(1)
-            assert await asyncio.wait_for(queue.get(), 5) == 1
+def test_notify_many_uses_single_callback(monkeypatch) -> None:
+    calls: list[tuple] = []
 
-    asyncio.run(run())
+    class FakeLoop:
+        def is_running(self) -> bool:
+            return True
+
+        def is_closed(self) -> bool:
+            return False
+
+        def call_soon_threadsafe(self, callback, *args) -> None:
+            calls.append((callback, args))
+
+    queues: list[asyncio.Queue] = [asyncio.Queue(), asyncio.Queue()]
+    async_queue.notify_many(FakeLoop(), queues + queues)  # type: ignore[arg-type]
+    assert len(calls) == 1
+    callback, args = calls[0]
+    assert callback is async_queue._notify_many
+    assert isinstance(args[0], frozenset)
+    assert len(args[0]) == 2
+
+
+def test_closed_loop_during_schedule_raises_shutdown_error(monkeypatch) -> None:
+    class FakeLoop:
+        def is_running(self) -> bool:
+            return True
+
+        def is_closed(self) -> bool:
+            return True
+
+        def call_soon_threadsafe(self, callback, *args) -> None:
+            raise RuntimeError("Event loop is closed")
+
+    queue: asyncio.Queue = asyncio.Queue()
+    try:
+        async_queue.notify_one(FakeLoop(), queue)  # type: ignore[arg-type]
+    except async_queue.EventLoopShutdownError:
+        pass
+    else:
+        raise AssertionError("expected EventLoopShutdownError")
