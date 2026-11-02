@@ -534,5 +534,25 @@ def test_fp4_fake_quant_batched_kv_layout_boundaries():
             )
 
 
+@pytest.mark.skipif(
+    not torch.cuda.is_available()
+    or torch.cuda.get_device_properties(0).total_memory < 2**31 * 2,
+    reason="needs >4 GiB of device memory for the int64 offset regression",
+)
+@torch.inference_mode()
+def test_fp4_fake_quant_over_int32_numel_kv_layout():
+    """int64 offsets must stay correct past the 2**31-element boundary."""
+    from sglang.kernels.ops.quantization import fp4_fake_quant
+
+    torch.manual_seed(9)
+    numel = 2**31 + 2**20
+    x = torch.randn(numel, dtype=torch.bfloat16, device="cuda")
+    ref = fp4_fake_quant.fake_quant_fp4(x)
+    got = fp4_fake_quant.fake_quant_fp4_batched(x)
+    assert torch.equal(got, ref)
+    tail = fp4_fake_quant.fake_quant_fp4(x[-4096:])
+    assert torch.equal(got[-4096:], tail)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
