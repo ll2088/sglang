@@ -354,5 +354,26 @@ def test_nvfp4_native_scale_move_preserves_logical_rows():
     torch.testing.assert_close(got_v, expected_v, rtol=0, atol=0)
 
 
+@torch.inference_mode()
+def test_fp4_fake_quant_batched_kv_layout_parity():
+    """Batched-block fake quant must match per-block on KV-shaped tensors."""
+    from sglang.kernels.ops.quantization import fp4_fake_quant
+
+    torch.manual_seed(5)
+    pages, page_size, heads, head_dim = 4, 16, 4, 128
+    x = torch.randn(
+        pages, page_size, heads, head_dim, dtype=torch.bfloat16, device="cuda"
+    )
+    ref = fp4_fake_quant.fake_quant_fp4(x)
+    got = fp4_fake_quant.fake_quant_fp4_batched(x)
+    assert torch.equal(got, ref)
+
+    # int64 offsets on a flattened view that crosses many blocks.
+    flat = x.reshape(-1)
+    ref_flat = fp4_fake_quant.fake_quant_fp4(flat)
+    got_flat = fp4_fake_quant.fake_quant_fp4_batched(flat)
+    assert torch.equal(got_flat, ref_flat)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

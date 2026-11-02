@@ -19,6 +19,7 @@ import torch.nn.functional as F
 from sglang.srt.layers.moe.moe_runner.base import MoeRunnerConfig
 from sglang.srt.layers.moe.token_dispatcher.standard import StandardDispatchOutput
 from sglang.srt.layers.moe.topk import StandardTopKOutput
+from sglang.kernels.ops.quantization import fp4_fake_quant
 from sglang.srt.layers.quantization import fp4_utils
 from sglang.srt.layers.quantization.compressed_tensors.schemes import (
     CompressedTensorsW4A16Fp4,
@@ -253,6 +254,65 @@ def test_moe_matches_dequantized_experts(fmt, is_gated, activation):
     # The kernel keeps the intermediate activation in bf16, hence 0.03.
     rel = _rel_err(out, expected)
     assert rel < 0.03, f"relative error {rel:.4f} too large"
+
+
+def test_fp4_fake_quant_batched_matches_per_block():
+    """Batched-block processing must be bit-identical to per-block."""
+    torch.manual_seed(0)
+    x = torch.randn(4096, 12288, dtype=torch.bfloat16, device="cuda")
+    ref = fp4_fake_quant.fake_quant_fp4(x)
+    for blocks_per_program in (1, 2, 32, 64, 128):
+        got = fp4_fake_quant.fake_quant_fp4_batched(
+            x, blocks_per_program=blocks_per_program
+        )
+        assert torch.equal(got, ref), (
+            f"blocks_per_program={blocks_per_program} diverged from per-block"
+        )
+
+
+def test_fp4_fake_quant_batched_tail_mask():
+    """Non-divisible block counts exercise the tail mask."""
+    torch.manual_seed(1)
+    # 16-element blocks; 100 blocks is not divisible by 64.
+    x = torch.randn(100 * 16, dtype=torch.bfloat16, device="cuda")
+    ref = fp4_fake_quant.fake_quant_fp4(x)
+    got = fp4_fake_quant.fake_quant_fp4_batched(x, blocks_per_program=64)
+    assert torch.equal(got, ref)
+
+
+@pytest.mark.parametrize("numel", [0, 16, 32, 48, 1024])
+@pytest.mark.parametrize("blocks_per_program", [1, 64])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_fp4_fake_quant_batched_boundaries(numel, blocks_per_program, dtype, device):
+    """Empty, single-block, non-aligned and block-boundary lengths."""
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    torch.manual_seed(2)
+    x = torch.randn(numel, dtype=dtype, device=device)
+    ref = fp4_fake_quant.fake_quant_fp4(x)
+    got = fp4_fake_quant.fake_quant_fp4_batched(
+        x, blocks_per_program=blocks_per_program
+    )
+    assert torch.equal(got, ref)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+@pytest.mark.skipif(
+    torch.cuda.get_device_properties(0).total_memory < 2**31 * 2,
+    reason="needs >4 GiB of device memory for the int64 offset regression",
+)
+def test_fp4_fake_quant_over_int32_numel():
+    """int64 offsets must stay correct past the 2**31-element boundary."""
+    torch.manual_seed(3)
+    numel = 2**31 + 2**20
+    x = torch.randn(numel, dtype=torch.bfloat16, device="cuda")
+    ref = fp4_fake_quant.fake_quant_fp4(x)
+    got = fp4_fake_quant.fake_quant_fp4_batched(x)
+    assert torch.equal(got, ref)
+    # The tail beyond the int32 boundary must match a standalone slice.
+    tail = fp4_fake_quant.fake_quant_fp4(x[-4096:])
+    assert torch.equal(got[-4096:], tail)
 
 
 if __name__ == "__main__":
