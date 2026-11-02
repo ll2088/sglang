@@ -33,6 +33,7 @@ class Feature(enum.Enum):
     RETURN_ROUTED_EXPERTS = "--enable-return-routed-experts"
     RETURN_INDEXER_TOPK = "--enable-return-indexer-topk"
     EAGLE3_HIDDEN_STATES = "EAGLE3 hidden states at covered layers"
+    EAGLE3_VERIFY = "EAGLE3 verify steps (multi-row decode)"
     KV_OFFLOAD = "KV offload"
     MEMORY_RELEASE = "memory release"
     CPU_OFFLOAD = "CPU offload"
