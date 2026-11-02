@@ -299,7 +299,8 @@ def test_fp4_fake_quant_batched_boundaries(numel, blocks_per_program, dtype, dev
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
 @pytest.mark.skipif(
-    torch.cuda.get_device_properties(0).total_memory < 2**31 * 2,
+    not torch.cuda.is_available()
+    or torch.cuda.get_device_properties(0).total_memory < 2**31 * 2,
     reason="needs >4 GiB of device memory for the int64 offset regression",
 )
 def test_fp4_fake_quant_over_int32_numel():
