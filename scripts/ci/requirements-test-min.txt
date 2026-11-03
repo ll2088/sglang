@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+# Minimal, dependency-free test requirements for the quantization suite.
+# Installed with --no-deps; transitive pins live in constraints-ci.txt.
+pytest

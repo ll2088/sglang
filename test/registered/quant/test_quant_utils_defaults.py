@@ -5,7 +5,9 @@ from types import MappingProxyType
 
 import pytest
 
-pytest.importorskip("compressed_tensors")
+# The compressed-tensors / quark helpers are optional at import time; the
+# module-level mapping checks below only need the pure-python helpers.
+compressed_tensors = pytest.importorskip("compressed_tensors")
 
 from sglang.srt.layers.quantization.compressed_tensors.utils import (
     find_matched_target,
