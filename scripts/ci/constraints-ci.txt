@@ -1,7 +1,8 @@
-# Constraints for the minimal CI test environment.
-# Keep this list small: it only needs to satisfy the imports used by the
-# self-contained regression tests under test/registered/quant/.
-#
-# The tests are intentionally written to avoid importing sglang, so the
-# runtime dependency tree (py-spy, pyzmq, quack-kernels, ...) is not needed.
-pytest>=7,<9
+# SPDX-License-Identifier: Apache-2.0
+# Minimal constraints for CI test environment. Keep this file small so that
+# installing the local package with --no-deps does not pull the full runtime
+# dependency set.
+pytest>=7.0
+pytest-randomly>=3.12
+numpy>=1.24
+torch>=2.1

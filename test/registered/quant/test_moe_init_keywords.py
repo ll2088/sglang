@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for MoE initialization keyword handling.
+"""Regression tests for MoE init keyword handling.
 
-These tests are self-contained: they do not import ``sglang`` so that they
-can run without the full runtime dependency tree. They mirror the upstream
-fix where ``_process_single_layer`` passed stale keyword names to
-``_init_moe_module`` and raised ``TypeError``.
+Mirrors the upstream Puzzletron fix: callers must pass the current
+``orig_router_weights``/``new_router_weights``/``orig_num_experts``/
+``new_num_experts`` keywords, and missing configuration must raise a
+controlled error rather than crashing.
 """
 
 import pytest
@@ -12,26 +12,27 @@ import pytest
 
 def _init_moe_module(
     *,
-    orig_router_weights,
-    new_router_weights,
-    orig_num_experts,
-    new_num_experts,
+    orig_router_weights=None,
+    new_router_weights=None,
+    orig_num_experts=None,
+    new_num_experts=None,
 ):
-    """Mirror the fixed signature: current keyword names only."""
-    if orig_num_experts < new_num_experts:
-        raise ValueError("cannot grow expert count")
+    if orig_num_experts is None or new_num_experts is None:
+        raise TypeError("orig_num_experts and new_num_experts are required")
+    if orig_router_weights is None or new_router_weights is None:
+        raise TypeError("router weights are required")
     return {
-        "orig_router_weights": orig_router_weights,
-        "new_router_weights": new_router_weights,
         "orig_num_experts": orig_num_experts,
         "new_num_experts": new_num_experts,
+        "orig_router_weights": orig_router_weights,
+        "new_router_weights": new_router_weights,
     }
 
 
 def test_current_keywords_are_accepted():
     result = _init_moe_module(
-        orig_router_weights=[1, 2, 3, 4],
-        new_router_weights=[1, 2],
+        orig_router_weights=[[1.0]],
+        new_router_weights=[[2.0]],
         orig_num_experts=4,
         new_num_experts=2,
     )
@@ -39,21 +40,16 @@ def test_current_keywords_are_accepted():
     assert result["new_num_experts"] == 2
 
 
-def test_stale_keywords_raise_type_error():
+def test_legacy_keywords_raise_type_error():
     with pytest.raises(TypeError):
         _init_moe_module(
-            orig_router_weight=[1, 2, 3, 4],
-            new_router_weight=[1, 2],
+            orig_router_weight=[[1.0]],
+            new_router_weight=[[2.0]],
             orig_num_experts=4,
             new_num_experts=2,
         )
 
 
-def test_invalid_expert_counts_raise_controlled_error():
-    with pytest.raises(ValueError, match="cannot grow expert count"):
-        _init_moe_module(
-            orig_router_weights=[1, 2],
-            new_router_weights=[1, 2, 3, 4],
-            orig_num_experts=2,
-            new_num_experts=4,
-        )
+def test_missing_config_raises_controlled_error():
+    with pytest.raises(TypeError, match="required"):
+        _init_moe_module(orig_router_weights=[[1.0]], new_router_weights=[[2.0]])
