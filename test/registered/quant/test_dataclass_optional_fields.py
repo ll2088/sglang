@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for dataclass optional-field presence checks.
 
-Mirrors the upstream fix that replaced ``hasattr`` on dataclass fields with
-``is not None`` checks, since ``hasattr`` is always true for declared fields.
+`hasattr` on a dataclass field is always true, so optional fields must be
+checked with `is not None`.  These tests are stdlib + pytest only.
 """
 
 from __future__ import annotations
@@ -19,32 +19,30 @@ class _ModelConfig:
     lm_head: Optional[object] = None
 
 
-def _hasattr_based(config: _ModelConfig) -> bool:
-    # The buggy pattern: always true for declared dataclass fields.
-    return hasattr(config, "vocab_embedding") and hasattr(config, "lm_head")
-
-
-def _is_not_none_based(config: _ModelConfig) -> bool:
-    # The fixed pattern.
-    return config.vocab_embedding is not None and config.lm_head is not None
+def _pad_embedding_lm_head(config: _ModelConfig) -> bool:
+    # Mirrors the upstream fix: `hasattr` is always true for dataclass fields.
+    if config.vocab_embedding is None or config.lm_head is None:
+        return False
+    return True
 
 
 @pytest.mark.parametrize(
-    ("vocab_embedding", "lm_head"),
+    ("vocab", "head", "expected"),
     [
-        (None, None),
-        (object(), None),
-        (None, object()),
-        (object(), object()),
+        (None, None, False),
+        (object(), None, False),
+        (None, object(), False),
+        (object(), object(), True),
     ],
 )
-def test_optional_field_presence(vocab_embedding, lm_head):
-    config = _ModelConfig(vocab_embedding=vocab_embedding, lm_head=lm_head)
-    expected = vocab_embedding is not None and lm_head is not None
-    assert _is_not_none_based(config) is expected
+def test_optional_dataclass_fields_use_is_not_none(vocab, head, expected):
+    config = _ModelConfig(vocab_embedding=vocab, lm_head=head)
+    assert _pad_embedding_lm_head(config) is expected
 
 
-def test_hasattr_is_always_true_for_declared_fields():
+def test_hasattr_would_have_misjudged():
     config = _ModelConfig()
-    assert _hasattr_based(config) is True
-    assert _is_not_none_based(config) is False
+    # Document the bug being fixed: hasattr is always true for dataclass fields.
+    assert hasattr(config, "vocab_embedding")
+    assert hasattr(config, "lm_head")
+    assert _pad_embedding_lm_head(config) is False

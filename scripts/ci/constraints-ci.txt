@@ -1,4 +1,2 @@
-# Keep CI dependency resolution minimal and deterministic.
-# Only pin packages that are required by the targeted regression tests.
-pytest==8.3.4
-pytest-randomly==3.16.0
+# Pinned upper bounds for the minimal CI dependency set.
+pytest<9

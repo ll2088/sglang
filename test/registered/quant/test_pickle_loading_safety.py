@@ -1,40 +1,32 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for safe checkpoint loading.
+"""Regression tests for safe pickle loading.
 
-Verifies that a malicious pickle payload is rejected without executing code,
-and that SHA-256 verification rejects tampered weights.
+These tests exercise the whitelist / digest checks in
+``sglang.srt.utils.safe_pickle`` without importing the full sglang runtime.
 """
 
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import os
+import pickle
+from pathlib import Path
 
 import pytest
 
-
-def _sha256(path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+_SAFE_PICKLE = Path(__file__).parents[3] / "python/sglang/srt/utils/safe_pickle.py"
 
 
-def _verify(path, expected_sha256: str) -> None:
-    actual = _sha256(path)
-    if actual.lower() != expected_sha256.lower():
-        raise RuntimeError(
-            f"Checkpoint {path} failed SHA-256 verification: "
-            f"expected {expected_sha256}, got {actual}"
-        )
+def _load_module():
+    spec = importlib.util.spec_from_file_location("safe_pickle_under_test", _SAFE_PICKLE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def _safe_load(path, expected_sha256: str):
-    _verify(path, expected_sha256)
-    # Only allow a restricted, non-executable format.
-    import torch
-
-    return torch.load(path, map_location="cpu", weights_only=True)
-
-
-class _MaliciousPayload:
+class _Malicious:
     def __init__(self, marker):
         self.marker = marker
 
@@ -43,27 +35,29 @@ class _MaliciousPayload:
 
 
 def test_malicious_pickle_is_rejected_without_execution(tmp_path):
-    torch = pytest.importorskip("torch")
+    safe_pickle = _load_module()
     marker = tmp_path / "executed"
-    path = tmp_path / "evil.pt"
-    torch.save(_MaliciousPayload(marker), path)
-    digest = _sha256(path)
-    with pytest.raises(Exception):
-        _safe_load(path, digest)
+    payload = tmp_path / "payload.pkl"
+    payload.write_bytes(pickle.dumps(_Malicious(marker)))
+
+    with pytest.raises(safe_pickle.UnsafePickleError):
+        safe_pickle.safe_pickle_load(str(payload))
     assert not marker.exists()
 
 
-def test_tampered_weights_fail_checksum(tmp_path):
-    path = tmp_path / "weights.bin"
-    path.write_bytes(b"trusted checkpoint")
-    digest = _sha256(path)
-    _verify(path, digest)
-    path.write_bytes(b"modified checkpoint")
-    with pytest.raises(RuntimeError, match="SHA-256"):
-        _verify(path, digest)
+def test_digest_mismatch_is_rejected(tmp_path):
+    safe_pickle = _load_module()
+    payload = tmp_path / "payload.pkl"
+    payload.write_bytes(pickle.dumps({"a": 1}))
+
+    with pytest.raises(safe_pickle.UnsafePickleError):
+        safe_pickle.safe_pickle_load(str(payload), expected_sha256="0" * 64)
 
 
-def test_checksum_comparison_is_case_insensitive(tmp_path):
-    path = tmp_path / "weights.bin"
-    path.write_bytes(b"payload")
-    _verify(path, _sha256(path).upper())
+def test_digest_match_allows_plain_data(tmp_path):
+    safe_pickle = _load_module()
+    payload = tmp_path / "payload.pkl"
+    payload.write_bytes(pickle.dumps({"a": 1}))
+    digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+
+    assert safe_pickle.safe_pickle_load(str(payload), expected_sha256=digest) == {"a": 1}

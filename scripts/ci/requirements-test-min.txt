@@ -1,3 +1,3 @@
-# Minimal test dependencies for the quant regression suite.
-# Keep this list small so CI environment setup stays fast and offline-friendly.
+# Minimal dependency set for the quantization regression tests.
+# Keep this list tiny: the tests are intentionally stdlib + pytest only.
 pytest>=7.0
