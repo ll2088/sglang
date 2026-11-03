@@ -28,9 +28,8 @@ def _effective_fused(fused_mapping=None, proj_name="qkv_proj"):
             "fused_mapping must be a mapping of fused layer names to shard "
             f"names, got {type(fused_mapping).__name__}"
         )
-    if fused_mapping is not None and proj_name in fused_mapping:
-        return {key: list(value) for key, value in fused_mapping.items()}
-    return {key: list(value) for key, value in _FALLBACK_FUSED_SHARDS.items()}
+    source = fused_mapping if fused_mapping is not None else _FALLBACK_FUSED_SHARDS
+    return {key: list(value) for key, value in source.items()}
 
 
 def _append_default(value, bucket=None):
@@ -71,3 +70,28 @@ def test_fallback_mapping_covers_fused_layers(proj_name):
 def test_non_mapping_fused_mapping_is_rejected():
     with pytest.raises(TypeError, match="fused_mapping must be a mapping"):
         _effective_fused(fused_mapping=["qkv_proj"])
+
+
+def _exclude_layer(prefix, exclude_modules):
+    # Mirror the production fix in InklingQuantizationConfigBase.exclude_layer:
+    # match on dotted module-path boundaries instead of plain substring.
+    if not exclude_modules:
+        return False
+    candidates = [prefix]
+    if prefix.startswith("language_model."):
+        candidates.append(prefix.removeprefix("language_model."))
+    for module in exclude_modules:
+        module = module.rstrip(".")
+        for candidate in candidates:
+            if candidate == module or candidate.startswith(module + "."):
+                return True
+    return False
+
+
+def test_exclude_layer_uses_path_boundaries():
+    assert _exclude_layer("model.layers.0.mlp.gate", ["model.layers.0.mlp.gate"])
+    assert _exclude_layer("model.layers.0.mlp.gate.up", ["model.layers.0.mlp.gate"])
+    assert not _exclude_layer("model.layers.0.mlp.gate_up_proj", ["model.layers.0.mlp.gate"])
+    assert _exclude_layer(
+        "language_model.model.layers.0.mlp.gate", ["model.layers.0.mlp.gate"]
+    )

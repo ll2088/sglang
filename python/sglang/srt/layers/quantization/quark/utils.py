@@ -59,6 +59,12 @@ def should_ignore_layer(
             "fused_mapping must be a mapping of fused layer names to shard "
             f"names, got {type(fused_mapping).__name__}"
         )
+    else:
+        # Copy caller-provided mappings so later mutation of the caller's
+        # dict cannot change the result of this call.
+        fused_mapping = MappingProxyType(
+            {key: list(value) for key, value in fused_mapping.items()}
+        )
 
     # layer_name = model.layers.0.self_attn.qkv_proj
     # proj_name = qkv_proj

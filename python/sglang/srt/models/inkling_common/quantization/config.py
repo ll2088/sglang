@@ -110,14 +110,15 @@ class InklingQuantizationConfigBase:
         exclude_modules = getattr(self, "exclude_modules", None)
         if not exclude_modules:
             return False
-        return any(
-            module in prefix
-            or (
-                prefix.startswith("language_model.")
-                and module in prefix.removeprefix("language_model.")
-            )
-            for module in exclude_modules
-        )
+        candidates = [prefix]
+        if prefix.startswith("language_model."):
+            candidates.append(prefix.removeprefix("language_model."))
+        for module in exclude_modules:
+            module = module.rstrip(".")
+            for candidate in candidates:
+                if candidate == module or candidate.startswith(module + "."):
+                    return True
+        return False
 
 
 class InklingModelOptNvfp4Config(ModelOptFp4Config, InklingQuantizationConfigBase):

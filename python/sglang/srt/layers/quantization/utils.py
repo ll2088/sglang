@@ -67,6 +67,24 @@ _FALLBACK_FUSED_SHARDS: Mapping[str, List[str]] = {
 }
 
 
+def _copy_fused_mapping(
+    fused_mapping: Optional[Mapping[str, List[str]]],
+) -> Dict[str, List[str]]:
+    """Return a deep-enough copy of a fused mapping.
+
+    The module-level fallback and any caller-provided mapping are copied
+    (including per-key lists) so that callers can never mutate shared state
+    through the returned view.
+    """
+    if fused_mapping is not None and not isinstance(fused_mapping, Mapping):
+        raise TypeError(
+            "fused_mapping must be a mapping of fused layer names to shard "
+            f"names, got {type(fused_mapping).__name__}"
+        )
+    source = fused_mapping if fused_mapping is not None else _FALLBACK_FUSED_SHARDS
+    return {key: list(value) for key, value in source.items()}
+
+
 def is_layer_skipped(
     prefix: str,
     ignored_layers: List[str],
@@ -76,28 +94,13 @@ def is_layer_skipped(
     # proj_name: q_proj
     proj_name = prefix.split(".")[-1]
 
-    if fused_mapping is not None and not isinstance(fused_mapping, Mapping):
-        raise TypeError(
-            "fused_mapping must be a mapping of fused layer names to shard "
-            f"names, got {type(fused_mapping).__name__}"
-        )
-
     # Fused layers like gate_up_proj or qkv_proj will not be fused
     # in the safetensors checkpoint. So, we convert the name
     # from the fused version to unfused + check to make sure that
     # each shard of the fused layer has the same scheme.
-    # Copy the module-level fallback mapping so that callers can never
-    # mutate shared state through the returned view. The per-key lists are
-    # copied as well, otherwise ``effective_fused[proj_name].append(...)``
-    # would still mutate ``_FALLBACK_FUSED_SHARDS`` in place.
-    if fused_mapping is not None and proj_name in fused_mapping:
-        effective_fused = {key: list(value) for key, value in fused_mapping.items()}
-    else:
-        # Copy the module-level fallback (including per-key lists) so callers
-        # can never mutate shared state through the returned view.
-        effective_fused = {
-            key: list(value) for key, value in _FALLBACK_FUSED_SHARDS.items()
-        }
+    # Copy the mapping (including per-key lists) so callers can never
+    # mutate shared state through the returned view.
+    effective_fused = _copy_fused_mapping(fused_mapping)
     if proj_name in effective_fused:
         shard_prefixes = [
             prefix.replace(proj_name, shard_proj_name)
