@@ -1,19 +1,10 @@
-# Lightweight constraints for CI test environment.
-# Keep this file minimal: only pin packages that are required to import
-# the modules exercised by the regression tests.  Heavy runtime
-# dependencies of sglang (py-spy, quack-kernels, pyzmq, ...) must not be
-# pulled in by the test setup.
+# Lightweight constraints for CI regression tests.
+# Keep this list minimal: only packages needed to import and run the
+# quantization / config / model-loader regression tests.
+# Do NOT add sglang runtime dependencies here; sglang itself is installed
+# with --no-deps by scripts/ci/install_test_deps.sh.
 
-# Core test runner
-pytest>=7,<9
-
-# Import-time dependencies of the modules under test.
-# These are intentionally loose so the resolver does not backtrack.
-torch>=2.1
-numpy>=1.24
-transformers>=4.40
-huggingface_hub>=0.23
-compressed-tensors>=0.8
-
-# Optional: only needed by tests that import compressed_tensors utils.
-# If the package is unavailable the test module uses pytest.importorskip.
+pytest>=7.0
+pytest-randomly>=3.12
+numpy
+torch

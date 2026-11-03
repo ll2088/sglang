@@ -1,41 +1,29 @@
 #!/usr/bin/env bash
-# Install the minimal dependency set required by the regression tests.
-#
-# The goal is to avoid resolving sglang's full runtime dependency graph
-# (py-spy, quack-kernels, pyzmq, ...) during CI setup.  We install the
-# project in editable mode with --no-deps and then install only the
-# packages listed in constraints-ci.txt.
+# Install the minimal dependency set required by the quantization regression
+# tests.  This intentionally avoids resolving sglang's full runtime dependency
+# tree (py-spy, pyzmq, quack-kernels, ...), which is slow and unnecessary for
+# the tests under test/registered/quant/.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-CONSTRAINTS="${REPO_ROOT}/constraints-ci.txt"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$REPO_ROOT"
 
-if [[ ! -f "${CONSTRAINTS}" ]]; then
-  echo "error: constraints file not found: ${CONSTRAINTS}" >&2
-  exit 1
+VENV_DIR="${VENV_DIR:-$REPO_ROOT/.venv}"
+
+if [[ ! -d "$VENV_DIR" ]]; then
+  echo "[install_test_deps] creating virtualenv at $VENV_DIR"
+  python3 -m venv "$VENV_DIR"
 fi
 
-PYTHON_BIN="${PYTHON_BIN:-python}"
+# shellcheck disable=SC1091
+source "$VENV_DIR/bin/activate"
 
-log() { printf '[install_test_deps] %s\n' "$*" >&2; }
+python -m pip install --upgrade pip
 
-log "python: $(${PYTHON_BIN} --version 2>&1)"
-log "constraints: ${CONSTRAINTS}"
+# Install sglang without pulling its runtime dependencies, then install only
+# the minimal test dependencies from the CI constraints file.
+python -m pip install --no-deps -e python
+python -m pip install -r constraints-ci.txt
 
-# 1. Install the project itself without pulling runtime dependencies.
-log "installing sglang (editable, --no-deps)"
-if ! "${PYTHON_BIN}" -m pip install -e "${REPO_ROOT}/python" --no-deps; then
-  log "failed to install sglang in editable mode"
-  exit 1
-fi
-
-# 2. Install only the constrained test dependencies.
-log "installing test dependencies from constraints"
-if ! "${PYTHON_BIN}" -m pip install -c "${CONSTRAINTS}" \
-    pytest torch numpy transformers huggingface_hub compressed-tensors; then
-  log "failed to install test dependencies"
-  exit 1
-fi
-
-log "done"
+echo "[install_test_deps] done; python=$(command -v python)"
+python -c "import sys; print(sys.version)"
