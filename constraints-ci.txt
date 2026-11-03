@@ -1,7 +1,7 @@
-# CI-only constraints to keep the verification environment minimal.
-# These packages are pulled by sglang's dependency resolution but are not
-# needed for the pure-Python regression tests in test/registered/quant/.
-# Pin to versions that have wheels for the CI interpreter, or exclude the
-# versions observed failing in the environment-prep logs.
-py-spy!=0.4.3
-quack-kernels!=0.6.5
+# Minimal constraints for CPU-only CI verification of quantization utils.
+# Intentionally does NOT pin GPU/kernel packages (py-spy, quack-kernels, etc.)
+# so that `pip install -c constraints-ci.txt` does not resolve sglang's full
+# runtime dependency set on a GPU-less runner.
+pytest>=7.0
+numpy>=1.24
+torch>=2.1
