@@ -1,4 +1,3 @@
-# Constraints for CI test environment.
-# Keep this file minimal: the self-contained regression tests only need pytest.
-# Do not pin sglang runtime dependencies here; they are installed separately
-# for the import-time check with --no-deps for the package itself.
+# Pin versions used by the minimal CI environment.
+# Keep in sync with scripts/ci/requirements-test-min.txt.
+pytest==8.3.4

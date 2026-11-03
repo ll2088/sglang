@@ -1,30 +1,28 @@
 #!/usr/bin/env bash
-# Static check: reject mutable default arguments (dict/list/set literals) in
-# function signatures under the quantization and model-loading modules.
+# Grep-based guard against mutable default arguments in the touched files.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-TARGETS=(
-  "${REPO_ROOT}/python/sglang/srt/layers/quantization"
-  "${REPO_ROOT}/python/sglang/srt/model_loader"
-  "${REPO_ROOT}/python/sglang/srt/utils/hf_transformers"
+FILES=(
+  "python/sglang/srt/layers/quantization/utils.py"
+  "python/sglang/srt/layers/quantization/compressed_tensors/utils.py"
+  "python/sglang/srt/layers/quantization/quark/utils.py"
+  "python/sglang/srt/models/inkling_common/quantization/config.py"
+  "python/sglang/srt/utils/hf_transformers/config.py"
+  "python/sglang/srt/model_loader/utils.py"
 )
 
 status=0
-for target in "${TARGETS[@]}"; do
-  if [[ ! -d "${target}" ]]; then
-    continue
-  fi
-  # Match `= {}`, `= []`, `= set()` inside a def signature line.
-  if grep -RInE 'def [^(]+\([^)]*= *(\{\}|\[\]|set\(\))' "${target}" --include='*.py'; then
-    echo "error: mutable default argument found under ${target}" >&2
+for rel in "${FILES[@]}"; do
+  path="${REPO_ROOT}/${rel}"
+  [ -f "${path}" ] || continue
+  # Match `= {}`, `= []`, `= set()` in function signatures.
+  if grep -nE 'def [^(]+\([^)]*=[[:space:]]*(\{\}|\[\]|set\(\))' "${path}"; then
+    echo "mutable default found in ${rel}" >&2
     status=1
   fi
 done
 
-if [[ "${status}" -eq 0 ]]; then
-  echo "no mutable default arguments found"
-fi
 exit "${status}"

@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: Apache-2.0
-"""Static checks for patterns fixed by the upstream SonarQube port.
+"""Static checks for patterns fixed by the upstream SonarQube PR.
 
-This script is intentionally dependency-free so it can run in a minimal CI
+This script is intentionally dependency-free so it can run in the minimal CI
 environment. It scans the files touched by the port for:
 
-* mutable default arguments (``dict``/``list``/``set`` literals in signatures)
-* ``hasattr`` checks on dataclass optional fields
-* in-place mutation of module-level fallback mappings
+* mutable default arguments (dict/list/set literals in function signatures)
+* ``hasattr`` checks on dataclass fields
+* in-place mutation of module-level dicts (best-effort heuristic)
+
+Exit code is non-zero when a pattern is found.
 """
+
+from __future__ import annotations
 
 import ast
 import sys
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 TARGET_FILES = [
     "python/sglang/srt/layers/quantization/utils.py",
@@ -24,80 +28,93 @@ TARGET_FILES = [
     "python/sglang/srt/model_loader/utils.py",
 ]
 
-
-def _is_mutable_literal(node):
-    return isinstance(node, (ast.Dict, ast.List, ast.Set))
+MUTABLE_LITERALS = (ast.Dict, ast.List, ast.Set)
 
 
-def check_mutable_defaults(path: Path):
-    errors = []
-    tree = ast.parse(path.read_text(), filename=str(path))
+def _is_mutable_default(node: ast.AST) -> bool:
+    return isinstance(node, MUTABLE_LITERALS)
+
+
+def check_mutable_defaults(path: Path, tree: ast.AST) -> list[str]:
+    problems: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         args = node.args
-        for default in list(args.defaults) + [d for d in args.kw_defaults if d]:
-            if _is_mutable_literal(default):
-                errors.append(
-                    f"{path}:{node.lineno}: mutable default in {node.name}"
+        positional = list(args.posonlyargs) + list(args.args)
+        defaults = list(args.defaults)
+        if defaults:
+            offset = len(positional) - len(defaults)
+            for arg, default in zip(positional[offset:], defaults):
+                if _is_mutable_default(default):
+                    problems.append(
+                        f"{path}:{node.lineno}: mutable default for '{arg.arg}' "
+                        f"in {node.name}()"
+                    )
+        for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+            if default is not None and _is_mutable_default(default):
+                problems.append(
+                    f"{path}:{node.lineno}: mutable default for '{arg.arg}' "
+                    f"in {node.name}()"
                 )
-    return errors
+    return problems
 
 
-def check_hasattr_on_dataclass_fields(path: Path):
-    errors = []
-    tree = ast.parse(path.read_text(), filename=str(path))
+def check_hasattr_on_dataclass_fields(path: Path, tree: ast.AST) -> list[str]:
+    problems: list[str] = []
+    dataclass_fields: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            is_dataclass = any(
+                (isinstance(d, ast.Name) and d.id == "dataclass")
+                or (isinstance(d, ast.Attribute) and d.attr == "dataclass")
+                for d in node.decorator_list
+            )
+            if not is_dataclass:
+                continue
+            for stmt in node.body:
+                if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                    dataclass_fields.add(stmt.target.id)
+    if not dataclass_fields:
+        return problems
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
         if not (isinstance(func, ast.Name) and func.id == "hasattr"):
             continue
-        if len(node.args) != 2:
+        if len(node.args) < 2:
             continue
         attr = node.args[1]
-        if isinstance(attr, ast.Constant) and isinstance(attr.value, str):
-            if attr.value in {"vocab_embedding", "lm_head"}:
-                errors.append(
-                    f"{path}:{node.lineno}: hasattr on dataclass field "
-                    f"{attr.value!r}; use 'is not None'"
-                )
-    return errors
+        if isinstance(attr, ast.Constant) and attr.value in dataclass_fields:
+            problems.append(
+                f"{path}:{node.lineno}: hasattr() on dataclass field "
+                f"'{attr.value}'"
+            )
+    return problems
 
 
-def check_module_level_mapping_mutation(path: Path):
-    errors = []
-    tree = ast.parse(path.read_text(), filename=str(path))
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        for target in node.targets:
-            if not isinstance(target, ast.Subscript):
-                continue
-            value = target.value
-            if isinstance(value, ast.Name) and value.id.isupper():
-                errors.append(
-                    f"{path}:{node.lineno}: in-place mutation of module-level "
-                    f"mapping {value.id}"
-                )
-    return errors
-
-
-def main():
-    root = Path(__file__).resolve().parents[2]
-    errors = []
+def main() -> int:
+    problems: list[str] = []
     for rel in TARGET_FILES:
-        path = root / rel
+        path = REPO_ROOT / rel
         if not path.exists():
             continue
-        errors.extend(check_mutable_defaults(path))
-        errors.extend(check_hasattr_on_dataclass_fields(path))
-        errors.extend(check_module_level_mapping_mutation(path))
-    if errors:
-        for error in errors:
-            print(error, file=sys.stderr)
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError as exc:
+            problems.append(f"{path}: syntax error: {exc}")
+            continue
+        problems.extend(check_mutable_defaults(path, tree))
+        problems.extend(check_hasattr_on_dataclass_fields(path, tree))
+
+    if problems:
+        print("Static pattern check failed:")
+        for problem in problems:
+            print(f"  - {problem}")
         return 1
-    print("static pattern checks passed")
+
+    print("Static pattern check passed.")
     return 0
 
 

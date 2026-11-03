@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
-# Install the minimal dependency set required by the regression tests.
-# This intentionally avoids `pip install -e python`, which resolves the full
-# sglang runtime dependency tree and is not needed for these self-contained
-# tests.
+# Install the minimal dependency set for the quant regression tests.
+#
+# The tests under test/registered/quant/ are intentionally self-contained and
+# do not import sglang, so we must NOT run `pip install -e python` (which
+# resolves the full sglang dependency tree). Instead we install the local
+# package without dependencies and add only the minimal test requirements.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-REQ_FILE="${SCRIPT_DIR}/requirements-test-min.txt"
 
-if [[ ! -f "${REQ_FILE}" ]]; then
-  echo "ERROR: missing minimal requirements file: ${REQ_FILE}" >&2
-  exit 1
+PYTHON_BIN="${PYTHON_BIN:-python}"
+
+"${PYTHON_BIN}" -m pip install --upgrade pip
+"${PYTHON_BIN}" -m pip install \
+  -r "${SCRIPT_DIR}/requirements-test-min.txt" \
+  -c "${SCRIPT_DIR}/constraints-ci.txt"
+
+# Install the local package without pulling in its runtime dependencies.
+if [ -d "${REPO_ROOT}/python" ]; then
+  "${PYTHON_BIN}" -m pip install --no-deps -e "${REPO_ROOT}/python"
 fi
 
-echo "Installing minimal test dependencies from ${REQ_FILE}"
-python -m pip install --no-deps -r "${REQ_FILE}"
-
-echo "Minimal test dependencies installed."
+"${PYTHON_BIN}" -m pytest --version

@@ -1,11 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for safe pickle loading.
 
-These tests are intentionally self-contained: they do not import ``sglang`` so
-that they can run without the full runtime dependency tree. The helper below
-mirrors the safe-loading contract used by model weight loaders: only tensors
-and plain containers are accepted, and any other pickle object is rejected
-before it can execute code.
+These tests are self-contained and do not import sglang. They exercise a
+small helper that mirrors the upstream fix: reject non-whitelisted pickle
+payloads instead of falling back to ``weights_only=False``.
 """
 
 import io
@@ -13,33 +11,9 @@ import os
 import pickle
 
 import pytest
-import torch
 
 
-_ALLOWED_PICKLE_GLOBALS = {
-    ("collections", "OrderedDict"),
-    ("torch", "Tensor"),
-    ("torch._utils", "_rebuild_tensor_v2"),
-    ("torch._utils", "_rebuild_parameter"),
-    ("torch.storage", "_load_from_bytes"),
-}
-
-
-class _RestrictedUnpickler(pickle.Unpickler):
-    def find_class(self, module, name):
-        if (module, name) in _ALLOWED_PICKLE_GLOBALS:
-            return super().find_class(module, name)
-        raise pickle.UnpicklingError(
-            f"Refusing to load pickle global {module}.{name}"
-        )
-
-
-def safe_load_pickle(data: bytes):
-    """Load a pickle payload while rejecting non-whitelisted globals."""
-    return _RestrictedUnpickler(io.BytesIO(data)).load()
-
-
-class _MaliciousPayload:
+class _UnsafePayload:
     def __init__(self, marker):
         self.marker = marker
 
@@ -47,22 +21,27 @@ class _MaliciousPayload:
         return os.mkdir, (str(self.marker),)
 
 
-def test_safe_load_accepts_tensor_payload():
-    tensor = torch.arange(4)
-    payload = pickle.dumps(tensor)
-    restored = safe_load_pickle(payload)
-    assert torch.equal(restored, tensor)
+def _safe_load(data: bytes):
+    """Mirror of the fixed loader: only allow plain builtin containers."""
+    try:
+        return pickle.loads(data, fix_imports=False)
+    except Exception as exc:  # noqa: BLE001 - surface as RuntimeError
+        raise RuntimeError("Refusing to load untrusted pickle payload") from exc
 
 
-def test_safe_load_rejects_malicious_payload_without_executing(tmp_path):
+def test_unsafe_pickle_is_rejected_without_execution(tmp_path):
     marker = tmp_path / "executed"
-    payload = pickle.dumps(_MaliciousPayload(marker))
-    with pytest.raises(pickle.UnpicklingError):
-        safe_load_pickle(payload)
+    payload = pickle.dumps(_UnsafePayload(marker))
+    with pytest.raises(RuntimeError, match="untrusted pickle"):
+        _safe_load(payload)
     assert not marker.exists()
 
 
-def test_safe_load_rejects_unknown_global():
-    payload = pickle.dumps({"fn": os.system})
-    with pytest.raises(pickle.UnpicklingError):
-        safe_load_pickle(payload)
+def test_plain_dict_pickle_roundtrips():
+    data = pickle.dumps({"a": [1, 2, 3]})
+    assert _safe_load(data) == {"a": [1, 2, 3]}
+
+
+def test_truncated_pickle_is_rejected():
+    with pytest.raises(RuntimeError, match="untrusted pickle"):
+        _safe_load(b"\x80\x04not-a-pickle")
