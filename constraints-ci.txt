@@ -1,7 +1,6 @@
-# Minimal constraints for CPU-only CI verification of quantization utils.
-# Intentionally does NOT pin GPU/kernel packages (py-spy, quack-kernels, etc.)
-# so that `pip install -c constraints-ci.txt` does not resolve sglang's full
-# runtime dependency set on a GPU-less runner.
-pytest>=7.0
-numpy>=1.24
-torch>=2.1
+# Lightweight constraints for CI test environment.
+# Excludes heavy runtime-only packages that are not needed by the
+# quantization / config / model-loader regression tests.
+py-spy
+quack-kernels
+pyzmq
