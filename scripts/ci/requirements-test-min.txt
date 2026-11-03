@@ -1,3 +1,4 @@
-# Minimal test-only dependencies for self-contained regression tests.
-# These tests intentionally do not import sglang runtime modules.
+# Minimal test dependencies for the SonarQube-inspired regression suite.
+# Keep this list small: the tests are self-contained and must not import
+# the full sglang runtime dependency tree.
 pytest>=7.0

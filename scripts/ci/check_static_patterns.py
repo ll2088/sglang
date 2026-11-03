@@ -1,89 +1,67 @@
 #!/usr/bin/env python3
-# Static checks for patterns fixed by the upstream SonarQube PR:
-#   * module-level dict mutated in place via .update() on a shared constant
-#   * hasattr() used on dataclass fields instead of `is not None`
-# The checks are intentionally conservative and only report clear matches.
+"""Static pattern checks for the SonarQube-inspired fixes.
+
+This script is intentionally dependency-free so it can run before the test
+environment is fully provisioned. It reports (and fails on) the patterns the
+upstream PR removed:
+
+* mutable default arguments (dict/list/set literals in signatures)
+* ``hasattr`` checks on dataclass fields
+* ``weights_only=False`` pickle fallbacks
+
+It is a best-effort textual check, not a full AST analysis.
+"""
+
 from __future__ import annotations
 
-import ast
+import re
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TARGET_DIRS = [
-    REPO_ROOT / "python/sglang/srt/layers/quantization",
-    REPO_ROOT / "python/sglang/srt/model_loader",
-    REPO_ROOT / "python/sglang/srt/utils/hf_transformers",
-]
+
+# Files that are expected to contain the fixed patterns (tests intentionally
+# exercise the old behaviour).
+EXCLUDE_DIRS = {".git", "build", "dist", "node_modules", "__pycache__"}
+
+MUTABLE_DEFAULT_RE = re.compile(
+    r"def\s+\w+\s*\([^)]*=\s*(?:\{\}|\[\]|set\(\))", re.DOTALL
+)
+HASATTR_DATACLASS_RE = re.compile(r"hasattr\(\s*\w+\s*,\s*['\"]\w+['\"]\s*\)")
+WEIGHTS_ONLY_FALSE_RE = re.compile(r"weights_only\s*=\s*False")
 
 
-def _iter_py_files():
-    for base in TARGET_DIRS:
-        if not base.is_dir():
+def iter_python_files(root: Path):
+    for path in root.rglob("*.py"):
+        if any(part in EXCLUDE_DIRS for part in path.parts):
             continue
-        yield from base.rglob("*.py")
-
-
-def _check_hasattr_on_dataclass_fields(path: Path, tree: ast.AST) -> list[str]:
-    problems: list[str] = []
-    dataclass_fields: dict[str, set[str]] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef):
-            continue
-        is_dataclass = any(
-            (isinstance(d, ast.Name) and d.id == "dataclass")
-            or (isinstance(d, ast.Attribute) and d.attr == "dataclass")
-            for d in node.decorator_list
-        )
-        if not is_dataclass:
-            continue
-        fields = {
-            stmt.target.id
-            for stmt in node.body
-            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)
-        }
-        if fields:
-            dataclass_fields[node.name] = fields
-    if not dataclass_fields:
-        return problems
-    all_fields = set().union(*dataclass_fields.values())
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not (isinstance(func, ast.Name) and func.id == "hasattr"):
-            continue
-        if len(node.args) < 2:
-            continue
-        attr = node.args[1]
-        if isinstance(attr, ast.Constant) and attr.value in all_fields:
-            problems.append(
-                f"{path}:{node.lineno}: hasattr() on dataclass field "
-                f"{attr.value!r}; use `is not None`"
-            )
-    return problems
+        yield path
 
 
 def main() -> int:
-    problems: list[str] = []
-    for path in _iter_py_files():
+    failures: list[str] = []
+    for path in iter_python_files(REPO_ROOT):
         try:
-            source = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            problems.append(f"{path}: cannot read: {exc}")
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
             continue
-        try:
-            tree = ast.parse(source, filename=str(path))
-        except SyntaxError as exc:
-            problems.append(f"{path}: syntax error: {exc}")
-            continue
-        problems.extend(_check_hasattr_on_dataclass_fields(path, tree))
+        rel = path.relative_to(REPO_ROOT)
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if MUTABLE_DEFAULT_RE.search(line):
+                failures.append(f"{rel}:{lineno}: mutable default argument")
+            if WEIGHTS_ONLY_FALSE_RE.search(line):
+                failures.append(f"{rel}:{lineno}: weights_only=False")
+            if HASATTR_DATACLASS_RE.search(line) and "dataclass" in text:
+                failures.append(f"{rel}:{lineno}: hasattr on dataclass field")
 
-    if problems:
-        for problem in problems:
-            print(problem, file=sys.stderr)
+    if failures:
+        print("Static pattern check failed:", file=sys.stderr)
+        for failure in failures:
+            print(f"  {failure}", file=sys.stderr)
         return 1
-    print("static pattern checks passed")
+
+    print("Static pattern check passed: no mutable defaults, "
+          "weights_only=False, or dataclass hasattr patterns found.")
     return 0
 
 
