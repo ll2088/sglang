@@ -1,97 +1,58 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for mutable defaults and module-level dict isolation.
+"""Regression tests for mutable-default and module-level mapping isolation.
 
-These tests are intentionally self-contained: they do not import ``sglang`` so
-that they can run without the full runtime dependency tree. The patterns below
-mirror the production helpers in
-``sglang.srt.layers.quantization.utils`` (``_FALLBACK_FUSED_SHARDS`` and
-``is_layer_skipped``).
+Mirrors the upstream fix pattern: mutable defaults must be ``None`` and
+module-level dicts must never be mutated in place by callers.
 """
+
+from types import MappingProxyType
 
 import pytest
 
-
-# Mirror the production module-level mapping in
-# ``sglang.srt.layers.quantization.utils``: it is a plain dict, and the fix
-# is to copy it (including per-key lists) before returning it to callers.
-_FALLBACK_FUSED_SHARDS = {
-    "qkv_proj": ["q_proj", "k_proj", "v_proj"],
-    "gate_up_proj": ["gate_proj", "up_proj"],
-}
+from sglang.srt.layers.quantization import utils as quant_utils
 
 
-def _effective_fused(fused_mapping=None, proj_name="qkv_proj"):
-    # Mirror the production fix: copy per-key lists so callers can never
-    # mutate the module-level mapping through the returned view.
-    if fused_mapping is not None and not isinstance(fused_mapping, dict):
-        raise TypeError(
-            "fused_mapping must be a mapping of fused layer names to shard "
-            f"names, got {type(fused_mapping).__name__}"
-        )
-    source = fused_mapping if fused_mapping is not None else _FALLBACK_FUSED_SHARDS
-    return {key: list(value) for key, value in source.items()}
+def test_fallback_fused_shards_is_not_mutated_by_callers():
+    original = {key: list(value) for key, value in quant_utils._FALLBACK_FUSED_SHARDS.items()}
+    copied = quant_utils._copy_fused_mapping(None)
+    copied["qkv_proj"].append("extra_proj")
+    copied["new_key"] = ["x"]
+    assert quant_utils._FALLBACK_FUSED_SHARDS == original
 
 
-def _append_default(value, bucket=None):
-    if bucket is None:
-        bucket = []
-    bucket.append(value)
-    return bucket
-
-
-def test_mutable_default_is_isolated_between_calls():
-    first = _append_default(1)
-    second = _append_default(2)
-    assert first == [1]
-    assert second == [2]
+def test_copy_fused_mapping_returns_fresh_lists():
+    first = quant_utils._copy_fused_mapping(None)
+    second = quant_utils._copy_fused_mapping(None)
     assert first is not second
+    assert first["qkv_proj"] is not second["qkv_proj"]
+    first["qkv_proj"].append("mutated")
+    assert "mutated" not in second["qkv_proj"]
 
 
-def test_module_level_mapping_is_not_mutated_in_place():
-    before = dict(_FALLBACK_FUSED_SHARDS)
-    result = _effective_fused()
-    result["qkv_proj"].append("extra")
-    assert dict(_FALLBACK_FUSED_SHARDS) == before
-    assert _FALLBACK_FUSED_SHARDS["qkv_proj"] == ["q_proj", "k_proj", "v_proj"]
+def test_copy_fused_mapping_does_not_mutate_caller_dict():
+    caller = {"qkv_proj": ["q_proj", "k_proj", "v_proj"]}
+    snapshot = {key: list(value) for key, value in caller.items()}
+    copied = quant_utils._copy_fused_mapping(caller)
+    copied["qkv_proj"].append("extra")
+    assert caller == snapshot
 
 
-def test_caller_mapping_is_copied():
-    caller = {"qkv_proj": ["q_proj"]}
-    result = _effective_fused(caller)
-    result["qkv_proj"].append("k_proj")
-    assert caller == {"qkv_proj": ["q_proj"]}
+def test_copy_fused_mapping_rejects_non_mapping():
+    with pytest.raises(TypeError):
+        quant_utils._copy_fused_mapping(["qkv_proj"])
 
 
-@pytest.mark.parametrize("proj_name", ["qkv_proj", "gate_up_proj"])
-def test_fallback_mapping_covers_fused_layers(proj_name):
-    assert proj_name in _FALLBACK_FUSED_SHARDS
-
-
-def test_non_mapping_fused_mapping_is_rejected():
-    with pytest.raises(TypeError, match="fused_mapping must be a mapping"):
-        _effective_fused(fused_mapping=["qkv_proj"])
-
-
-def _exclude_layer(prefix, exclude_modules):
-    # Mirror the production fix in InklingQuantizationConfigBase.exclude_layer:
-    # match on dotted module-path boundaries instead of plain substring.
-    if not exclude_modules:
-        return False
-    candidates = [prefix]
-    if prefix.startswith("language_model."):
-        candidates.append(prefix.removeprefix("language_model."))
-    for module in exclude_modules:
-        module = module.rstrip(".")
-        for candidate in candidates:
-            if candidate == module or candidate.startswith(module + "."):
-                return True
-    return False
-
-
-def test_exclude_layer_uses_path_boundaries():
-    assert _exclude_layer("model.layers.0.mlp.gate", ["model.layers.0.mlp.gate"])
-    assert _exclude_layer("model.layers.0.mlp.gate.up", ["model.layers.0.mlp.gate"])
-    assert not _exclude_layer("model.layers.0.mlp.gate_up_proj", ["model.layers.0.mlp.gate"])
-    assert _exclude_layer(
-        "language_model.model.layers.0.mlp.gate", ["model.layers.0.mlp.gate"]
+def test_is_layer_skipped_does_not_mutate_fallback():
+    original = {key: list(value) for key, value in quant_utils._FALLBACK_FUSED_SHARDS.items()}
+    quant_utils.is_layer_skipped(
+        "model.layers.0.self_attn.qkv_proj",
+        ignored_layers=[],
+        fused_mapping=None,
     )
+    assert quant_utils._FALLBACK_FUSED_SHARDS == original
+
+
+def test_mapping_proxy_source_is_read_only():
+    proxy = MappingProxyType(quant_utils._FALLBACK_FUSED_SHARDS)
+    with pytest.raises(TypeError):
+        proxy["qkv_proj"] = []

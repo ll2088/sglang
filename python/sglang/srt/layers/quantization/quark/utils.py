@@ -61,7 +61,8 @@ def should_ignore_layer(
         )
     else:
         # Copy caller-provided mappings so later mutation of the caller's
-        # dict cannot change the result of this call.
+        # dict cannot change the result of this call, and so this call never
+        # mutates the caller's dict in place.
         fused_mapping = MappingProxyType(
             {key: list(value) for key, value in fused_mapping.items()}
         )

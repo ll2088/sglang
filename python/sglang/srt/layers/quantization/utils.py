@@ -81,7 +81,11 @@ def _copy_fused_mapping(
             "fused_mapping must be a mapping of fused layer names to shard "
             f"names, got {type(fused_mapping).__name__}"
         )
-    source = fused_mapping if fused_mapping is not None else _FALLBACK_FUSED_SHARDS
+    source = (
+        fused_mapping
+        if fused_mapping is not None
+        else MappingProxyType(_FALLBACK_FUSED_SHARDS)
+    )
     return {key: list(value) for key, value in source.items()}
 
 
