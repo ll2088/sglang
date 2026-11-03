@@ -1,36 +1,56 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Install the minimal dependency set required by the quantization regression
+# Install the minimal dependency set needed by the quantization regression
 # tests without resolving the full sglang dependency tree.
-set -euxo pipefail
+set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CONSTRAINTS_ROOT="${REPO_ROOT}/constraints-ci.txt"
-CONSTRAINTS_CI="${REPO_ROOT}/scripts/ci/constraints-ci.txt"
+cd "$REPO_ROOT"
 
-python -V
-python -m pip -V
-
-if ! diff -u "${CONSTRAINTS_ROOT}" "${CONSTRAINTS_CI}"; then
-  echo "constraints-ci.txt files differ; refusing to install" >&2
+PYTHON_BIN="${PYTHON_BIN:-$REPO_ROOT/.venv/bin/python}"
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  echo "error: expected virtualenv interpreter at $PYTHON_BIN" >&2
+  echo "hint: create it with 'python3.12 -m venv .venv' or set PYTHON_BIN" >&2
   exit 1
 fi
 
-python -m pip install --no-deps -c "${CONSTRAINTS_CI}" \
-  'pytest>=8.0,<9' 'numpy>=1.26,<3' 'torch>=2.1,<3'
+echo "python: $("$PYTHON_BIN" -V 2>&1)"
+echo "pip:    $("$PYTHON_BIN" -m pip -V 2>&1)"
 
-python - <<'PY'
-import importlib
+# Refuse to run against a system interpreter whose site-packages would leak
+# into the test environment.
+SYS_EXEC="$("$PYTHON_BIN" -c 'import sys; print(sys.executable)')"
+if [[ "$SYS_EXEC" != "$PYTHON_BIN" ]]; then
+  echo "error: sys.executable ($SYS_EXEC) != $PYTHON_BIN" >&2
+  exit 1
+fi
 
-for name in (
-    "sglang.srt.layers.quantization.fp8",
-    "sglang.srt.layers.quantization.utils",
-    "sglang.srt.layers.quantization.compressed_tensors.utils",
-    "sglang.srt.layers.quantization.quark.utils",
-    "sglang.srt.models.inkling_common.quantization.config",
-    "sglang.srt.utils.hf_transformers.config",
-    "sglang.srt.model_loader.utils",
-):
-    importlib.import_module(name)
-print("import smoke check passed")
-PY
+# Pin the interpreter major.minor so we never download wheels for another ABI.
+PY_VERSION="$("$PYTHON_BIN" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+if [[ "$PY_VERSION" != "3.12" ]]; then
+  echo "error: CI requires Python 3.12, found $PY_VERSION" >&2
+  exit 1
+fi
+
+CONSTRAINTS="$REPO_ROOT/constraints-ci.txt"
+if [[ ! -f "$CONSTRAINTS" ]]; then
+  echo "error: missing $CONSTRAINTS" >&2
+  exit 1
+fi
+
+# Keep the root constraints file and the CI copy in sync when both exist.
+CI_CONSTRAINTS="$REPO_ROOT/scripts/ci/constraints-ci.txt"
+if [[ -f "$CI_CONSTRAINTS" ]]; then
+  if ! diff -u "$CONSTRAINTS" "$CI_CONSTRAINTS"; then
+    echo "error: constraints-ci.txt copies diverged" >&2
+    exit 1
+  fi
+fi
+
+set -x
+"$PYTHON_BIN" -m pip install --upgrade pip
+"$PYTHON_BIN" -m pip install --no-deps -c "$CONSTRAINTS" \
+  pytest numpy torch
+set +x
+
+echo "test dependencies installed"
