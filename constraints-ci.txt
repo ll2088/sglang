@@ -1,10 +1,7 @@
-# Lightweight constraints for CI regression tests.
-# Keep this list minimal: only packages needed to import and run the
-# quantization / config / model-loader regression tests.
-# Do NOT add sglang runtime dependencies here; sglang itself is installed
-# with --no-deps by scripts/ci/install_test_deps.sh.
-
-pytest>=7.0
-pytest-randomly>=3.12
-numpy
-torch
+# Minimal constraints for CI test environment.
+# Keep this list small: only packages needed to import and run the
+# quantization regression tests. Do not add sglang runtime deps here.
+pytest>=7.4
+pytest-randomly>=3.15
+numpy>=1.24
+torch>=2.1
