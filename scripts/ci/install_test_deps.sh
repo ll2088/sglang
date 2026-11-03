@@ -1,70 +1,50 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Install the minimal dependencies needed by the quant regression tests
+# Install the minimal dependency set for the quantization regression tests
 # without resolving the full sglang dependency tree.
-#
-# Usage: scripts/ci/install_test_deps.sh
-#
-# The script intentionally uses the *current* interpreter (no .venv
-# activation) so that it works both locally and in CI where the runner
-# already provides a Python environment.
 set -euo pipefail
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+CONSTRAINTS="${SCRIPT_DIR}/constraints-ci.txt"
 
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  echo "error: ${PYTHON_BIN} not found" >&2
+if [[ ! -f "${CONSTRAINTS}" ]]; then
+  echo "error: constraints file not found: ${CONSTRAINTS}" >&2
   exit 1
 fi
 
-echo "python: $(${PYTHON_BIN} -V 2>&1)"
-echo "pip:    $(${PYTHON_BIN} -m pip -V 2>&1)"
+PYTHON_BIN="${PYTHON_BIN:-python}"
 
-CONSTRAINTS_FILE="${CONSTRAINTS_FILE:-scripts/ci/constraints-ci.txt}"
+"${PYTHON_BIN}" -m pip --version
+"${PYTHON_BIN}" -m pip install --disable-pip-version-check --no-deps \
+  -c "${CONSTRAINTS}" \
+  -r "${CONSTRAINTS}"
 
-PIP_ARGS=(
-  --no-deps
-  --disable-pip-version-check
-  --no-input
-)
-
-if [[ -f "${CONSTRAINTS_FILE}" ]]; then
-  PIP_ARGS+=(-c "${CONSTRAINTS_FILE}")
-  echo "using constraints: ${CONSTRAINTS_FILE}"
-else
-  echo "warning: constraints file ${CONSTRAINTS_FILE} not found; continuing without it" >&2
-fi
-
-# Install the project in editable mode without pulling transitive deps.
-# The quant regression tests only need pytest plus the modules that are
-# already importable in the CI image.
-echo "running: ${PYTHON_BIN} -m pip install ${PIP_ARGS[*]} -e python"
-"${PYTHON_BIN}" -m pip install "${PIP_ARGS[@]}" -e python
-
-# Smoke import check: fail fast with a full traceback instead of a truncated
-# log tail.
-echo "running import smoke check"
+# Smoke import check: fail fast with a clear message if the modules touched by
+# the regression tests cannot be imported.
 "${PYTHON_BIN}" - <<'PY'
-import traceback
+import importlib
+import sys
 
-MODULES = [
+modules = [
     "sglang.srt.layers.quantization.utils",
     "sglang.srt.layers.quantization.compressed_tensors.utils",
     "sglang.srt.layers.quantization.quark.utils",
 ]
 
-failed = False
-for name in MODULES:
+failed = []
+for name in modules:
     try:
-        __import__(name)
-    except Exception:
-        failed = True
-        print(f"import failed: {name}")
-        traceback.print_exc()
+        importlib.import_module(name)
+    except Exception as exc:  # noqa: BLE001 - report all import failures
+        failed.append((name, exc))
 
 if failed:
-    raise SystemExit(1)
+    for name, exc in failed:
+        print(f"import smoke check failed: {name}: {exc!r}", file=sys.stderr)
+    sys.exit(1)
+
 print("import smoke check passed")
 PY
 
-echo "done"
+"${PYTHON_BIN}" -m pip freeze >&2 || true

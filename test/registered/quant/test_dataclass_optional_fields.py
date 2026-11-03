@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for dataclass optional-field presence checks.
+"""Regression tests for dataclass optional-field checks.
 
-Upstream Model-Optimizer PR #3063 replaced `hasattr` checks on dataclass
-fields with `is not None` checks, because `hasattr` is always true for a
-declared dataclass field even when its value is None.
+`hasattr` on a dataclass field is always true, so optional fields must be
+checked with `is not None` instead.
 """
 
 from dataclasses import dataclass
@@ -18,32 +17,23 @@ class _OptionalFields:
     lm_head: Optional[object] = None
 
 
-def _hasattr_check(obj, name):
-    # The buggy pattern: always true for declared dataclass fields.
-    return hasattr(obj, name)
+def _has_required_fields(holder: _OptionalFields) -> bool:
+    # Mirrors the fixed pattern: `is not None`, not `hasattr`.
+    return holder.vocab_embedding is not None and holder.lm_head is not None
 
 
-def _is_not_none_check(obj, name):
-    # The fixed pattern.
-    return getattr(obj, name, None) is not None
-
-
-@pytest.mark.parametrize("name", ["vocab_embedding", "lm_head"])
-def test_hasattr_is_always_true_for_declared_fields(name):
-    obj = _OptionalFields()
-    assert _hasattr_check(obj, name) is True
-    assert _is_not_none_check(obj, name) is False
-
-
-@pytest.mark.parametrize("name", ["vocab_embedding", "lm_head"])
-def test_is_not_none_detects_missing_field(name):
-    obj = _OptionalFields()
-    assert _is_not_none_check(obj, name) is False
-    setattr(obj, name, object())
-    assert _is_not_none_check(obj, name) is True
-
-
-def test_partial_fields_are_independent():
-    obj = _OptionalFields(vocab_embedding=object())
-    assert _is_not_none_check(obj, "vocab_embedding") is True
-    assert _is_not_none_check(obj, "lm_head") is False
+@pytest.mark.parametrize(
+    ("vocab_embedding", "lm_head", "expected"),
+    [
+        (None, None, False),
+        (object(), None, False),
+        (None, object(), False),
+        (object(), object(), True),
+    ],
+)
+def test_optional_dataclass_fields_use_is_not_none(vocab_embedding, lm_head, expected):
+    holder = _OptionalFields(vocab_embedding=vocab_embedding, lm_head=lm_head)
+    # `hasattr` would always be True for both fields; the fixed check must not.
+    assert hasattr(holder, "vocab_embedding")
+    assert hasattr(holder, "lm_head")
+    assert _has_required_fields(holder) is expected

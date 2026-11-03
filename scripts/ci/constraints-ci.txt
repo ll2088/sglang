@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-# Minimal constraints for the quant regression test environment.
-# Keep this file small: it is only used by scripts/ci/install_test_deps.sh
-# to avoid resolving the full sglang dependency tree in CI.
-pytest>=7,<9
+# Minimal pinned dependency set for the quantization regression tests.
+# Keep this list small: it is installed with --no-deps so that CI does not
+# resolve the full sglang dependency tree.
+
+pytest>=8.0,<9
+numpy>=1.26,<3
+torch>=2.1,<3

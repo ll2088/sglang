@@ -54,6 +54,15 @@ def test_compressed_tensors_should_ignore_layer_defaults_are_isolated():
     assert not ct_should_ignore_layer("model.layers.0.mlp.down_proj")
 
 
+def test_compressed_tensors_should_ignore_layer_does_not_mutate_fused_mapping():
+    fused = {"qkv_proj": ["q_proj", "k_proj", "v_proj"]}
+    before = {k: list(v) for k, v in fused.items()}
+    assert ct_should_ignore_layer(
+        "model.layers.0.self_attn.qkv_proj", ["q_proj", "k_proj", "v_proj"], fused
+    )
+    assert {k: list(v) for k, v in fused.items()} == before
+
+
 def test_compressed_tensors_find_matched_target_accepts_none_mapping():
     target = find_matched_target(
         "model.layers.0.mlp.down_proj", _DummyModule(), ["down_proj"], None
