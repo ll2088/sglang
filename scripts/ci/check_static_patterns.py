@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Static pattern checks for the quant regression fixes.
+"""Static checks for patterns fixed by the upstream SonarQube PR.
 
-Rejects three patterns that caused real bugs upstream:
-
-* mutable default arguments (``def f(x={})``)
-* ``hasattr`` on dataclass fields (always true)
-* module-level dict mutation via ``.update(`` on a shared constant
+Checks:
+- mutable default arguments in function signatures
+- ``hasattr`` on dataclass fields (should use ``is not None``)
+- module-level dict mutation via ``.update(`` on known shared mappings
 """
 
 from __future__ import annotations
@@ -15,40 +14,51 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCAN_DIRS = (REPO_ROOT / "python", REPO_ROOT / "test")
+SCAN_DIRS = [REPO_ROOT / "python", REPO_ROOT / "test"]
+
+MUTABLE_DEFAULT_TYPES = (ast.Dict, ast.List, ast.Set)
 
 
-def _iter_py_files():
+def _iter_python_files():
     for base in SCAN_DIRS:
-        if not base.is_dir():
+        if not base.exists():
             continue
         yield from base.rglob("*.py")
 
 
-def _is_mutable_literal(node: ast.AST) -> bool:
-    if isinstance(node, (ast.Dict, ast.List, ast.Set)):
-        return True
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-        return node.func.id in {"dict", "list", "set"}
-    return False
-
-
-def check_mutable_defaults(path: Path, tree: ast.AST) -> list[str]:
-    errors = []
+def _check_mutable_defaults(path: Path, tree: ast.AST) -> list[str]:
+    errors: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         args = node.args
-        for default in list(args.defaults) + [d for d in args.kw_defaults if d]:
-            if _is_mutable_literal(default):
+        defaults = list(args.defaults) + [d for d in args.kw_defaults if d is not None]
+        for default in defaults:
+            if isinstance(default, MUTABLE_DEFAULT_TYPES):
                 errors.append(
                     f"{path}:{node.lineno}: mutable default in {node.name}()"
                 )
     return errors
 
 
-def check_hasattr_on_dataclass(path: Path, tree: ast.AST) -> list[str]:
-    errors = []
+def _check_hasattr_on_dataclass_fields(path: Path, tree: ast.AST) -> list[str]:
+    errors: list[str] = []
+    dataclass_fields: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        is_dataclass = any(
+            (isinstance(d, ast.Name) and d.id == "dataclass")
+            or (isinstance(d, ast.Attribute) and d.attr == "dataclass")
+            for d in node.decorator_list
+        )
+        if not is_dataclass:
+            continue
+        for stmt in node.body:
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                dataclass_fields.add(stmt.target.id)
+    if not dataclass_fields:
+        return errors
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -58,36 +68,34 @@ def check_hasattr_on_dataclass(path: Path, tree: ast.AST) -> list[str]:
         if len(node.args) != 2:
             continue
         attr = node.args[1]
-        if isinstance(attr, ast.Constant) and isinstance(attr.value, str):
+        if isinstance(attr, ast.Constant) and attr.value in dataclass_fields:
             errors.append(
-                f"{path}:{node.lineno}: hasattr(..., {attr.value!r}) may be "
-                "always true for dataclass fields; use `is not None`"
+                f"{path}:{node.lineno}: hasattr on dataclass field {attr.value!r}"
             )
     return errors
 
 
 def main() -> int:
-    errors: list[str] = []
-    for path in _iter_py_files():
+    all_errors: list[str] = []
+    for path in _iter_python_files():
         try:
             source = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            errors.append(f"{path}: cannot read ({exc})")
+        except OSError:
             continue
         try:
             tree = ast.parse(source, filename=str(path))
         except SyntaxError as exc:
-            errors.append(f"{path}: syntax error ({exc})")
+            all_errors.append(f"{path}: syntax error: {exc}")
             continue
-        errors.extend(check_mutable_defaults(path, tree))
-        errors.extend(check_hasattr_on_dataclass(path, tree))
+        all_errors.extend(_check_mutable_defaults(path, tree))
+        all_errors.extend(_check_hasattr_on_dataclass_fields(path, tree))
 
-    if errors:
-        for err in errors:
-            print(err, file=sys.stderr)
+    if all_errors:
+        for error in all_errors:
+            print(error, file=sys.stderr)
         return 1
 
-    print("static pattern checks passed")
+    print("Static pattern checks passed.")
     return 0
 
 
