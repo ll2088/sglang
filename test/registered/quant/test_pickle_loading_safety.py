@@ -1,16 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for safe pickle loading.
+"""Regression tests for safe checkpoint loading.
 
-Mirrors the upstream fix pattern: untrusted checkpoints must be loaded with
-``weights_only=True`` (or an explicit digest check) so that malicious pickle
-payloads are rejected instead of executed.
+A malicious pickle payload must be rejected without executing its
+``__reduce__`` callable. The helper below mirrors the upstream pattern:
+``torch.load(..., weights_only=True)`` first, and any fallback must be
+explicitly gated by a caller-supplied checksum.
 """
 
 import hashlib
 import os
 
 import pytest
-import torch
+
+
+torch = pytest.importorskip("torch")
 
 
 class _UnsupportedCheckpoint:
@@ -21,36 +24,36 @@ class _UnsupportedCheckpoint:
         return os.mkdir, (str(self.marker),)
 
 
-def _load_weights_only(path):
-    return torch.load(path, map_location="cpu", weights_only=True)
+def _load_weights(path, expected_sha256=None):
+    if expected_sha256 is not None:
+        digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
+        if digest.lower() != expected_sha256.lower():
+            raise RuntimeError("Checkpoint checksum mismatch")
+    try:
+        return torch.load(path, map_location="cpu", weights_only=True)
+    except Exception as exc:
+        raise RuntimeError("Checkpoint rejected by safe loader") from exc
 
 
-def _load_with_digest(path, expected_sha256):
-    digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
-    if digest.lower() != expected_sha256.lower():
-        raise RuntimeError("Checkpoint digest mismatch")
-    return torch.load(path, map_location="cpu", weights_only=True)
-
-
-def test_weights_only_rejects_malicious_payload(tmp_path):
+def test_malicious_pickle_is_rejected_without_execution(tmp_path):
     marker = tmp_path / "executed"
-    path = tmp_path / "malicious.pt"
+    path = tmp_path / "evil.pt"
     torch.save(_UnsupportedCheckpoint(marker), path)
-    with pytest.raises(Exception):
-        _load_weights_only(path)
+    with pytest.raises(RuntimeError, match="Checkpoint"):
+        _load_weights(str(path))
     assert not marker.exists()
 
 
-def test_digest_mismatch_is_rejected(tmp_path):
+def test_checksum_mismatch_is_rejected(tmp_path):
     path = tmp_path / "weights.pt"
-    torch.save({"w": torch.zeros(2)}, path)
-    with pytest.raises(RuntimeError, match="digest mismatch"):
-        _load_with_digest(path, "0" * 64)
+    torch.save({"w": torch.zeros(1)}, path)
+    with pytest.raises(RuntimeError, match="checksum"):
+        _load_weights(str(path), expected_sha256="0" * 64)
 
 
-def test_digest_match_loads_state_dict(tmp_path):
+def test_checksum_match_allows_state_dict(tmp_path):
     path = tmp_path / "weights.pt"
-    torch.save({"w": torch.zeros(2)}, path)
-    digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
-    loaded = _load_with_digest(path, digest.upper())
-    assert torch.equal(loaded["w"], torch.zeros(2))
+    torch.save({"w": torch.zeros(1)}, path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    loaded = _load_weights(str(path), expected_sha256=digest.upper())
+    assert set(loaded) == {"w"}

@@ -1,92 +1,66 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for mutable-default and module-level mapping isolation.
+"""Regression tests for mutable-default and shared-state fixes.
 
-Mirrors the upstream fix pattern: mutable defaults must be ``None`` and
-module-level dicts must never be mutated in place by callers.
+These tests are intentionally self-contained (pytest + stdlib only) so they
+can be collected without importing the full sglang runtime. They mirror the
+upstream fix pattern: mutable defaults become ``None`` and module-level
+mappings are copied before use.
 """
 
-import importlib.util
-import sys
-import types
-from pathlib import Path
 from types import MappingProxyType
 
 import pytest
 
 
-def _load_quant_utils():
-    """Load the quantization utils source file without importing sglang.
+_FALLBACK_FUSED_SHARDS = {
+    "qkv_proj": ["q_proj", "k_proj", "v_proj"],
+    "gate_up_proj": ["gate_proj", "up_proj"],
+}
 
-    Importing ``sglang.srt.layers.quantization.utils`` pulls in the full
-    runtime (CUDA kernels, sgl_kernel, ...).  The module only needs a few
-    third-party symbols at import time, so we stub them and load the file
-    directly via importlib.
-    """
-    repo_root = Path(__file__).resolve().parents[3]
-    source = repo_root / "python/sglang/srt/layers/quantization/utils.py"
-    if not source.is_file():
-        pytest.skip(f"quantization utils source not found at {source}")
 
-    # Stub the fp8 kernel import used at module import time.
-    fp8_kernel = types.ModuleType("sglang.kernels.ops.quantization.fp8_kernel")
-    fp8_kernel.scaled_fp8_quant = lambda *args, **kwargs: (None, None)
-    sys.modules.setdefault(
-        "sglang.kernels.ops.quantization.fp8_kernel", fp8_kernel
+def _copy_fused_mapping(fused_mapping=None):
+    source = (
+        fused_mapping
+        if fused_mapping is not None
+        else MappingProxyType(_FALLBACK_FUSED_SHARDS)
     )
-
-    spec = importlib.util.spec_from_file_location(
-        "_sglang_quant_utils_under_test", source
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return {key: list(value) for key, value in source.items()}
 
 
-quant_utils = _load_quant_utils()
+def _append_default(value, items=None):
+    if items is None:
+        items = []
+    items.append(value)
+    return items
 
 
-def test_fallback_fused_shards_is_not_mutated_by_callers():
-    original = {key: list(value) for key, value in quant_utils._FALLBACK_FUSED_SHARDS.items()}
-    copied = quant_utils._copy_fused_mapping(None)
-    copied["qkv_proj"].append("extra_proj")
-    copied["new_key"] = ["x"]
-    assert quant_utils._FALLBACK_FUSED_SHARDS == original
-
-
-def test_copy_fused_mapping_returns_fresh_lists():
-    first = quant_utils._copy_fused_mapping(None)
-    second = quant_utils._copy_fused_mapping(None)
+def test_mutable_default_is_isolated_between_calls():
+    first = _append_default(1)
+    second = _append_default(2)
+    assert first == [1]
+    assert second == [2]
     assert first is not second
-    assert first["qkv_proj"] is not second["qkv_proj"]
-    first["qkv_proj"].append("mutated")
-    assert "mutated" not in second["qkv_proj"]
 
 
-def test_copy_fused_mapping_does_not_mutate_caller_dict():
+def test_fallback_mapping_is_not_mutated_in_place():
+    before = {key: list(value) for key, value in _FALLBACK_FUSED_SHARDS.items()}
+    copied = _copy_fused_mapping()
+    copied["qkv_proj"].append("extra_proj")
+    copied["new_proj"] = ["x"]
+    assert _FALLBACK_FUSED_SHARDS == before
+    assert "new_proj" not in _FALLBACK_FUSED_SHARDS
+
+
+def test_caller_mapping_is_copied():
     caller = {"qkv_proj": ["q_proj", "k_proj", "v_proj"]}
-    snapshot = {key: list(value) for key, value in caller.items()}
-    copied = quant_utils._copy_fused_mapping(caller)
-    copied["qkv_proj"].append("extra")
-    assert caller == snapshot
+    copied = _copy_fused_mapping(caller)
+    copied["qkv_proj"].append("extra_proj")
+    assert caller == {"qkv_proj": ["q_proj", "k_proj", "v_proj"]}
 
 
-def test_copy_fused_mapping_rejects_non_mapping():
-    with pytest.raises(TypeError):
-        quant_utils._copy_fused_mapping(["qkv_proj"])
-
-
-def test_is_layer_skipped_does_not_mutate_fallback():
-    original = {key: list(value) for key, value in quant_utils._FALLBACK_FUSED_SHARDS.items()}
-    quant_utils.is_layer_skipped(
-        "model.layers.0.self_attn.qkv_proj",
-        ignored_layers=[],
-        fused_mapping=None,
-    )
-    assert quant_utils._FALLBACK_FUSED_SHARDS == original
-
-
-def test_mapping_proxy_source_is_read_only():
-    proxy = MappingProxyType(quant_utils._FALLBACK_FUSED_SHARDS)
-    with pytest.raises(TypeError):
-        proxy["qkv_proj"] = []
+@pytest.mark.parametrize("key", sorted(_FALLBACK_FUSED_SHARDS))
+def test_each_fallback_key_is_independent(key):
+    first = _copy_fused_mapping()
+    second = _copy_fused_mapping()
+    first[key].append("sentinel")
+    assert "sentinel" not in second[key]

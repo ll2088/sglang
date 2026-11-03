@@ -9,6 +9,8 @@ declared field).
 from dataclasses import dataclass
 from typing import Optional
 
+import pytest
+
 
 @dataclass
 class _OptionalFields:
@@ -37,3 +39,17 @@ def test_is_not_none_detects_missing_fields():
 def test_is_not_none_accepts_complete_fields():
     obj = _OptionalFields(vocab_embedding=object(), lm_head=object())
     assert _has_required_fields(obj)
+
+
+@pytest.mark.parametrize(
+    ("vocab_embedding", "lm_head", "expected"),
+    [
+        (None, None, False),
+        (object(), None, False),
+        (None, object(), False),
+        (object(), object(), True),
+    ],
+)
+def test_optional_field_combinations(vocab_embedding, lm_head, expected):
+    obj = _OptionalFields(vocab_embedding=vocab_embedding, lm_head=lm_head)
+    assert _has_required_fields(obj) is expected
