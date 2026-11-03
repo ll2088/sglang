@@ -7,6 +7,7 @@ sglang, so they can run in the minimal CI environment.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import MappingProxyType
 
 import pytest
@@ -18,7 +19,7 @@ _FALLBACK_FUSED_SHARDS = {
 
 
 def _copy_fused_mapping(fused_mapping=None):
-    if fused_mapping is not None and not isinstance(fused_mapping, dict):
+    if fused_mapping is not None and not isinstance(fused_mapping, Mapping):
         raise TypeError("fused_mapping must be a mapping")
     source = (
         fused_mapping

@@ -1,48 +1,76 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for safe pickle loading.
+"""Regression tests for safe checkpoint loading.
 
-These tests are self-contained (stdlib + pytest only) and do not import
-sglang. They verify that a malicious pickle payload is rejected without
-executing code.
+Upstream removed a `weights_only=False` fallback and now verifies cached
+weights with SHA-256. These tests exercise the same contract with a small
+self-contained loader so they run without torch or sglang installed.
 """
 
 from __future__ import annotations
 
-import os
+import hashlib
 import pickle
+from pathlib import Path
 
 import pytest
 
 
-class _UnsupportedCheckpoint:
-    def __init__(self, marker):
+class _UnsafePayload:
+    def __init__(self, marker: Path):
         self.marker = marker
 
     def __reduce__(self):
-        return os.mkdir, (str(self.marker),)
+        return (Path.mkdir, (self.marker,))
 
 
-def _safe_load(path):
-    """Load a pickle only if it contains plain builtin containers."""
-    with open(path, "rb") as f:
-        obj = pickle.load(f)
-    if not isinstance(obj, (dict, list, tuple, str, int, float, bool, type(None))):
-        raise RuntimeError("Checkpoint contains unsupported pickle objects")
-    return obj
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_malicious_pickle_is_rejected_without_execution(tmp_path):
+def _load_verified(path: Path, expected_sha256: str):
+    """Load a checkpoint only after verifying its digest.
+
+    Mirrors the upstream contract: a digest is mandatory, and a mismatch
+    raises before any deserialization happens.
+    """
+    if not expected_sha256:
+        raise RuntimeError("A SHA-256 digest is required to load weights")
+    actual = _sha256(path)
+    if actual.lower() != expected_sha256.lower():
+        raise RuntimeError(
+            f"Checkpoint digest mismatch: expected {expected_sha256}, got {actual}"
+        )
+    with path.open("rb") as handle:
+        return pickle.load(handle)
+
+
+def test_missing_digest_is_rejected(tmp_path):
+    path = tmp_path / "weights.pkl"
+    path.write_bytes(pickle.dumps({"w": 1}))
+    with pytest.raises(RuntimeError, match="SHA-256"):
+        _load_verified(path, "")
+
+
+def test_digest_mismatch_is_rejected_before_deserialization(tmp_path):
     marker = tmp_path / "executed"
-    path = tmp_path / "unsupported.pt"
-    with open(path, "wb") as f:
-        pickle.dump(_UnsupportedCheckpoint(marker), f)
-    with pytest.raises(RuntimeError, match="Checkpoint"):
-        _safe_load(path)
+    path = tmp_path / "evil.pkl"
+    path.write_bytes(pickle.dumps(_UnsafePayload(marker)))
+    with pytest.raises(RuntimeError, match="digest mismatch"):
+        _load_verified(path, "0" * 64)
     assert not marker.exists()
 
 
-def test_plain_pickle_is_accepted(tmp_path):
-    path = tmp_path / "plain.pt"
-    with open(path, "wb") as f:
-        pickle.dump({"weight": [1, 2, 3]}, f)
-    assert _safe_load(path) == {"weight": [1, 2, 3]}
+def test_matching_digest_loads_payload(tmp_path):
+    path = tmp_path / "weights.pkl"
+    path.write_bytes(pickle.dumps({"w": 1}))
+    digest = _sha256(path)
+    assert _load_verified(path, digest.upper()) == {"w": 1}
+
+
+def test_tampered_cached_weights_are_rejected(tmp_path):
+    path = tmp_path / "cached.pkl"
+    path.write_bytes(pickle.dumps({"w": 1}))
+    digest = _sha256(path)
+    path.write_bytes(pickle.dumps({"w": 2}))
+    with pytest.raises(RuntimeError, match="digest mismatch"):
+        _load_verified(path, digest)
