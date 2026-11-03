@@ -1,3 +1,4 @@
-# Minimal dependencies for the quant regression tests.
-# These tests must not import the sglang runtime package.
+# Minimal test dependencies for the quant regression suite.
+# These tests only rely on the standard library and pytest, so the CI
+# environment can be prepared without installing the full sglang runtime.
 pytest>=7.0
