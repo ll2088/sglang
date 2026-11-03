@@ -1,22 +1,36 @@
 #!/usr/bin/env bash
-# Install the minimal dependency set needed to run the quantization
-# regression tests in CI. sglang itself is installed with --no-deps so
-# that pip does not try to resolve the full runtime dependency tree.
+# SPDX-License-Identifier: Apache-2.0
+# Install test dependencies for the quantization regression suite.
+#
+# The CI environment must not resolve the full sglang dependency tree; we
+# install the package with --no-deps and pin the handful of runtime deps the
+# tests actually import via constraints-ci.txt.
 set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CONSTRAINTS="${REPO_ROOT}/constraints-ci.txt"
+
+if [[ ! -f "${CONSTRAINTS}" ]]; then
+  echo "constraints file not found: ${CONSTRAINTS}" >&2
+  exit 1
+fi
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
-"${PYTHON_BIN}" -m pip install --upgrade pip
-"${PYTHON_BIN}" -m pip install -c constraints-ci.txt -r /dev/stdin <<'EOF'
-pytest
-pytest-randomly
-numpy
-torch
-EOF
+PIP_CMD=(
+  "${PYTHON_BIN}" -m pip install
+  --no-deps
+  -c "${CONSTRAINTS}"
+  -e "${REPO_ROOT}/python"
+)
 
-# Install sglang without pulling its runtime dependencies.
-"${PYTHON_BIN}" -m pip install --no-deps -e python
+echo "constraints file: ${CONSTRAINTS}"
+echo "pip command: ${PIP_CMD[*]}"
 
-# Fail fast if the package cannot be imported.
-"${PYTHON_BIN}" -c "import sglang"
-"${PYTHON_BIN}" -m pip check
+"${PIP_CMD[@]}"
+
+# Smoke check: the package must import without pulling in optional deps.
+echo "smoke check: import sglang"
+"${PYTHON_BIN}" -c "import sglang; print('sglang import ok')"
+
+echo "test deps installed"

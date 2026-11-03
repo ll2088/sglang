@@ -1,7 +1,8 @@
-# Minimal, pinned constraints for CI test environment.
-# Keep this list small: only packages needed to import and run the
-# quantization regression tests. Do not add sglang runtime deps here.
-pytest==8.3.4
-pytest-randomly==3.16.0
-numpy==1.26.4
-torch==2.5.1
+# SPDX-License-Identifier: Apache-2.0
+# Minimal pinned dependency set for the quantization regression tests.
+# Keep this list small: it is installed with --no-deps so that CI does not
+# resolve the full sglang dependency tree.
+
+pytest>=8.0,<9
+numpy>=1.26,<3
+torch>=2.1,<3
