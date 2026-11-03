@@ -1,8 +1,3 @@
-# Minimal requirements for running the self-contained regression tests in
-# test/registered/quant/. These tests do not import sglang, so the full
-# runtime dependency tree is intentionally omitted.
-#
-# Install with:
-#   pip install --no-deps -e python -c scripts/ci/constraints-ci.txt \
-#       -r scripts/ci/requirements-test-min.txt
-pytest>=7,<9
+# Minimal dependencies for the self-contained quant regression tests.
+# These tests only use pytest + stdlib and must not pull in sglang runtime deps.
+pytest>=7.0
