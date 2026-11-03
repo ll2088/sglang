@@ -60,5 +60,5 @@ def test_quark_should_ignore_layer_accepts_none_fused_mapping():
 
 
 @pytest.mark.parametrize("mapping", [None, MappingProxyType({})])
- def test_compressed_tensors_should_ignore_layer_accepts_empty_mapping(mapping):
+def test_compressed_tensors_should_ignore_layer_accepts_empty_mapping(mapping):
     assert not ct_should_ignore_layer("model.layers.0.mlp.down_proj", [], mapping)
