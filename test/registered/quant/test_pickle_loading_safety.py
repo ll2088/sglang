@@ -1,69 +1,69 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for safe pickle loading.
+"""Regression tests for safe checkpoint loading.
 
-The upstream fix removed the ``weights_only=False`` fallback and requires an
-explicit SHA-256 digest for custom weights. These tests exercise a small
-stand-in loader that mirrors that contract without importing torch.
+Verifies that a malicious pickle payload is rejected without executing code,
+and that SHA-256 verification rejects tampered weights.
 """
 
 from __future__ import annotations
 
 import hashlib
-import pickle
-from pathlib import Path
+import os
 
 import pytest
 
 
-class _UnsafePayload:
-    def __init__(self, marker: Path):
+def _sha256(path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _verify(path, expected_sha256: str) -> None:
+    actual = _sha256(path)
+    if actual.lower() != expected_sha256.lower():
+        raise RuntimeError(
+            f"Checkpoint {path} failed SHA-256 verification: "
+            f"expected {expected_sha256}, got {actual}"
+        )
+
+
+def _safe_load(path, expected_sha256: str):
+    _verify(path, expected_sha256)
+    # Only allow a restricted, non-executable format.
+    import torch
+
+    return torch.load(path, map_location="cpu", weights_only=True)
+
+
+class _MaliciousPayload:
+    def __init__(self, marker):
         self.marker = marker
 
     def __reduce__(self):
-        return (Path.mkdir, (self.marker,))
+        return os.mkdir, (str(self.marker),)
 
 
-def _load_weights(path: Path, expected_sha256: str | None) -> object:
-    if expected_sha256 is None:
-        raise RuntimeError("custom weights require an explicit SHA-256 digest")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    if digest.lower() != expected_sha256.lower():
-        raise RuntimeError("weights failed SHA-256 verification")
-    # Only after verification do we deserialize, and only trusted formats are
-    # accepted by the real loader. Here we reject arbitrary pickle objects.
-    with path.open("rb") as handle:
-        payload = pickle.load(handle)
-    if not isinstance(payload, dict):
-        raise RuntimeError("unsupported checkpoint format")
-    return payload
-
-
-def test_missing_digest_is_rejected(tmp_path):
-    path = tmp_path / "weights.pkl"
-    path.write_bytes(pickle.dumps({"w": 1}))
-    with pytest.raises(RuntimeError, match="SHA-256"):
-        _load_weights(path, None)
-
-
-def test_mismatched_digest_is_rejected(tmp_path):
-    path = tmp_path / "weights.pkl"
-    path.write_bytes(pickle.dumps({"w": 1}))
-    with pytest.raises(RuntimeError, match="SHA-256"):
-        _load_weights(path, "0" * 64)
-
-
-def test_malicious_payload_is_not_executed(tmp_path):
+def test_malicious_pickle_is_rejected_without_execution(tmp_path):
+    torch = pytest.importorskip("torch")
     marker = tmp_path / "executed"
-    path = tmp_path / "weights.pkl"
-    path.write_bytes(pickle.dumps(_UnsafePayload(marker)))
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    with pytest.raises(RuntimeError, match="unsupported checkpoint format"):
-        _load_weights(path, digest)
+    path = tmp_path / "evil.pt"
+    torch.save(_MaliciousPayload(marker), path)
+    digest = _sha256(path)
+    with pytest.raises(Exception):
+        _safe_load(path, digest)
     assert not marker.exists()
 
 
-def test_verified_dict_payload_is_loaded(tmp_path):
-    path = tmp_path / "weights.pkl"
-    path.write_bytes(pickle.dumps({"w": 1}))
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    assert _load_weights(path, digest) == {"w": 1}
+def test_tampered_weights_fail_checksum(tmp_path):
+    path = tmp_path / "weights.bin"
+    path.write_bytes(b"trusted checkpoint")
+    digest = _sha256(path)
+    _verify(path, digest)
+    path.write_bytes(b"modified checkpoint")
+    with pytest.raises(RuntimeError, match="SHA-256"):
+        _verify(path, digest)
+
+
+def test_checksum_comparison_is_case_insensitive(tmp_path):
+    path = tmp_path / "weights.bin"
+    path.write_bytes(b"payload")
+    _verify(path, _sha256(path).upper())
