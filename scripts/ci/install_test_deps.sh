@@ -1,25 +1,16 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: Apache-2.0
-# Minimal dependency installer for the sonar-fix regression tests.
-# Installs this repo without resolving its full runtime dependency tree,
-# then installs only the packages the tests actually need.
+# Install only the minimal dependencies needed by the self-contained quant
+# regression tests. Deliberately avoids `pip install -e python`, which pulls
+# the full sglang dependency set (torch, triton, nvidia-*, ...).
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "${REPO_ROOT}"
-
-echo "== python: $(python --version 2>&1)"
-echo "== pip: $(python -m pip --version 2>&1)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 python -m pip install --upgrade pip
+python -m pip install \
+  -r "${SCRIPT_DIR}/requirements-test-min.txt" \
+  -c "${SCRIPT_DIR}/constraints-ci.txt"
 
-# Install the project itself without pulling in runtime deps.
-python -m pip install --no-deps -e .
-
-# Install the minimal test requirements only.
-python -m pip install -r "${REPO_ROOT}/requirements-test-min.txt"
-
-echo "== installed packages (filtered):"
-python -m pip list | grep -Ei 'pytest|sglang' || true
-
-echo "== install_test_deps.sh done"
+echo "Minimal test dependencies installed."
+echo "Run tests with: PYTHONPATH=${REPO_ROOT}/python python -m pytest -q test/registered/quant"
