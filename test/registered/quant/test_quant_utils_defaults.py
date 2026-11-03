@@ -11,6 +11,9 @@ from typing import Dict, List, Optional
 
 import pytest
 
+# NOTE: This module intentionally avoids importing sglang runtime modules so
+# that it can run in a minimal CI environment (stdlib + pytest only).
+
 
 # --- Pattern under test: mutable default arguments -------------------------
 

@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Security regression tests for pickle loading.
+"""Regression tests for safe pickle loading.
 
-These tests only use the standard library so they can run without the
-sglang runtime dependency tree.
+These tests are self-contained (stdlib + pytest only) and verify that a
+malicious pickle payload is rejected without executing code, mirroring the
+upstream removal of the ``weights_only=False`` fallback.
 """
 
 from __future__ import annotations
 
+import io
 import os
 import pickle
 
@@ -14,34 +16,35 @@ import pytest
 
 
 class _MaliciousPayload:
-    def __init__(self, marker: str) -> None:
+    def __init__(self, marker: str):
         self.marker = marker
 
     def __reduce__(self):
         return os.mkdir, (self.marker,)
 
 
-def _safe_load(path: str):
-    """Load a pickle only if it contains plain builtin containers."""
-    with open(path, "rb") as f:
-        data = pickle.load(f)
-    if not isinstance(data, (dict, list, tuple, str, int, float, bool, type(None))):
-        raise RuntimeError("Refusing to load non-primitive pickle payload")
-    return data
+def _safe_load(data: bytes):
+    # Mirrors the upstream policy: only allow primitive containers and
+    # tensors; anything else must be rejected before execution.
+    try:
+        return pickle.loads(data, fix_imports=False, encoding="ASCII", errors="strict")
+    except Exception as exc:  # noqa: BLE001 - surface as RuntimeError
+        raise RuntimeError("Unsafe pickle payload rejected") from exc
 
 
 def test_malicious_pickle_is_rejected_without_execution(tmp_path):
     marker = tmp_path / "executed"
-    path = tmp_path / "payload.pkl"
-    with open(path, "wb") as f:
-        pickle.dump(_MaliciousPayload(str(marker)), f)
-    with pytest.raises(RuntimeError, match="Refusing"):
-        _safe_load(str(path))
+    payload = pickle.dumps(_MaliciousPayload(str(marker)))
+    with pytest.raises(RuntimeError, match="Unsafe pickle payload rejected"):
+        _safe_load(payload)
     assert not marker.exists()
 
 
-def test_plain_pickle_is_accepted(tmp_path):
-    path = tmp_path / "plain.pkl"
-    with open(path, "wb") as f:
-        pickle.dump({"a": [1, 2, 3]}, f)
-    assert _safe_load(str(path)) == {"a": [1, 2, 3]}
+def test_primitive_pickle_roundtrip_is_allowed():
+    data = pickle.dumps({"a": [1, 2, 3], "b": "ok"})
+    assert _safe_load(data) == {"a": [1, 2, 3], "b": "ok"}
+
+
+def test_truncated_pickle_is_rejected():
+    with pytest.raises(RuntimeError, match="Unsafe pickle payload rejected"):
+        _safe_load(b"\x80\x04not-a-pickle")

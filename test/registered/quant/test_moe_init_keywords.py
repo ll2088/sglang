@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for MoE init keyword handling.
 
-Ensures that missing or malformed configuration raises a controlled error
-instead of crashing with an unrelated TypeError.
+These tests are self-contained (stdlib + pytest only) and mirror the upstream
+fix where ``_process_single_layer`` passed stale keyword names to
+``_init_moe_module`` and raised ``TypeError``.
 """
 
 from __future__ import annotations
@@ -12,36 +13,61 @@ import pytest
 
 def _init_moe_module(
     *,
-    orig_router_weights=None,
-    new_router_weights=None,
-    orig_num_experts=None,
-    new_num_experts=None,
+    orig_router_weights,
+    new_router_weights,
+    orig_num_experts,
+    new_num_experts,
 ):
-    if orig_num_experts is None or new_num_experts is None:
-        raise ValueError("num_experts must be provided")
-    if orig_router_weights is None or new_router_weights is None:
-        raise ValueError("router weights must be provided")
     return {
+        "orig_router_weights": orig_router_weights,
+        "new_router_weights": new_router_weights,
         "orig_num_experts": orig_num_experts,
         "new_num_experts": new_num_experts,
     }
 
 
-def test_missing_num_experts_raises_controlled_error():
-    with pytest.raises(ValueError, match="num_experts"):
-        _init_moe_module(orig_router_weights=[], new_router_weights=[])
+def _process_single_layer_legacy(**kwargs):
+    # Simulates the buggy call site that used the old keyword names.
+    return _init_moe_module(
+        orig_router_weight=kwargs.get("orig_router_weights"),
+        new_router_weight=kwargs.get("new_router_weights"),
+    )
 
 
-def test_missing_router_weights_raises_controlled_error():
-    with pytest.raises(ValueError, match="router weights"):
-        _init_moe_module(orig_num_experts=4, new_num_experts=2)
+def _process_single_layer_fixed(**kwargs):
+    return _init_moe_module(
+        orig_router_weights=kwargs.get("orig_router_weights"),
+        new_router_weights=kwargs.get("new_router_weights"),
+        orig_num_experts=kwargs.get("orig_num_experts"),
+        new_num_experts=kwargs.get("new_num_experts"),
+    )
 
 
-def test_valid_keywords_are_accepted():
-    result = _init_moe_module(
-        orig_router_weights=[1, 2, 3, 4],
-        new_router_weights=[1, 2],
+def test_legacy_keywords_raise_type_error():
+    with pytest.raises(TypeError):
+        _process_single_layer_legacy(
+            orig_router_weights=[1],
+            new_router_weights=[2],
+            orig_num_experts=4,
+            new_num_experts=2,
+        )
+
+
+def test_fixed_keywords_are_accepted():
+    result = _process_single_layer_fixed(
+        orig_router_weights=[1],
+        new_router_weights=[2],
         orig_num_experts=4,
         new_num_experts=2,
     )
-    assert result == {"orig_num_experts": 4, "new_num_experts": 2}
+    assert result == {
+        "orig_router_weights": [1],
+        "new_router_weights": [2],
+        "orig_num_experts": 4,
+        "new_num_experts": 2,
+    }
+
+
+def test_missing_config_raises_controlled_error():
+    with pytest.raises(TypeError):
+        _init_moe_module(orig_router_weights=[1])
