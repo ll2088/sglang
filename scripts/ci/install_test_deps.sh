@@ -1,25 +1,34 @@
 #!/usr/bin/env bash
-# Install the minimal dependency set for the quant regression tests.
-#
-# The tests under test/registered/quant/ are intentionally self-contained and
-# do not import sglang, so we must NOT run `pip install -e python` (which
-# resolves the full sglang dependency tree). Instead we install the local
-# package without dependencies and add only the minimal test requirements.
+# SPDX-License-Identifier: Apache-2.0
+# Install the minimal dependency set needed by the registered quant tests
+# without letting pip resolve the full sglang dependency tree.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "${REPO_ROOT}"
 
-PYTHON_BIN="${PYTHON_BIN:-python}"
+CONSTRAINTS="${REPO_ROOT}/scripts/ci/constraints-ci.txt"
+REQUIREMENTS="${REPO_ROOT}/scripts/ci/requirements-test-min.txt"
 
-"${PYTHON_BIN}" -m pip install --upgrade pip
-"${PYTHON_BIN}" -m pip install \
-  -r "${SCRIPT_DIR}/requirements-test-min.txt" \
-  -c "${SCRIPT_DIR}/constraints-ci.txt"
-
-# Install the local package without pulling in its runtime dependencies.
-if [ -d "${REPO_ROOT}/python" ]; then
-  "${PYTHON_BIN}" -m pip install --no-deps -e "${REPO_ROOT}/python"
+if [[ ! -f "${CONSTRAINTS}" ]]; then
+  echo "missing constraints file: ${CONSTRAINTS}" >&2
+  exit 1
+fi
+if [[ ! -f "${REQUIREMENTS}" ]]; then
+  echo "missing requirements file: ${REQUIREMENTS}" >&2
+  exit 1
 fi
 
-"${PYTHON_BIN}" -m pytest --version
+python -m pip install --upgrade pip
+
+# Install the local package without dependency resolution. This is the key
+# step: a plain `pip install -e python` would pull py-spy, pybase64,
+# quack-kernels and the rest of the sglang runtime dependency set.
+python -m pip install --no-deps -e "${REPO_ROOT}/python"
+
+# Install only the minimal test dependencies, constrained by the CI pins.
+python -m pip install \
+  -c "${CONSTRAINTS}" \
+  -r "${REQUIREMENTS}"
+
+echo "test dependencies installed (no full sglang dependency resolution)"

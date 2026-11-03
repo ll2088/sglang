@@ -1,3 +1,5 @@
-# Minimal dependencies for the quant regression tests.
-# These tests are self-contained and do not import sglang at runtime.
-pytest>=7.4,<9
+# SPDX-License-Identifier: Apache-2.0
+# Minimal dependency set for the registered quant regression tests.
+# Keep this list small: these tests are intentionally self-contained and do
+# not import the sglang runtime.
+pytest>=7.0
