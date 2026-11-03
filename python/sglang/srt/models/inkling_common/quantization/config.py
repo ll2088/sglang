@@ -137,6 +137,10 @@ class InklingModelOptNvfp4Config(ModelOptFp4Config, InklingQuantizationConfigBas
         moe_ep_size: int = 1,
         nvfp4_moe_backend: str = "trtllm-routed",
     ) -> None:
+        if exclude_modules is None:
+            exclude_modules = []
+        if packed_modules_mapping is None:
+            packed_modules_mapping = {}
         # unfortunately parent types are completely incorrect
         super().__init__(
             is_checkpoint_nvfp4_serialized=is_checkpoint_nvfp4_serialized,
