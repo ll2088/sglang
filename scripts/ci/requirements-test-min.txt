@@ -1,4 +1,6 @@
-# Minimal, self-contained test dependencies for the quant regression suite.
-# These tests intentionally avoid importing sglang so that CI does not need
-# to resolve the full runtime dependency tree.
-pytest>=7.4,<9
+# SPDX-License-Identifier: Apache-2.0
+# Minimal dependencies required by the ported regression tests.
+# These tests are self-contained and do not import sglang.
+pytest
+numpy
+torch

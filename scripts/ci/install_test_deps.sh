@@ -1,40 +1,41 @@
 #!/usr/bin/env bash
-# Install only the minimal dependencies required by the self-contained
-# regression tests. Never install the sglang package itself here: doing so
-# triggers resolution of the full runtime dependency tree (py-spy, pyzmq,
-# quack-kernels, ...) which is unnecessary for these tests.
+# SPDX-License-Identifier: Apache-2.0
+# Minimal, reproducible test dependency installer for the ported regression
+# tests. It intentionally avoids resolving sglang's full dependency tree.
 set -euo pipefail
+
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+EXPECTED_PYTHON="${EXPECTED_PYTHON:-3.12}"
+
+actual_version="$($PYTHON_BIN -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+if [[ "$actual_version" != "$EXPECTED_PYTHON" ]]; then
+  echo "ERROR: expected Python ${EXPECTED_PYTHON}, got ${actual_version}" >&2
+  exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+CONSTRAINTS="${SCRIPT_DIR}/constraints-ci.txt"
+REQUIREMENTS="${SCRIPT_DIR}/requirements-test-min.txt"
 
-log() { printf '[install_test_deps] %s\n' "$*" >&2; }
-
-log "python: $(${PYTHON_BIN} --version 2>&1)"
-log "repo root: ${REPO_ROOT}"
-
-# Refuse to run under an interpreter that has no matching wheels for the
-# pinned test dependencies (e.g. cp314 during the migration window).
-if ! ${PYTHON_BIN} - <<'PY'
-import sys
-if sys.version_info < (3, 9) or sys.version_info >= (3, 14):
-    raise SystemExit(1)
-PY
-then
-  log "unsupported Python version; expected >=3.9,<3.14"
+if [[ ! -f "$CONSTRAINTS" ]]; then
+  echo "ERROR: missing constraints file: $CONSTRAINTS" >&2
+  exit 1
+fi
+if [[ ! -f "$REQUIREMENTS" ]]; then
+  echo "ERROR: missing requirements file: $REQUIREMENTS" >&2
   exit 1
 fi
 
-log "installing minimal test dependencies (no sglang, no deps)"
-${PYTHON_BIN} -m pip install \
-  --no-deps \
-  --disable-pip-version-check \
-  -r "${SCRIPT_DIR}/requirements-test-min.txt" \
-  -c "${SCRIPT_DIR}/constraints-ci.txt"
+# Install only the minimal test dependencies. --no-deps prevents pip from
+# pulling in sglang's full runtime dependency set (py-spy, pyzmq, ...).
+"$PYTHON_BIN" -m pip install --no-deps \
+  -c "$CONSTRAINTS" \
+  -r "$REQUIREMENTS"
 
-log "verifying pytest import"
-${PYTHON_BIN} -c "import pytest; print('pytest', pytest.__version__)"
+# Install the local package without dependencies so imports resolve to the
+# working tree, but no heavy runtime deps are pulled in.
+"$PYTHON_BIN" -m pip install --no-deps -e "${REPO_ROOT}/python"
 
-log "done"
+echo "Test dependencies installed for Python ${actual_version}"

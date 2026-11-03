@@ -1,6 +1,6 @@
-# Pin the interpreter-adjacent packages that previously pulled cp314 wheels
-# during environment preparation. Keep this list intentionally small.
-pytest>=7.4,<9
-pluggy>=1.0,<2
-iniconfig>=2.0,<3
-packaging>=23,<26
+# SPDX-License-Identifier: Apache-2.0
+# Pinned versions for the minimal CI test environment.
+# Keep this list small; it must not pull in sglang's full runtime deps.
+pytest==8.3.4
+numpy==1.26.4
+torch==2.5.1
