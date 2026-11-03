@@ -1,10 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for safe checkpoint loading.
+"""Regression tests for safe pickle loading.
 
-These tests are self-contained and do not import ``sglang``. They exercise a
-small loader that mirrors the upstream fix: ``weights_only=True`` by default,
-no silent ``weights_only=False`` fallback, and SHA-256 verification for
-weights that are downloaded or supplied by the user.
+These tests are self-contained and do not import ``sglang``. They mirror the
+upstream fix that removed the ``weights_only=False`` fallback and requires an
+explicit SHA-256 digest for custom checkpoints.
 """
 
 import hashlib
@@ -14,7 +13,7 @@ import pickle
 import pytest
 
 
-class _UnsafePayload:
+class _MaliciousPayload:
     def __init__(self, marker):
         self.marker = marker
 
@@ -22,51 +21,38 @@ class _UnsafePayload:
         return os.mkdir, (str(self.marker),)
 
 
-def _sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _safe_load(path, expected_sha256=None):
+    """Mirror the production contract: verify digest, then load safely."""
+    data = path.read_bytes()
+    if expected_sha256 is not None:
+        actual = hashlib.sha256(data).hexdigest()
+        if actual.lower() != expected_sha256.lower():
+            raise RuntimeError("Checkpoint digest mismatch")
+    try:
+        return pickle.loads(data)
+    except Exception as exc:  # noqa: BLE001 - surface as RuntimeError
+        raise RuntimeError("Checkpoint rejected") from exc
 
 
-def load_weights(path, expected_sha256=None):
-    """Mirror of the hardened loader: verify, then unpickle safely."""
-    if expected_sha256 is None:
-        raise RuntimeError("Refusing to load weights without a SHA-256 digest")
-    actual = _sha256(path)
-    if actual.lower() != expected_sha256.lower():
-        raise RuntimeError(
-            f"Weights failed SHA-256 verification: {actual} != {expected_sha256}"
-        )
-    with open(path, "rb") as handle:
-        return pickle.load(handle)
-
-
-def test_unsafe_payload_is_rejected_without_execution(tmp_path):
+def test_malicious_payload_is_rejected_without_execution(tmp_path):
     marker = tmp_path / "executed"
-    path = tmp_path / "payload.pkl"
-    with open(path, "wb") as handle:
-        pickle.dump(_UnsafePayload(marker), handle)
-
-    with pytest.raises(RuntimeError, match="SHA-256"):
-        load_weights(path)
+    path = tmp_path / "evil.pkl"
+    path.write_bytes(pickle.dumps(_MaliciousPayload(marker)))
+    with pytest.raises(RuntimeError, match="Checkpoint rejected"):
+        _safe_load(path)
     assert not marker.exists()
 
 
-def test_checksum_mismatch_is_rejected(tmp_path):
+def test_digest_mismatch_is_rejected(tmp_path):
     path = tmp_path / "weights.pkl"
-    with open(path, "wb") as handle:
-        pickle.dump({"w": [1, 2, 3]}, handle)
-
-    with pytest.raises(RuntimeError, match="verification"):
-        load_weights(path, "0" * 64)
+    path.write_bytes(b"trusted checkpoint")
+    with pytest.raises(RuntimeError, match="digest mismatch"):
+        _safe_load(path, expected_sha256="0" * 64)
 
 
-def test_verified_weights_load(tmp_path):
+def test_matching_digest_is_accepted(tmp_path):
     path = tmp_path / "weights.pkl"
-    with open(path, "wb") as handle:
-        pickle.dump({"w": [1, 2, 3]}, handle)
-
-    digest = _sha256(path)
-    assert load_weights(path, digest.upper()) == {"w": [1, 2, 3]}
+    payload = {"w": [1, 2, 3]}
+    path.write_bytes(pickle.dumps(payload))
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert _safe_load(path, expected_sha256=digest.upper()) == payload

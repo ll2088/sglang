@@ -1,38 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for MoE init keyword handling.
 
-Mirrors the upstream Puzzletron fix: the init helper must accept the current
-keyword names and raise a clear ``TypeError`` for stale ones instead of
-crashing deep inside the call.
+Mirrors the upstream Puzzletron fix where ``_init_moe_module`` was called with
+stale keyword names, raising ``TypeError``. These tests are self-contained and
+do not import ``sglang``.
 """
 
 import pytest
 
 
-CURRENT_KEYWORDS = (
-    "orig_router_weights",
-    "new_router_weights",
-    "orig_num_experts",
-    "new_num_experts",
-)
-
-LEGACY_KEYWORDS = ("orig_router_weight", "new_router_weight")
-
-
-def init_moe_module(**kwargs):
-    missing = [name for name in CURRENT_KEYWORDS if name not in kwargs]
-    if missing:
-        raise TypeError(
-            "init_moe_module() missing required keyword arguments: "
-            + ", ".join(missing)
-        )
-    return {name: kwargs[name] for name in CURRENT_KEYWORDS}
+def _init_moe_module(*, orig_router_weights, new_router_weights, orig_num_experts, new_num_experts):
+    if orig_num_experts <= 0 or new_num_experts <= 0:
+        raise ValueError("num_experts must be positive")
+    return {
+        "orig_router_weights": orig_router_weights,
+        "new_router_weights": new_router_weights,
+        "orig_num_experts": orig_num_experts,
+        "new_num_experts": new_num_experts,
+    }
 
 
 def test_current_keywords_are_accepted():
-    result = init_moe_module(
-        orig_router_weights=[0.1],
-        new_router_weights=[0.2],
+    result = _init_moe_module(
+        orig_router_weights=[1, 2, 3, 4],
+        new_router_weights=[1, 3],
         orig_num_experts=4,
         new_num_experts=2,
     )
@@ -40,19 +31,22 @@ def test_current_keywords_are_accepted():
     assert result["new_num_experts"] == 2
 
 
-@pytest.mark.parametrize("legacy", LEGACY_KEYWORDS)
-def test_legacy_keywords_raise_clear_type_error(legacy):
-    kwargs = {
-        "orig_router_weights": [0.1],
-        "new_router_weights": [0.2],
-        "orig_num_experts": 4,
-        "new_num_experts": 2,
-    }
-    kwargs[legacy] = [0.3]
-    with pytest.raises(TypeError, match="missing required keyword arguments"):
-        init_moe_module(**kwargs)
+def test_legacy_keywords_raise_type_error():
+    with pytest.raises(TypeError):
+        _init_moe_module(
+            orig_router_weight=[1, 2, 3, 4],
+            new_router_weight=[1, 3],
+            orig_num_experts=4,
+            new_num_experts=2,
+        )
 
 
-def test_missing_config_raises_type_error():
-    with pytest.raises(TypeError, match="missing required keyword arguments"):
-        init_moe_module(orig_router_weights=[0.1])
+@pytest.mark.parametrize("orig,new", [(0, 2), (4, 0), (-1, 2)])
+def test_invalid_expert_counts_raise_controlled_error(orig, new):
+    with pytest.raises(ValueError, match="num_experts must be positive"):
+        _init_moe_module(
+            orig_router_weights=[],
+            new_router_weights=[],
+            orig_num_experts=orig,
+            new_num_experts=new,
+        )

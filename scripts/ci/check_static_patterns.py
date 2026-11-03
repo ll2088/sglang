@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: Apache-2.0
 """Static checks for the patterns fixed by the upstream port.
 
-Scans the touched production files for:
-  * mutable default arguments (dict/list/set literals in signatures)
-  * ``hasattr`` used on dataclass optional fields
-  * in-place mutation of module-level mapping constants
+This script is intentionally dependency-free (stdlib only) so it can run in
+CI before any package installation. It scans the files touched by the port
+for:
 
-Exits non-zero when a violation is found so CI can gate on it.
+* mutable default arguments (dict/list/set literals in signatures),
+* in-place mutation of module-level dicts,
+* ``hasattr`` checks on dataclass fields.
+
+Exit code is non-zero when a violation is found.
 """
 
 from __future__ import annotations
@@ -34,88 +36,102 @@ def _is_mutable_default(node: ast.AST) -> bool:
     return isinstance(node, MUTABLE_LITERALS)
 
 
-def check_mutable_defaults(tree: ast.AST, path: str) -> list[str]:
+def _check_mutable_defaults(tree: ast.AST, path: Path) -> list[str]:
     problems: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         args = node.args
-        all_defaults = list(args.defaults) + [d for d in args.kw_defaults if d]
+        all_defaults = list(args.defaults) + [d for d in args.kw_defaults if d is not None]
         for default in all_defaults:
             if _is_mutable_default(default):
                 problems.append(
-                    f"{path}:{node.lineno}: mutable default in {node.name}()"
+                    f"{path}:{default.lineno}: mutable default in {node.name}()"
                 )
     return problems
 
 
-def check_hasattr_on_dataclass_fields(tree: ast.AST, path: str) -> list[str]:
+def _check_hasattr_on_dataclass(tree: ast.AST, path: Path) -> list[str]:
     problems: list[str] = []
+    dataclass_fields: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            is_dataclass = any(
+                (isinstance(d, ast.Name) and d.id == "dataclass")
+                or (isinstance(d, ast.Attribute) and d.attr == "dataclass")
+                for d in node.decorator_list
+            )
+            if not is_dataclass:
+                continue
+            for stmt in node.body:
+                if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                    dataclass_fields.add(stmt.target.id)
+    if not dataclass_fields:
+        return problems
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
         if not (isinstance(func, ast.Name) and func.id == "hasattr"):
             continue
-        if len(node.args) != 2:
+        if len(node.args) < 2:
             continue
         attr = node.args[1]
-        if isinstance(attr, ast.Constant) and isinstance(attr.value, str):
-            name = attr.value
-            if name in {"vocab_embedding", "lm_head"}:
-                problems.append(
-                    f"{path}:{node.lineno}: hasattr on dataclass field {name!r}"
-                )
+        if isinstance(attr, ast.Constant) and attr.value in dataclass_fields:
+            problems.append(
+                f"{path}:{node.lineno}: hasattr() on dataclass field {attr.value!r}"
+            )
     return problems
 
 
-def check_module_level_mutation(tree: ast.AST, path: str) -> list[str]:
+def _check_module_dict_mutation(tree: ast.AST, path: Path) -> list[str]:
     problems: list[str] = []
-    module_constants = {
-        target.id
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        for target in node.targets
-        if isinstance(target, ast.Name) and target.id.isupper()
-    }
+    module_dicts: set[str] = set()
+    for node in tree.body if isinstance(tree, ast.Module) else []:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and isinstance(node.value, ast.Dict):
+                    module_dicts.add(target.id)
+    if not module_dicts:
+        return problems
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
         if not isinstance(func, ast.Attribute):
             continue
-        if func.attr not in {"update", "append", "extend", "setdefault", "pop"}:
+        if func.attr not in {"update", "setdefault", "pop", "clear"}:
             continue
         value = func.value
-        if isinstance(value, ast.Name) and value.id in module_constants:
+        if isinstance(value, ast.Name) and value.id in module_dicts:
             problems.append(
-                f"{path}:{node.lineno}: in-place mutation of module constant "
-                f"{value.id}"
+                f"{path}:{node.lineno}: in-place mutation of module dict {value.id!r}"
             )
     return problems
 
 
 def main() -> int:
-    problems: list[str] = []
+    all_problems: list[str] = []
     for rel in TARGET_FILES:
         path = REPO_ROOT / rel
         if not path.exists():
             continue
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=rel)
-        problems.extend(check_mutable_defaults(tree, rel))
-        problems.extend(check_hasattr_on_dataclass_fields(tree, rel))
-        problems.extend(check_module_level_mutation(tree, rel))
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError as exc:
+            all_problems.append(f"{path}: syntax error: {exc}")
+            continue
+        all_problems.extend(_check_mutable_defaults(tree, path))
+        all_problems.extend(_check_hasattr_on_dataclass(tree, path))
+        all_problems.extend(_check_module_dict_mutation(tree, path))
 
-    if problems:
-        print("Static pattern violations found:")
-        for problem in problems:
-            print(f"  {problem}")
+    if all_problems:
+        for problem in all_problems:
+            print(problem, file=sys.stderr)
         return 1
-
-    print("No mutable-default / hasattr / module-mutation violations found.")
+    print("static pattern checks passed")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

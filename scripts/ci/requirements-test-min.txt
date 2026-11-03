@@ -1,4 +1,4 @@
-# Minimal test dependencies for the quant regression tests.
-# These tests are self-contained and must not import sglang, so the full
-# runtime dependency tree (torch, flashinfer, ...) is intentionally absent.
+# Minimal, self-contained test dependencies for the quant regression suite.
+# These tests intentionally avoid importing sglang so that CI does not need
+# to resolve the full runtime dependency tree.
 pytest>=7.4,<9

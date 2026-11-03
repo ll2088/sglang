@@ -1,6 +1,6 @@
-# Pins for the minimal CI environment. Keep these compatible with the
-# interpreter used by CI (3.10-3.12); do not add sglang runtime deps here.
-pytest==8.3.4
-pluggy==1.5.0
-iniconfig==2.0.0
-packaging==24.2
+# Pin the interpreter-adjacent packages that previously pulled cp314 wheels
+# during environment preparation. Keep this list intentionally small.
+pytest>=7.4,<9
+pluggy>=1.0,<2
+iniconfig>=2.0,<3
+packaging>=23,<26

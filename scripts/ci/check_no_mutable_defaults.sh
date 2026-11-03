@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: Apache-2.0
-# Thin wrapper so CI can call the static pattern checker from a shell step.
+# Thin wrapper around the stdlib-only static checker. Kept as a separate
+# entry point so CI can call it without knowing the Python module layout.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec python3 "${SCRIPT_DIR}/check_static_patterns.py" "$@"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+
+exec "${PYTHON_BIN}" "${SCRIPT_DIR}/check_static_patterns.py"
