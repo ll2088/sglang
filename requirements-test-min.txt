@@ -1,0 +1,4 @@
+# Minimal dependencies for the self-contained quant regression tests.
+# These tests intentionally do NOT import sglang, so the full runtime
+# dependency tree must not be installed for them.
+pytest>=7.0
