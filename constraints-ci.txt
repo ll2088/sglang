@@ -1,7 +1,7 @@
-# Minimal pip constraints to keep CI dependency resolution working on
-# Python 3.14 runners where some optional wheels are not yet published.
-# These packages are optional for the lightweight regression tests in
-# test/registered/quant/ and are not required to import the modules under test.
-quack-kernels==0.6.5 ; python_version < "3.14"
-py-spy ; python_version < "3.14"
-pyzmq ; python_version < "3.14"
+# CI-only constraints to keep the verification environment minimal.
+# These packages are pulled by sglang's dependency resolution but are not
+# needed for the pure-Python regression tests in test/registered/quant/.
+# Pin to versions that have wheels for the CI interpreter, or exclude the
+# versions observed failing in the environment-prep logs.
+py-spy!=0.4.3
+quack-kernels!=0.6.5
