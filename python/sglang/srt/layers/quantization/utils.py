@@ -76,6 +76,12 @@ def is_layer_skipped(
     # proj_name: q_proj
     proj_name = prefix.split(".")[-1]
 
+    if fused_mapping is not None and not isinstance(fused_mapping, Mapping):
+        raise TypeError(
+            "fused_mapping must be a mapping of fused layer names to shard "
+            f"names, got {type(fused_mapping).__name__}"
+        )
+
     # Fused layers like gate_up_proj or qkv_proj will not be fused
     # in the safetensors checkpoint. So, we convert the name
     # from the fused version to unfused + check to make sure that

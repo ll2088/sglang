@@ -32,6 +32,11 @@ def should_ignore_layer(
         ignore = ()
     if fused_mapping is None:
         fused_mapping = MappingProxyType({})
+    elif not isinstance(fused_mapping, Mapping):
+        raise TypeError(
+            "fused_mapping must be a mapping of fused layer names to shard "
+            f"names, got {type(fused_mapping).__name__}"
+        )
 
     # layer_name = model.layers.0.self_attn.qkv_proj
     # proj_name = qkv_proj

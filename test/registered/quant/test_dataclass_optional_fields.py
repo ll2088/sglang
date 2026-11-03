@@ -23,6 +23,11 @@ def _has_required_fields(holder: _OptionalFields) -> bool:
     return holder.vocab_embedding is not None and holder.lm_head is not None
 
 
+def _has_required_fields_via_hasattr(holder: _OptionalFields) -> bool:
+    # The buggy pattern: ``hasattr`` is always True for dataclass fields.
+    return hasattr(holder, "vocab_embedding") and hasattr(holder, "lm_head")
+
+
 @pytest.mark.parametrize(
     ("vocab_embedding", "lm_head", "expected"),
     [
@@ -38,3 +43,6 @@ def test_optional_dataclass_fields_use_is_not_none(vocab_embedding, lm_head, exp
     assert hasattr(holder, "vocab_embedding")
     assert hasattr(holder, "lm_head")
     assert _has_required_fields(holder) is expected
+    # The buggy ``hasattr`` check would always report True; the fixed check
+    # must not, otherwise missing optional fields would crash downstream.
+    assert _has_required_fields_via_hasattr(holder) is True

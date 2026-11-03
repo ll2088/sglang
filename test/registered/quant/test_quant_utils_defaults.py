@@ -23,6 +23,11 @@ _FALLBACK_FUSED_SHARDS = {
 def _effective_fused(fused_mapping=None, proj_name="qkv_proj"):
     # Mirror the production fix: copy per-key lists so callers can never
     # mutate the module-level mapping through the returned view.
+    if fused_mapping is not None and not isinstance(fused_mapping, dict):
+        raise TypeError(
+            "fused_mapping must be a mapping of fused layer names to shard "
+            f"names, got {type(fused_mapping).__name__}"
+        )
     if fused_mapping is not None and proj_name in fused_mapping:
         return {key: list(value) for key, value in fused_mapping.items()}
     return {key: list(value) for key, value in _FALLBACK_FUSED_SHARDS.items()}
@@ -61,3 +66,8 @@ def test_caller_mapping_is_copied():
 @pytest.mark.parametrize("proj_name", ["qkv_proj", "gate_up_proj"])
 def test_fallback_mapping_covers_fused_layers(proj_name):
     assert proj_name in _FALLBACK_FUSED_SHARDS
+
+
+def test_non_mapping_fused_mapping_is_rejected():
+    with pytest.raises(TypeError, match="fused_mapping must be a mapping"):
+        _effective_fused(fused_mapping=["qkv_proj"])
