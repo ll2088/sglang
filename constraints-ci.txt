@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-# Constraints for the lightweight quantization regression test environment.
-# Keep this list minimal: the tests under test/registered/quant/ only require
-# the standard library and pytest.
-pytest>=8.0,<9.0
+# Pinned versions for the minimal CI test environment.
+# Keep these compatible with the Python version used by CI (3.10-3.12).
+# Do not add sglang itself here: the regression tests are self-contained.
+pytest==8.3.4
+pytest-randomly==3.16.0
+numpy==1.26.4
+torch==2.5.1

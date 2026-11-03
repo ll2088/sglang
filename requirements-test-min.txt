@@ -1,5 +1,8 @@
-# Minimal dependencies for the self-contained quant regression tests.
-# Install with: pip install -r requirements-test-min.txt
-# Do NOT use `pip install -e python` for these tests; it resolves the full
-# sglang dependency set (py-spy, pyzmq, quack-kernels, ...) and is unnecessary.
-pytest>=7.0
+# SPDX-License-Identifier: Apache-2.0
+# Minimal requirements for the quant regression tests.
+# These tests only need the standard library plus pytest; torch/numpy are
+# listed because the quantization utilities import them at module scope.
+pytest
+pytest-randomly
+numpy
+torch
