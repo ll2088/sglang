@@ -1,55 +1,43 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for dataclass optional-field checks.
 
-Mirrors the upstream fix pattern: optional dataclass fields must be checked
-with ``is not None`` rather than ``hasattr`` (which is always true for a
-declared field).
+`hasattr` on a dataclass field is always true, so optional fields must be
+checked with `is not None` instead.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
 
-import pytest
-
 
 @dataclass
-class _OptionalFields:
-    vocab_embedding: Optional[object] = None
-    lm_head: Optional[object] = None
+class _Config:
+    vocab_embedding: Optional[str] = None
+    lm_head: Optional[str] = None
 
 
-def _has_required_fields(obj: _OptionalFields) -> bool:
-    # The fixed pattern: check the value, not the attribute presence.
-    return obj.vocab_embedding is not None and obj.lm_head is not None
+def _has_embedding(config: _Config) -> bool:
+    return config.vocab_embedding is not None
 
 
-def test_hasattr_is_always_true_for_declared_fields():
-    obj = _OptionalFields()
-    # Documents the bug: hasattr is true even when the value is None.
-    assert hasattr(obj, "vocab_embedding")
-    assert hasattr(obj, "lm_head")
+def _has_lm_head(config: _Config) -> bool:
+    return config.lm_head is not None
 
 
-def test_is_not_none_detects_missing_fields():
-    assert not _has_required_fields(_OptionalFields())
-    assert not _has_required_fields(_OptionalFields(vocab_embedding=object()))
-    assert not _has_required_fields(_OptionalFields(lm_head=object()))
+def test_missing_optional_fields_are_detected():
+    config = _Config()
+    assert not _has_embedding(config)
+    assert not _has_lm_head(config)
 
 
-def test_is_not_none_accepts_complete_fields():
-    obj = _OptionalFields(vocab_embedding=object(), lm_head=object())
-    assert _has_required_fields(obj)
+def test_present_optional_fields_are_detected():
+    config = _Config(vocab_embedding="emb", lm_head="head")
+    assert _has_embedding(config)
+    assert _has_lm_head(config)
 
 
-@pytest.mark.parametrize(
-    ("vocab_embedding", "lm_head", "expected"),
-    [
-        (None, None, False),
-        (object(), None, False),
-        (None, object(), False),
-        (object(), object(), True),
-    ],
-)
-def test_optional_field_combinations(vocab_embedding, lm_head, expected):
-    obj = _OptionalFields(vocab_embedding=vocab_embedding, lm_head=lm_head)
-    assert _has_required_fields(obj) is expected
+def test_partial_fields_are_independent():
+    config = _Config(vocab_embedding="emb")
+    assert _has_embedding(config)
+    assert not _has_lm_head(config)

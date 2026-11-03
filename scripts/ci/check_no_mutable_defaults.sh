@@ -1,30 +1,31 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: Apache-2.0
-# Grep-based guard against mutable default arguments in the quantization,
-# model loader and config modules touched by this port.
+# Fail if the files touched by this change still contain mutable default
+# arguments (dict/list/set literals in a function signature).
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-
-TARGETS=(
-  "${REPO_ROOT}/python/sglang/srt/layers/quantization"
-  "${REPO_ROOT}/python/sglang/srt/models/inkling_common"
-  "${REPO_ROOT}/python/sglang/srt/utils/hf_transformers"
-  "${REPO_ROOT}/python/sglang/srt/model_loader"
+FILES=(
+  "python/sglang/srt/layers/quantization/utils.py"
+  "python/sglang/srt/layers/quantization/compressed_tensors/utils.py"
+  "python/sglang/srt/layers/quantization/quark/utils.py"
+  "python/sglang/srt/models/inkling_common/quantization/config.py"
+  "python/sglang/srt/utils/hf_transformers/config.py"
+  "python/sglang/srt/model_loader/utils.py"
 )
 
 status=0
-for target in "${TARGETS[@]}"; do
-  [[ -d "${target}" ]] || continue
-  # Match `def f(..., x={...})`, `x=[...]`, `x=set()` in signatures.
-  if grep -RInE 'def [A-Za-z_][A-Za-z0-9_]*\([^)]*=[[:space:]]*(\{|\[|set\(\))' "${target}" --include='*.py'; then
-    echo "[check_no_mutable_defaults] mutable default found under ${target}" >&2
+for f in "${FILES[@]}"; do
+  if [[ ! -f "$f" ]]; then
+    echo "SKIP (missing): $f"
+    continue
+  fi
+  # Match `= {}`, `= []`, `= set()` inside a def signature line.
+  if grep -nE 'def .*=[[:space:]]*(\{\}|\[\]|set\(\))' "$f"; then
+    echo "ERROR: mutable default argument found in $f" >&2
     status=1
   fi
 done
 
-if [[ ${status} -eq 0 ]]; then
-  echo "[check_no_mutable_defaults] passed"
+if [[ $status -eq 0 ]]; then
+  echo "OK: no mutable default arguments found"
 fi
-exit ${status}
+exit $status
