@@ -9,7 +9,12 @@ from types import MappingProxyType
 
 import pytest
 
-from sglang.srt.layers.quantization import utils as quant_utils
+# Import the module under test lazily so that collection does not require the
+# full sglang runtime (CUDA kernels, sgl_kernel, etc.) to be importable.
+quant_utils = pytest.importorskip(
+    "sglang.srt.layers.quantization.utils",
+    reason="sglang quantization utils require the sglang runtime",
+)
 
 
 def test_fallback_fused_shards_is_not_mutated_by_callers():
