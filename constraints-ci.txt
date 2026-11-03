@@ -1,0 +1,7 @@
+# Minimal pip constraints to keep CI dependency resolution working on
+# Python 3.14 runners where some optional wheels are not yet published.
+# These packages are optional for the lightweight regression tests in
+# test/registered/quant/ and are not required to import the modules under test.
+quack-kernels==0.6.5 ; python_version < "3.14"
+py-spy ; python_version < "3.14"
+pyzmq ; python_version < "3.14"

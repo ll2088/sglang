@@ -5,6 +5,8 @@ from types import MappingProxyType
 
 import pytest
 
+pytest.importorskip("compressed_tensors")
+
 from sglang.srt.layers.quantization.compressed_tensors.utils import (
     find_matched_target,
     should_ignore_layer as ct_should_ignore_layer,

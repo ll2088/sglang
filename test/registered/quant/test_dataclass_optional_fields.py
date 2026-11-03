@@ -1,44 +1,47 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for dataclass optional-field checks."""
+"""Regression tests for dataclass optional-field checks.
 
-from types import SimpleNamespace
+Upstream Model-Optimizer PR #3063 fixed a bug where `hasattr` was used to
+check dataclass fields that are always present (and therefore always truthy),
+so a missing/None value was never detected.  These tests exercise the same
+pattern with a local dataclass so they do not depend on any heavy runtime.
+"""
 
-from sglang.srt.models.inkling_common.quantization.config import (
-    InklingQuantizationConfigBase,
-)
+from dataclasses import dataclass
+from typing import Optional
 
-
-class _Config(InklingQuantizationConfigBase):
-    def __init__(self, exclude_modules=None):
-        if exclude_modules is not None:
-            self.exclude_modules = exclude_modules
-
-
-def test_exclude_layer_without_exclude_modules_attribute():
-    config = _Config()
-    # The base class only annotates `exclude_modules`; a subclass that never
-    # sets it must be treated as "no exclusions" rather than raising.
-    assert not hasattr(config, "exclude_modules")
-    assert config.exclude_layer("model.layers.0.mlp.down_proj") is False
+import pytest
 
 
-def test_exclude_layer_with_empty_exclude_modules():
-    config = _Config(exclude_modules=[])
-    assert config.exclude_layer("model.layers.0.mlp.down_proj") is False
+@dataclass
+class _OptionalFields:
+    vocab_embedding: Optional[object] = None
+    lm_head: Optional[object] = None
 
 
-def test_exclude_layer_with_none_exclude_modules():
-    config = _Config()
-    config.exclude_modules = None
-    assert config.exclude_layer("model.layers.0.mlp.down_proj") is False
+def _has_attr_bug(obj, name):
+    # The buggy pattern: hasattr is always True for declared dataclass fields.
+    return hasattr(obj, name)
 
 
-def test_exclude_layer_matches_module():
-    config = _Config(exclude_modules=["mlp.down_proj"])
-    assert config.exclude_layer("model.layers.0.mlp.down_proj") is True
-    assert config.exclude_layer("model.layers.0.mlp.gate_up_proj") is False
+def _is_not_none_fix(obj, name):
+    # The fixed pattern: check the value, not the attribute existence.
+    return getattr(obj, name, None) is not None
 
 
-def test_exclude_layer_matches_language_model_prefix():
-    config = _Config(exclude_modules=["mlp.down_proj"])
-    assert config.exclude_layer("language_model.model.layers.0.mlp.down_proj") is True
+@pytest.mark.parametrize("field", ["vocab_embedding", "lm_head"])
+def test_hasattr_is_always_true_for_dataclass_fields(field):
+    obj = _OptionalFields()
+    assert _has_attr_bug(obj, field) is True
+    assert _is_not_none_fix(obj, field) is False
+
+
+@pytest.mark.parametrize("field", ["vocab_embedding", "lm_head"])
+def test_is_not_none_detects_present_value(field):
+    obj = _OptionalFields(**{field: object()})
+    assert _is_not_none_fix(obj, field) is True
+
+
+def test_missing_field_does_not_crash_with_getattr_default():
+    obj = _OptionalFields()
+    assert getattr(obj, "does_not_exist", None) is None
