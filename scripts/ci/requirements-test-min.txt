@@ -1,3 +1,2 @@
-# Minimal dependencies for self-contained quant regression tests.
-# These tests must not require a full sglang install (no torch/CUDA).
 pytest>=7.4
+pytest-randomly>=3.15
