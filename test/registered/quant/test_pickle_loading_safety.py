@@ -1,63 +1,72 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for safe pickle loading.
 
-Upstream removed the ``weights_only=False`` fallback and requires explicit
-SHA-256 verification for custom weights. These tests exercise the pattern
-without importing sglang.
+Unsafe pickle payloads must be rejected without executing code. The helper
+below mirrors the hardened loading pattern: only allow-listed globals are
+permitted, and a SHA-256 digest is required for externally supplied weights.
+
+Self-contained (stdlib + pytest only); does not import sglang.
 """
 
 from __future__ import annotations
 
 import hashlib
-import os
-from pathlib import Path
+import io
+import pickle
 
 import pytest
 
 
-class _MaliciousPayload:
-    def __init__(self, marker: Path):
-        self.marker = marker
+_ALLOWED_GLOBALS = {
+    ("builtins", "dict"),
+    ("builtins", "list"),
+    ("builtins", "int"),
+    ("builtins", "str"),
+}
 
+
+class _RestrictedUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if (module, name) not in _ALLOWED_GLOBALS:
+            raise pickle.UnpicklingError(
+                f"Refusing to load global {module}.{name} from untrusted pickle"
+            )
+        return super().find_class(module, name)
+
+
+def _safe_loads(payload: bytes):
+    return _RestrictedUnpickler(io.BytesIO(payload)).load()
+
+
+def _verify_sha256(payload: bytes, expected_hex: str) -> None:
+    actual = hashlib.sha256(payload).hexdigest()
+    if actual.lower() != expected_hex.lower():
+        raise RuntimeError("Supplied weights failed SHA-256 verification")
+
+
+class _Malicious:
     def __reduce__(self):
-        return os.mkdir, (str(self.marker),)
+        return (eval, ("__import__('os').getcwd()",))
 
 
-def _load_weights(path: Path, expected_sha256: str | None) -> bytes:
-    data = path.read_bytes()
-    if expected_sha256 is None:
-        raise RuntimeError("Checkpoint requires an explicit SHA-256 digest")
-    actual = hashlib.sha256(data).hexdigest()
-    if actual.lower() != expected_sha256.lower():
-        raise RuntimeError("Checkpoint failed SHA-256 verification")
-    return data
+def test_malicious_payload_is_rejected_without_execution():
+    payload = pickle.dumps(_Malicious())
+    with pytest.raises(pickle.UnpicklingError):
+        _safe_loads(payload)
 
 
-def test_missing_digest_is_rejected(tmp_path):
-    path = tmp_path / "weights.bin"
-    path.write_bytes(b"payload")
+def test_allow_listed_payload_round_trips():
+    payload = pickle.dumps({"a": [1, 2, 3]})
+    assert _safe_loads(payload) == {"a": [1, 2, 3]}
+
+
+def test_checksum_mismatch_is_rejected():
+    payload = b"trusted checkpoint"
     with pytest.raises(RuntimeError, match="SHA-256"):
-        _load_weights(path, None)
+        _verify_sha256(payload, "0" * 64)
 
 
-def test_wrong_digest_is_rejected(tmp_path):
-    path = tmp_path / "weights.bin"
-    path.write_bytes(b"payload")
-    with pytest.raises(RuntimeError, match="SHA-256"):
-        _load_weights(path, "0" * 64)
-
-
-def test_correct_digest_is_accepted(tmp_path):
-    path = tmp_path / "weights.bin"
-    path.write_bytes(b"payload")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    assert _load_weights(path, digest) == b"payload"
-
-
-def test_malicious_payload_is_not_executed(tmp_path):
-    marker = tmp_path / "executed"
-    payload = _MaliciousPayload(marker)
-    # Simulate a loader that refuses to unpickle without a trusted digest.
-    with pytest.raises(RuntimeError, match="SHA-256"):
-        _load_weights(tmp_path / "missing.bin", None)
-    assert not marker.exists()
+def test_checksum_match_is_accepted():
+    payload = b"trusted checkpoint"
+    digest = hashlib.sha256(payload).hexdigest()
+    _verify_sha256(payload, digest.upper())

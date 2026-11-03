@@ -61,3 +61,13 @@ def test_caller_mapping_is_copied():
 def test_invalid_mapping_raises_type_error():
     with pytest.raises(TypeError):
         _copy_fused_mapping(["not", "a", "mapping"])
+
+
+def test_repeated_calls_do_not_share_state():
+    first = _with_mutable_default(1)
+    second = _with_mutable_default(2)
+    third = _with_mutable_default(3)
+    assert first == {"value": 1}
+    assert second == {"value": 2}
+    assert third == {"value": 3}
+    assert len({id(first), id(second), id(third)}) == 3

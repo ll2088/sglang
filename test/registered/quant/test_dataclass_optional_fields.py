@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for dataclass optional-field checks.
+"""Regression tests for dataclass optional-field presence checks.
 
-Upstream replaced ``hasattr`` checks on dataclass fields (always true) with
-``is not None`` checks. These tests exercise the pattern in isolation so the
-fix can be verified without importing sglang.
+`hasattr` on a dataclass field is always True once the field is declared,
+even when its value is None. Optional fields must be checked with
+`is not None` so that a missing value is handled instead of crashing.
+
+Self-contained (stdlib + pytest only); does not import sglang.
 """
 
 from __future__ import annotations
@@ -15,21 +17,28 @@ import pytest
 
 
 @dataclass
-class _LayerConfig:
+class _ModelConfig:
     vocab_embedding: Optional[object] = None
     lm_head: Optional[object] = None
 
 
-def _pad_embedding_lm_head(config: _LayerConfig) -> bool:
-    # Mirrors the fixed upstream logic: check ``is not None`` rather than
-    # ``hasattr`` (which is always true for dataclass fields).
-    if config.vocab_embedding is None or config.lm_head is None:
-        return False
-    return True
+def _has_attr_based(config: _ModelConfig) -> bool:
+    # The buggy pattern: hasattr is always True for declared dataclass fields.
+    return hasattr(config, "vocab_embedding") and hasattr(config, "lm_head")
+
+
+def _is_not_none_based(config: _ModelConfig) -> bool:
+    return config.vocab_embedding is not None and config.lm_head is not None
+
+
+def test_hasattr_is_always_true_for_declared_fields():
+    config = _ModelConfig()
+    assert _has_attr_based(config) is True
+    assert _is_not_none_based(config) is False
 
 
 @pytest.mark.parametrize(
-    ("vocab", "head", "expected"),
+    ("vocab_embedding", "lm_head", "expected"),
     [
         (None, None, False),
         (object(), None, False),
@@ -37,14 +46,12 @@ def _pad_embedding_lm_head(config: _LayerConfig) -> bool:
         (object(), object(), True),
     ],
 )
-def test_optional_field_presence(vocab, head, expected):
-    config = _LayerConfig(vocab_embedding=vocab, lm_head=head)
-    assert _pad_embedding_lm_head(config) is expected
+def test_is_not_none_detects_missing_fields(vocab_embedding, lm_head, expected):
+    config = _ModelConfig(vocab_embedding=vocab_embedding, lm_head=lm_head)
+    assert _is_not_none_based(config) is expected
 
 
-def test_hasattr_would_mislead():
-    config = _LayerConfig()
-    # ``hasattr`` is always true for dataclass fields, which is exactly the
-    # bug the upstream fix addresses.
-    assert hasattr(config, "vocab_embedding")
-    assert _pad_embedding_lm_head(config) is False
+def test_missing_field_does_not_crash_with_is_not_none():
+    config = _ModelConfig()
+    # The fixed check must not raise even when both optional fields are unset.
+    assert _is_not_none_based(config) is False
