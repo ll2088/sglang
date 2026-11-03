@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for safe pickle loading.
 
-Upstream removed the ``weights_only=False`` fallback and requires an explicit
-SHA-256 for custom weights. These tests exercise the local helper that
-implements the same contract without importing the full sglang runtime.
+Mirrors the upstream fix pattern: untrusted checkpoints must be loaded with
+``weights_only=True`` (or an explicit digest check) so that malicious pickle
+payloads are rejected instead of executed.
 """
 
 import hashlib
 import os
-import pickle
 
 import pytest
+import torch
 
 
 class _UnsupportedCheckpoint:
@@ -21,45 +21,36 @@ class _UnsupportedCheckpoint:
         return os.mkdir, (str(self.marker),)
 
 
-def _load_weights(path, expected_sha256=None):
-    """Minimal safe loader mirroring the upstream contract.
-
-    - If ``expected_sha256`` is provided, verify the file digest first.
-    - Otherwise, only allow plain state-dict-like payloads (dict of tensors
-      is not required here; we simply reject arbitrary callables).
-    """
-    if expected_sha256 is not None:
-        digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
-        if digest.lower() != expected_sha256.lower():
-            raise RuntimeError("Supplied weights failed SHA-256 verification")
-    with open(path, "rb") as f:
-        payload = pickle.load(f)
-    if isinstance(payload, _UnsupportedCheckpoint):
-        raise RuntimeError("Checkpoint contains unsupported pickle objects")
-    return payload
+def _load_weights_only(path):
+    return torch.load(path, map_location="cpu", weights_only=True)
 
 
-def test_malicious_pickle_is_rejected_without_execution(tmp_path):
+def _load_with_digest(path, expected_sha256):
+    digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
+    if digest.lower() != expected_sha256.lower():
+        raise RuntimeError("Checkpoint digest mismatch")
+    return torch.load(path, map_location="cpu", weights_only=True)
+
+
+def test_weights_only_rejects_malicious_payload(tmp_path):
     marker = tmp_path / "executed"
-    path = tmp_path / "evil.pkl"
-    with open(path, "wb") as f:
-        pickle.dump(_UnsupportedCheckpoint(marker), f)
-    with pytest.raises(RuntimeError, match="unsupported pickle"):
-        _load_weights(str(path))
+    path = tmp_path / "malicious.pt"
+    torch.save(_UnsupportedCheckpoint(marker), path)
+    with pytest.raises(Exception):
+        _load_weights_only(path)
     assert not marker.exists()
 
 
-def test_checksum_mismatch_is_rejected(tmp_path):
-    path = tmp_path / "weights.pkl"
-    with open(path, "wb") as f:
-        pickle.dump({"w": 1}, f)
-    with pytest.raises(RuntimeError, match="SHA-256"):
-        _load_weights(str(path), "0" * 64)
+def test_digest_mismatch_is_rejected(tmp_path):
+    path = tmp_path / "weights.pt"
+    torch.save({"w": torch.zeros(2)}, path)
+    with pytest.raises(RuntimeError, match="digest mismatch"):
+        _load_with_digest(path, "0" * 64)
 
 
-def test_checksum_match_allows_plain_payload(tmp_path):
-    path = tmp_path / "weights.pkl"
-    with open(path, "wb") as f:
-        pickle.dump({"w": 1}, f)
+def test_digest_match_loads_state_dict(tmp_path):
+    path = tmp_path / "weights.pt"
+    torch.save({"w": torch.zeros(2)}, path)
     digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
-    assert _load_weights(str(path), digest.upper()) == {"w": 1}
+    loaded = _load_with_digest(path, digest.upper())
+    assert torch.equal(loaded["w"], torch.zeros(2))
