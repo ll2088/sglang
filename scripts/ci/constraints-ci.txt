@@ -1,4 +1,6 @@
-# Pins that keep the minimal CI environment reproducible.
-pytest==8.3.4
-numpy==1.26.4
-torch==2.4.1
+# SPDX-License-Identifier: Apache-2.0
+# Lightweight constraints for the quant regression test job.
+# Keep this file free of sglang runtime dependencies so that the
+# self-contained tests under test/registered/quant can run without
+# installing the full sglang package.
+pytest>=7.4,<9

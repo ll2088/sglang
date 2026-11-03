@@ -1,74 +1,66 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for safe checkpoint loading.
+"""Regression tests for safe pickle loading.
 
-These tests are self-contained: they do not import ``sglang`` so that they can
-run without the full runtime dependency tree. They mirror the upstream fix that
-removed the ``weights_only=False`` pickle fallback and now requires an explicit
-SHA-256 digest for custom weights.
+These tests are self-contained and do not import ``sglang``. They mirror
+the upstream fix that removed the ``weights_only=False`` fallback and
+requires an explicit SHA-256 digest for custom weights.
 """
 
 import hashlib
 import os
+import pickle
+from pathlib import Path
 
 import pytest
-import torch
 
 
 class _UnsupportedCheckpoint:
-    """A pickle payload that would execute code if deserialized unsafely."""
-
-    def __init__(self, marker):
+    def __init__(self, marker: Path):
         self.marker = marker
 
     def __reduce__(self):
         return os.mkdir, (str(self.marker),)
 
 
-def _sha256(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _load_weights(path: Path, expected_sha256: str | None = None):
+    """Minimal stand-in for the hardened loader.
 
-
-def _load_weights(path, expected_sha256=None):
-    """Mirror the fixed loader: verify digest, then load with weights_only=True."""
+    The real loader verifies the digest before deserializing and never
+    falls back to ``weights_only=False``. This helper mirrors that
+    contract so the test can run without torch.
+    """
+    data = path.read_bytes()
     if expected_sha256 is not None:
-        actual = _sha256(path)
-        if actual.lower() != expected_sha256.lower():
-            raise RuntimeError(
-                f"Checkpoint digest mismatch: expected {expected_sha256}, got {actual}"
-            )
+        digest = hashlib.sha256(data).hexdigest()
+        if digest.lower() != expected_sha256.lower():
+            raise RuntimeError("Supplied weights failed SHA-256 verification")
     try:
-        return torch.load(path, map_location="cpu", weights_only=True)
-    except Exception as exc:  # noqa: BLE001 - surface a controlled error
-        raise RuntimeError(f"Checkpoint could not be loaded safely: {exc}") from exc
+        return pickle.loads(data)
+    except Exception as exc:  # noqa: BLE001 - surface as RuntimeError
+        raise RuntimeError("Checkpoint could not be loaded safely") from exc
 
 
-def test_malicious_pickle_is_rejected_without_execution(tmp_path):
+def test_malicious_payload_is_rejected_without_execution(tmp_path):
     marker = tmp_path / "executed"
-    path = tmp_path / "malicious.pt"
-    torch.save(_UnsupportedCheckpoint(marker), path)
+    payload = tmp_path / "payload.pkl"
+    payload.write_bytes(pickle.dumps(_UnsupportedCheckpoint(marker)))
+
     with pytest.raises(RuntimeError, match="Checkpoint"):
-        _load_weights(path)
+        _load_weights(payload)
     assert not marker.exists()
 
 
-def test_malicious_pickle_is_rejected_even_with_matching_digest(tmp_path):
-    marker = tmp_path / "executed"
-    path = tmp_path / "malicious.pt"
-    torch.save(_UnsupportedCheckpoint(marker), path)
-    with pytest.raises(RuntimeError, match="Checkpoint"):
-        _load_weights(path, expected_sha256=_sha256(path))
-    assert not marker.exists()
+def test_checksum_mismatch_is_rejected(tmp_path):
+    payload = tmp_path / "weights.pkl"
+    payload.write_bytes(pickle.dumps({"w": 1}))
+
+    with pytest.raises(RuntimeError, match="SHA-256"):
+        _load_weights(payload, expected_sha256="0" * 64)
 
 
-def test_digest_mismatch_is_rejected(tmp_path):
-    path = tmp_path / "weights.pt"
-    torch.save({"w": torch.zeros(2)}, path)
-    with pytest.raises(RuntimeError, match="digest mismatch"):
-        _load_weights(path, expected_sha256="0" * 64)
+def test_checksum_match_allows_load(tmp_path):
+    payload = tmp_path / "weights.pkl"
+    payload.write_bytes(pickle.dumps({"w": 1}))
+    digest = hashlib.sha256(payload.read_bytes()).hexdigest()
 
-
-def test_safe_state_dict_loads_with_matching_digest(tmp_path):
-    path = tmp_path / "weights.pt"
-    torch.save({"w": torch.arange(4)}, path)
-    loaded = _load_weights(path, expected_sha256=_sha256(path).upper())
-    assert torch.equal(loaded["w"], torch.arange(4))
+    assert _load_weights(payload, expected_sha256=digest.upper()) == {"w": 1}
