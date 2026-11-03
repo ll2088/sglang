@@ -22,9 +22,11 @@ _FALLBACK_FUSED_SHARDS = MappingProxyType(
 
 
 def _effective_fused(fused_mapping=None, proj_name="qkv_proj"):
+    # Mirror the production fix: copy per-key lists so callers can never
+    # mutate the module-level mapping through the returned view.
     if fused_mapping is not None and proj_name in fused_mapping:
-        return dict(fused_mapping)
-    return dict(_FALLBACK_FUSED_SHARDS)
+        return {key: list(value) for key, value in fused_mapping.items()}
+    return {key: list(value) for key, value in _FALLBACK_FUSED_SHARDS.items()}
 
 
 def _append_default(value, bucket=None):
