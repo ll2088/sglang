@@ -1,5 +1,8 @@
-# SPDX-License-Identifier: Apache-2.0
-# Minimal dependency set for the registered quant regression tests.
-# Keep this list small: these tests are intentionally self-contained and do
-# not import the sglang runtime.
-pytest>=7.0
+# Minimal requirements for running the self-contained regression tests in
+# test/registered/quant/. These tests do not import sglang, so the full
+# runtime dependency tree is intentionally omitted.
+#
+# Install with:
+#   pip install --no-deps -e python -c scripts/ci/constraints-ci.txt \
+#       -r scripts/ci/requirements-test-min.txt
+pytest>=7,<9

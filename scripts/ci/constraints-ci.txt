@@ -1,3 +1,7 @@
-# SPDX-License-Identifier: Apache-2.0
-# Pins for the minimal CI test environment. Intentionally empty by default;
-# add pins here when a transitive dependency needs to be held back.
+# Constraints for the minimal CI test environment.
+# Keep this list small: it only needs to satisfy the imports used by the
+# self-contained regression tests under test/registered/quant/.
+#
+# The tests are intentionally written to avoid importing sglang, so the
+# runtime dependency tree (py-spy, pyzmq, quack-kernels, ...) is not needed.
+pytest>=7,<9
