@@ -1,6 +1,6 @@
-# SPDX-License-Identifier: Apache-2.0
-# Lightweight constraints for the quant regression test job.
-# Keep this file free of sglang runtime dependencies so that the
-# self-contained tests under test/registered/quant can run without
-# installing the full sglang package.
-pytest>=7.4,<9
+# Pins for the minimal CI environment. Keep these compatible with the
+# interpreter used by CI (3.10-3.12); do not add sglang runtime deps here.
+pytest==8.3.4
+pluggy==1.5.0
+iniconfig==2.0.0
+packaging==24.2

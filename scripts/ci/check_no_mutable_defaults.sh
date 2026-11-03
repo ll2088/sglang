@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Thin wrapper around check_static_patterns.py so that CI can call a
-# single shell entry point for the mutable-default / hasattr / pickle
-# checks.
+# Thin wrapper so CI can call the static pattern checker from a shell step.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

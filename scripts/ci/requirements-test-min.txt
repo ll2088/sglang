@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
-# Minimal dependency set for test/registered/quant.
-# These tests are intentionally self-contained and must not import sglang.
+# Minimal test dependencies for the quant regression tests.
+# These tests are self-contained and must not import sglang, so the full
+# runtime dependency tree (torch, flashinfer, ...) is intentionally absent.
 pytest>=7.4,<9
