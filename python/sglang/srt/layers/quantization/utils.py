@@ -80,10 +80,12 @@ def is_layer_skipped(
     # in the safetensors checkpoint. So, we convert the name
     # from the fused version to unfused + check to make sure that
     # each shard of the fused layer has the same scheme.
+    # Copy the module-level fallback mapping so that callers can never
+    # mutate shared state through the returned view.
     effective_fused = (
-        fused_mapping
+        dict(fused_mapping)
         if fused_mapping is not None and proj_name in fused_mapping
-        else _FALLBACK_FUSED_SHARDS
+        else dict(_FALLBACK_FUSED_SHARDS)
     )
     if proj_name in effective_fused:
         shard_prefixes = [

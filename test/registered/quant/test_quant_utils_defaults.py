@@ -31,6 +31,12 @@ def test_is_layer_skipped_does_not_mutate_fallback_mapping():
     # A second call must observe the same pristine module-level mapping.
     assert is_layer_skipped("model.layers.0.mlp.gate_up_proj", ["mlp.gate"])
     assert {k: list(v) for k, v in _FALLBACK_FUSED_SHARDS.items()} == before
+    # The fallback mapping must not be mutated even when a caller passes a
+    # mapping that happens to be the module-level object itself.
+    assert is_layer_skipped(
+        "model.layers.0.mlp.gate_up_proj", ["mlp.gate"], _FALLBACK_FUSED_SHARDS
+    )
+    assert {k: list(v) for k, v in _FALLBACK_FUSED_SHARDS.items()} == before
 
 
 def test_is_layer_skipped_accepts_none_fused_mapping():

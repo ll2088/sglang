@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Minimal constraints for the quant regression test environment.
+# Keep this file small: it is only used by scripts/ci/install_test_deps.sh
+# to avoid resolving the full sglang dependency tree in CI.
+pytest>=7,<9

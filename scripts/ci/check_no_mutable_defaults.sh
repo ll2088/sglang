@@ -1,34 +1,35 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Grep-based guard against the defect patterns fixed in this change set.
-# Exits non-zero when a forbidden pattern is found in the target files.
+# Static grep checks for the patterns fixed by the upstream PR:
+#   - mutable default arguments (dict/list/set literals in signatures)
+#   - dataclass optional fields checked with hasattr
+#
+# This is a best-effort check; it is intentionally conservative and only
+# reports obvious matches so that it can run in CI without false positives.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-
-TARGETS=(
-  "${REPO_ROOT}/python/sglang/srt/layers/quantization/utils.py"
-  "${REPO_ROOT}/python/sglang/srt/layers/quantization/compressed_tensors/utils.py"
-  "${REPO_ROOT}/python/sglang/srt/layers/quantization/quark/utils.py"
-)
+ROOT="${1:-python/sglang/srt/layers/quantization}"
 
 status=0
 
-# Mutable default arguments: `= {}`, `= []`, `= set()` in a signature.
-for f in "${TARGETS[@]}"; do
-  if [[ ! -f "$f" ]]; then
-    echo "missing target: $f" >&2
-    status=1
-    continue
-  fi
-  if grep -nE 'def [^(]*\([^)]*=[[:space:]]*(\{\}|\[\]|set\(\))' "$f"; then
-    echo "mutable default argument found in $f" >&2
-    status=1
-  fi
-done
-
-if [[ "${status}" -ne 0 ]]; then
+if [[ ! -d "${ROOT}" ]]; then
+  echo "error: ${ROOT} is not a directory" >&2
   exit 1
 fi
 
-echo "no mutable defaults found"
+echo "checking mutable defaults under ${ROOT}"
+if grep -RInE 'def [A-Za-z_][A-Za-z0-9_]*\([^)]*=[[:space:]]*(\{|\[|set\()' "${ROOT}" 2>/dev/null; then
+  echo "error: mutable default argument detected" >&2
+  status=1
+fi
+
+echo "checking hasattr on dataclass fields under ${ROOT}"
+if grep -RInE 'hasattr\([^,]+,[[:space:]]*[\"'\''][A-Za-z_][A-Za-z0-9_]*[\"'\'']\)' "${ROOT}" 2>/dev/null | grep -v 'getattr' >/dev/null; then
+  echo "warning: hasattr usage found; review dataclass optional fields manually" >&2
+fi
+
+if [[ "${status}" -ne 0 ]]; then
+  exit "${status}"
+fi
+
+echo "static checks passed"

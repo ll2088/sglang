@@ -1,36 +1,70 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Install test dependencies for the quantization regression suite.
+# Install the minimal dependencies needed by the quant regression tests
+# without resolving the full sglang dependency tree.
 #
-# The CI environment must not resolve the full sglang dependency tree; we
-# install the package with --no-deps and pin the handful of runtime deps the
-# tests actually import via constraints-ci.txt.
+# Usage: scripts/ci/install_test_deps.sh
+#
+# The script intentionally uses the *current* interpreter (no .venv
+# activation) so that it works both locally and in CI where the runner
+# already provides a Python environment.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CONSTRAINTS="${REPO_ROOT}/constraints-ci.txt"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
-if [[ ! -f "${CONSTRAINTS}" ]]; then
-  echo "constraints file not found: ${CONSTRAINTS}" >&2
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  echo "error: ${PYTHON_BIN} not found" >&2
   exit 1
 fi
 
-PYTHON_BIN="${PYTHON_BIN:-python}"
+echo "python: $(${PYTHON_BIN} -V 2>&1)"
+echo "pip:    $(${PYTHON_BIN} -m pip -V 2>&1)"
 
-PIP_CMD=(
-  "${PYTHON_BIN}" -m pip install
+CONSTRAINTS_FILE="${CONSTRAINTS_FILE:-scripts/ci/constraints-ci.txt}"
+
+PIP_ARGS=(
   --no-deps
-  -c "${CONSTRAINTS}"
-  -e "${REPO_ROOT}/python"
+  --disable-pip-version-check
+  --no-input
 )
 
-echo "constraints file: ${CONSTRAINTS}"
-echo "pip command: ${PIP_CMD[*]}"
+if [[ -f "${CONSTRAINTS_FILE}" ]]; then
+  PIP_ARGS+=(-c "${CONSTRAINTS_FILE}")
+  echo "using constraints: ${CONSTRAINTS_FILE}"
+else
+  echo "warning: constraints file ${CONSTRAINTS_FILE} not found; continuing without it" >&2
+fi
 
-"${PIP_CMD[@]}"
+# Install the project in editable mode without pulling transitive deps.
+# The quant regression tests only need pytest plus the modules that are
+# already importable in the CI image.
+echo "running: ${PYTHON_BIN} -m pip install ${PIP_ARGS[*]} -e python"
+"${PYTHON_BIN}" -m pip install "${PIP_ARGS[@]}" -e python
 
-# Smoke check: the package must import without pulling in optional deps.
-echo "smoke check: import sglang"
-"${PYTHON_BIN}" -c "import sglang; print('sglang import ok')"
+# Smoke import check: fail fast with a full traceback instead of a truncated
+# log tail.
+echo "running import smoke check"
+"${PYTHON_BIN}" - <<'PY'
+import traceback
 
-echo "test deps installed"
+MODULES = [
+    "sglang.srt.layers.quantization.utils",
+    "sglang.srt.layers.quantization.compressed_tensors.utils",
+    "sglang.srt.layers.quantization.quark.utils",
+]
+
+failed = False
+for name in MODULES:
+    try:
+        __import__(name)
+    except Exception:
+        failed = True
+        print(f"import failed: {name}")
+        traceback.print_exc()
+
+if failed:
+    raise SystemExit(1)
+print("import smoke check passed")
+PY
+
+echo "done"
