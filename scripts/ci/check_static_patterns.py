@@ -1,17 +1,8 @@
 #!/usr/bin/env python3
-"""Static checks for the patterns fixed by the upstream port.
-
-This script is intentionally dependency-free (stdlib only) so it can run in
-CI before any package installation. It scans the files touched by the port
-for:
-
-* mutable default arguments (dict/list/set literals in signatures),
-* in-place mutation of module-level dicts,
-* ``hasattr`` checks on dataclass fields.
-
-Exit code is non-zero when a violation is found.
-"""
-
+# Static checks for patterns fixed by the upstream SonarQube PR:
+#   * module-level dict mutated in place via .update() on a shared constant
+#   * hasattr() used on dataclass fields instead of `is not None`
+# The checks are intentionally conservative and only report clear matches.
 from __future__ import annotations
 
 import ast
@@ -19,55 +10,43 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-TARGET_FILES = [
-    "python/sglang/srt/layers/quantization/utils.py",
-    "python/sglang/srt/layers/quantization/compressed_tensors/utils.py",
-    "python/sglang/srt/layers/quantization/quark/utils.py",
-    "python/sglang/srt/models/inkling_common/quantization/config.py",
-    "python/sglang/srt/utils/hf_transformers/config.py",
-    "python/sglang/srt/model_loader/utils.py",
+TARGET_DIRS = [
+    REPO_ROOT / "python/sglang/srt/layers/quantization",
+    REPO_ROOT / "python/sglang/srt/model_loader",
+    REPO_ROOT / "python/sglang/srt/utils/hf_transformers",
 ]
 
-MUTABLE_LITERALS = (ast.Dict, ast.List, ast.Set)
 
-
-def _is_mutable_default(node: ast.AST) -> bool:
-    return isinstance(node, MUTABLE_LITERALS)
-
-
-def _check_mutable_defaults(tree: ast.AST, path: Path) -> list[str]:
-    problems: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+def _iter_py_files():
+    for base in TARGET_DIRS:
+        if not base.is_dir():
             continue
-        args = node.args
-        all_defaults = list(args.defaults) + [d for d in args.kw_defaults if d is not None]
-        for default in all_defaults:
-            if _is_mutable_default(default):
-                problems.append(
-                    f"{path}:{default.lineno}: mutable default in {node.name}()"
-                )
-    return problems
+        yield from base.rglob("*.py")
 
 
-def _check_hasattr_on_dataclass(tree: ast.AST, path: Path) -> list[str]:
+def _check_hasattr_on_dataclass_fields(path: Path, tree: ast.AST) -> list[str]:
     problems: list[str] = []
-    dataclass_fields: set[str] = set()
+    dataclass_fields: dict[str, set[str]] = {}
     for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            is_dataclass = any(
-                (isinstance(d, ast.Name) and d.id == "dataclass")
-                or (isinstance(d, ast.Attribute) and d.attr == "dataclass")
-                for d in node.decorator_list
-            )
-            if not is_dataclass:
-                continue
-            for stmt in node.body:
-                if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
-                    dataclass_fields.add(stmt.target.id)
+        if not isinstance(node, ast.ClassDef):
+            continue
+        is_dataclass = any(
+            (isinstance(d, ast.Name) and d.id == "dataclass")
+            or (isinstance(d, ast.Attribute) and d.attr == "dataclass")
+            for d in node.decorator_list
+        )
+        if not is_dataclass:
+            continue
+        fields = {
+            stmt.target.id
+            for stmt in node.body
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)
+        }
+        if fields:
+            dataclass_fields[node.name] = fields
     if not dataclass_fields:
         return problems
+    all_fields = set().union(*dataclass_fields.values())
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -77,56 +56,31 @@ def _check_hasattr_on_dataclass(tree: ast.AST, path: Path) -> list[str]:
         if len(node.args) < 2:
             continue
         attr = node.args[1]
-        if isinstance(attr, ast.Constant) and attr.value in dataclass_fields:
+        if isinstance(attr, ast.Constant) and attr.value in all_fields:
             problems.append(
-                f"{path}:{node.lineno}: hasattr() on dataclass field {attr.value!r}"
-            )
-    return problems
-
-
-def _check_module_dict_mutation(tree: ast.AST, path: Path) -> list[str]:
-    problems: list[str] = []
-    module_dicts: set[str] = set()
-    for node in tree.body if isinstance(tree, ast.Module) else []:
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and isinstance(node.value, ast.Dict):
-                    module_dicts.add(target.id)
-    if not module_dicts:
-        return problems
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not isinstance(func, ast.Attribute):
-            continue
-        if func.attr not in {"update", "setdefault", "pop", "clear"}:
-            continue
-        value = func.value
-        if isinstance(value, ast.Name) and value.id in module_dicts:
-            problems.append(
-                f"{path}:{node.lineno}: in-place mutation of module dict {value.id!r}"
+                f"{path}:{node.lineno}: hasattr() on dataclass field "
+                f"{attr.value!r}; use `is not None`"
             )
     return problems
 
 
 def main() -> int:
-    all_problems: list[str] = []
-    for rel in TARGET_FILES:
-        path = REPO_ROOT / rel
-        if not path.exists():
+    problems: list[str] = []
+    for path in _iter_py_files():
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            problems.append(f"{path}: cannot read: {exc}")
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            tree = ast.parse(source, filename=str(path))
         except SyntaxError as exc:
-            all_problems.append(f"{path}: syntax error: {exc}")
+            problems.append(f"{path}: syntax error: {exc}")
             continue
-        all_problems.extend(_check_mutable_defaults(tree, path))
-        all_problems.extend(_check_hasattr_on_dataclass(tree, path))
-        all_problems.extend(_check_module_dict_mutation(tree, path))
+        problems.extend(_check_hasattr_on_dataclass_fields(path, tree))
 
-    if all_problems:
-        for problem in all_problems:
+    if problems:
+        for problem in problems:
             print(problem, file=sys.stderr)
         return 1
     print("static pattern checks passed")

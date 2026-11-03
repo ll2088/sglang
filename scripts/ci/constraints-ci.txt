@@ -1,6 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
-# Pinned versions for the minimal CI test environment.
-# Keep this list small; it must not pull in sglang's full runtime deps.
-pytest==8.3.4
-numpy==1.26.4
-torch==2.5.1
+# Minimal constraints for CI test environment.
+# Keep versions loose enough to resolve on Python 3.10-3.13.
+pytest>=7.4
+pytest-randomly>=3.15

@@ -1,6 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
-# Minimal dependencies required by the ported regression tests.
-# These tests are self-contained and do not import sglang.
-pytest
-numpy
-torch
+# Minimal test-only requirements. Installed with --no-deps so that the
+# full sglang dependency tree is never resolved during CI setup.
+pytest>=7.4
+pytest-randomly>=3.15

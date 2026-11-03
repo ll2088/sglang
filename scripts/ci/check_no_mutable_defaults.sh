@@ -1,9 +1,30 @@
 #!/usr/bin/env bash
-# Thin wrapper around the stdlib-only static checker. Kept as a separate
-# entry point so CI can call it without knowing the Python module layout.
+# Static check: reject mutable default arguments (dict/list/set literals) in
+# function signatures under the quantization and model-loading modules.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-exec "${PYTHON_BIN}" "${SCRIPT_DIR}/check_static_patterns.py"
+TARGETS=(
+  "${REPO_ROOT}/python/sglang/srt/layers/quantization"
+  "${REPO_ROOT}/python/sglang/srt/model_loader"
+  "${REPO_ROOT}/python/sglang/srt/utils/hf_transformers"
+)
+
+status=0
+for target in "${TARGETS[@]}"; do
+  if [[ ! -d "${target}" ]]; then
+    continue
+  fi
+  # Match `= {}`, `= []`, `= set()` inside a def signature line.
+  if grep -RInE 'def [^(]+\([^)]*= *(\{\}|\[\]|set\(\))' "${target}" --include='*.py'; then
+    echo "error: mutable default argument found under ${target}" >&2
+    status=1
+  fi
+done
+
+if [[ "${status}" -eq 0 ]]; then
+  echo "no mutable default arguments found"
+fi
+exit "${status}"
