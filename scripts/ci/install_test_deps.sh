@@ -1,50 +1,36 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Install the minimal dependency set for the quantization regression tests
-# without resolving the full sglang dependency tree.
-set -euo pipefail
+# Install the minimal dependency set required by the quantization regression
+# tests without resolving the full sglang dependency tree.
+set -euxo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-CONSTRAINTS="${SCRIPT_DIR}/constraints-ci.txt"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CONSTRAINTS_ROOT="${REPO_ROOT}/constraints-ci.txt"
+CONSTRAINTS_CI="${REPO_ROOT}/scripts/ci/constraints-ci.txt"
 
-if [[ ! -f "${CONSTRAINTS}" ]]; then
-  echo "error: constraints file not found: ${CONSTRAINTS}" >&2
+python -V
+python -m pip -V
+
+if ! diff -u "${CONSTRAINTS_ROOT}" "${CONSTRAINTS_CI}"; then
+  echo "constraints-ci.txt files differ; refusing to install" >&2
   exit 1
 fi
 
-PYTHON_BIN="${PYTHON_BIN:-python}"
+python -m pip install --no-deps -c "${CONSTRAINTS_CI}" \
+  'pytest>=8.0,<9' 'numpy>=1.26,<3' 'torch>=2.1,<3'
 
-"${PYTHON_BIN}" -m pip --version
-"${PYTHON_BIN}" -m pip install --disable-pip-version-check --no-deps \
-  -c "${CONSTRAINTS}" \
-  -r "${CONSTRAINTS}"
-
-# Smoke import check: fail fast with a clear message if the modules touched by
-# the regression tests cannot be imported.
-"${PYTHON_BIN}" - <<'PY'
+python - <<'PY'
 import importlib
-import sys
 
-modules = [
+for name in (
+    "sglang.srt.layers.quantization.fp8",
     "sglang.srt.layers.quantization.utils",
     "sglang.srt.layers.quantization.compressed_tensors.utils",
     "sglang.srt.layers.quantization.quark.utils",
-]
-
-failed = []
-for name in modules:
-    try:
-        importlib.import_module(name)
-    except Exception as exc:  # noqa: BLE001 - report all import failures
-        failed.append((name, exc))
-
-if failed:
-    for name, exc in failed:
-        print(f"import smoke check failed: {name}: {exc!r}", file=sys.stderr)
-    sys.exit(1)
-
+    "sglang.srt.models.inkling_common.quantization.config",
+    "sglang.srt.utils.hf_transformers.config",
+    "sglang.srt.model_loader.utils",
+):
+    importlib.import_module(name)
 print("import smoke check passed")
 PY
-
-"${PYTHON_BIN}" -m pip freeze >&2 || true
