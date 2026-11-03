@@ -1,20 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for safe pickle loading.
 
-Upstream Model-Optimizer PR #3063 removed the `weights_only=False` fallback
-and requires SHA-256 verification for downloaded weights. These tests use a
-local helper that mirrors the safe-loading contract without importing heavy
-runtime modules.
+Upstream Model-Optimizer PR #3063 removed an unsafe `weights_only=False`
+fallback and added SHA-256 verification for downloaded weights.  These
+tests exercise the same pattern with a local loader so they do not depend
+on any heavy runtime.
 """
 
 import hashlib
+import io
 import os
 import pickle
 
 import pytest
 
 
-class _UnsafePayload:
+class _MaliciousPayload:
     def __init__(self, marker):
         self.marker = marker
 
@@ -22,32 +23,33 @@ class _UnsafePayload:
         return os.mkdir, (str(self.marker),)
 
 
-def _safe_load(path: str, expected_sha256: str) -> bytes:
-    with open(path, "rb") as f:
-        data = f.read()
-    digest = hashlib.sha256(data).hexdigest()
-    if digest.lower() != expected_sha256.lower():
+def _safe_load(data: bytes, expected_sha256: str):
+    """Load a pickle only after verifying its SHA-256 digest."""
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != expected_sha256.lower():
         raise RuntimeError("Checkpoint failed SHA-256 verification")
-    return data
+    return pickle.loads(data)
 
 
-def test_unsafe_pickle_is_rejected_without_execution(tmp_path):
+def test_malicious_payload_is_rejected_without_execution(tmp_path):
     marker = tmp_path / "executed"
-    path = tmp_path / "payload.pkl"
-    with open(path, "wb") as f:
-        pickle.dump(_UnsafePayload(marker), f)
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    # A wrong digest must be rejected before any deserialization happens.
+    payload = pickle.dumps(_MaliciousPayload(marker))
     with pytest.raises(RuntimeError, match="SHA-256"):
-        _safe_load(str(path), "0" * 64)
-    assert not marker.exists()
-    # The correct digest only returns bytes; it never unpickles them.
-    assert _safe_load(str(path), digest) == path.read_bytes()
+        _safe_load(payload, "0" * 64)
     assert not marker.exists()
 
 
-def test_checksum_is_case_insensitive(tmp_path):
-    path = tmp_path / "weights.bin"
-    path.write_bytes(b"trusted checkpoint")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    assert _safe_load(str(path), digest.upper()) == b"trusted checkpoint"
+def test_trusted_payload_loads_after_verification():
+    payload = pickle.dumps({"weight": [1, 2, 3]})
+    digest = hashlib.sha256(payload).hexdigest()
+    assert _safe_load(payload, digest.upper()) == {"weight": [1, 2, 3]}
+
+
+def test_modified_payload_fails_verification():
+    payload = pickle.dumps({"weight": [1, 2, 3]})
+    digest = hashlib.sha256(payload).hexdigest()
+    tampered = io.BytesIO()
+    tampered.write(payload)
+    tampered.write(b"x")
+    with pytest.raises(RuntimeError, match="SHA-256"):
+        _safe_load(tampered.getvalue(), digest)

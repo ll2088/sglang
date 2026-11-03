@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for dataclass optional-field checks.
 
-Upstream Model-Optimizer PR #3063 replaced `hasattr` on dataclass fields
-with `is not None`. `hasattr` is always true for declared dataclass fields,
-so a missing value was not detected.
+Upstream Model-Optimizer PR #3063 fixed a `hasattr` check on dataclass
+fields, which is always true, by switching to `is not None`.  These tests
+exercise the same pattern with a local dataclass so they do not depend on
+any heavy runtime.
 """
 
 from dataclasses import dataclass
@@ -13,36 +14,34 @@ import pytest
 
 
 @dataclass
-class _ModelConfig:
+class _OptionalFields:
     vocab_embedding: Optional[object] = None
     lm_head: Optional[object] = None
 
 
-def _pad_embedding_lm_head(config: _ModelConfig) -> bool:
-    # Mirrors the fixed upstream logic: check the value, not the attribute.
-    if config.vocab_embedding is None or config.lm_head is None:
-        return False
-    return True
+def _has_attr_check(obj):
+    # The buggy pattern: hasattr is always True for dataclass fields.
+    return hasattr(obj, "vocab_embedding") and hasattr(obj, "lm_head")
+
+
+def _is_not_none_check(obj):
+    # The fixed pattern.
+    return obj.vocab_embedding is not None and obj.lm_head is not None
 
 
 @pytest.mark.parametrize(
-    ("vocab_embedding", "lm_head", "expected"),
+    ("vocab_embedding", "lm_head"),
     [
-        (None, None, False),
-        (object(), None, False),
-        (None, object(), False),
-        (object(), object(), True),
+        (None, None),
+        (object(), None),
+        (None, object()),
+        (object(), object()),
     ],
 )
-def test_optional_fields_use_is_not_none(vocab_embedding, lm_head, expected):
-    config = _ModelConfig(vocab_embedding=vocab_embedding, lm_head=lm_head)
-    assert _pad_embedding_lm_head(config) is expected
-
-
-def test_hasattr_would_have_been_wrong():
-    config = _ModelConfig()
-    # Both attributes exist on the dataclass, so hasattr is always True.
-    assert hasattr(config, "vocab_embedding")
-    assert hasattr(config, "lm_head")
-    # The corrected check still reports the fields as missing.
-    assert _pad_embedding_lm_head(config) is False
+def test_hasattr_misjudges_dataclass_fields(vocab_embedding, lm_head):
+    obj = _OptionalFields(vocab_embedding=vocab_embedding, lm_head=lm_head)
+    # hasattr is always True regardless of the field value.
+    assert _has_attr_check(obj) is True
+    # The fixed check reflects the actual presence of values.
+    expected = vocab_embedding is not None and lm_head is not None
+    assert _is_not_none_check(obj) is expected

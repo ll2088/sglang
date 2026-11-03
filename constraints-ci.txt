@@ -1,7 +1,7 @@
-# Minimal constraints for CI test environment.
+# Minimal, pinned constraints for CI test environment.
 # Keep this list small: only packages needed to import and run the
 # quantization regression tests. Do not add sglang runtime deps here.
-pytest>=7.4
-pytest-randomly>=3.15
-numpy>=1.24
-torch>=2.1
+pytest==8.3.4
+pytest-randomly==3.16.0
+numpy==1.26.4
+torch==2.5.1
