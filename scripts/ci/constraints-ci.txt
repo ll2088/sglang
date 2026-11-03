@@ -1,3 +1,6 @@
-# Constraints for CI test environments.
-# Pin only what is required to keep the minimal test env reproducible.
-pytest>=7.0,<9
+# Constraints for the minimal CI test environment.
+# Pin packages that historically failed to resolve on newer interpreters.
+# Optional / heavy runtime packages are intentionally NOT installed here.
+pyzmq<27
+py-spy<0.5
+quack-kernels<0.7

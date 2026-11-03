@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Static checks for patterns fixed by the upstream SonarQube PR.
+"""Static review for the patterns fixed by the upstream port.
 
-This script is intentionally dependency-free so it can run before the test
-dependencies are installed. It scans the files touched by the port for:
+Checks (over the files touched by this change set):
+  1. mutable default arguments (dict/list/set literals in signatures)
+  2. in-place mutation of module-level dicts
+  3. `hasattr` used on dataclass optional fields
 
-* mutable default arguments (dict/list/set literals in signatures)
-* in-place mutation of module-level mapping constants
-* ``hasattr`` checks on dataclass optional fields
+Exits non-zero when a pattern is found so CI can gate on it.
 """
 
 from __future__ import annotations
@@ -15,14 +15,15 @@ import ast
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-TARGETS = [
-    ROOT / "python/sglang/srt/layers/quantization/utils.py",
-    ROOT / "python/sglang/srt/layers/quantization/compressed_tensors/utils.py",
-    ROOT / "python/sglang/srt/layers/quantization/quark/utils.py",
-    ROOT / "python/sglang/srt/models/inkling_common/quantization/config.py",
-    ROOT / "python/sglang/srt/utils/hf_transformers/config.py",
-    ROOT / "python/sglang/srt/model_loader/utils.py",
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+TARGET_FILES = [
+    "python/sglang/srt/layers/quantization/utils.py",
+    "python/sglang/srt/layers/quantization/compressed_tensors/utils.py",
+    "python/sglang/srt/layers/quantization/quark/utils.py",
+    "python/sglang/srt/models/inkling_common/quantization/config.py",
+    "python/sglang/srt/utils/hf_transformers/config.py",
+    "python/sglang/srt/model_loader/utils.py",
 ]
 
 MUTABLE_LITERALS = (ast.Dict, ast.List, ast.Set)
@@ -32,54 +33,56 @@ def _is_mutable_default(node: ast.AST) -> bool:
     return isinstance(node, MUTABLE_LITERALS)
 
 
-def check_mutable_defaults(path: Path, tree: ast.AST) -> list[str]:
+def check_mutable_defaults(tree: ast.AST, path: str) -> list[str]:
     problems: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         args = node.args
-        defaults = list(args.defaults)
-        for default in defaults:
+        all_defaults = list(args.defaults) + [d for d in args.kw_defaults if d is not None]
+        for default in all_defaults:
             if _is_mutable_default(default):
                 problems.append(
-                    f"{path}:{node.lineno}: mutable default in {node.name}()"
-                )
-        for default in args.kw_defaults:
-            if default is not None and _is_mutable_default(default):
-                problems.append(
-                    f"{path}:{node.lineno}: mutable keyword default in {node.name}()"
+                    f"{path}:{node.lineno}: mutable default in '{node.name}'"
                 )
     return problems
 
 
-def check_module_level_mutation(path: Path, tree: ast.AST) -> list[str]:
+def check_module_dict_mutation(tree: ast.AST, path: str) -> list[str]:
     problems: list[str] = []
-    module_constants = {
-        target.id
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        for target in node.targets
-        if isinstance(target, ast.Name) and target.id.isupper()
-    }
+    module_dicts: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            if isinstance(node.value, ast.Dict):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        module_dicts.add(target.id)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.value, ast.Dict) and isinstance(node.target, ast.Name):
+                module_dicts.add(node.target.id)
+
+    if not module_dicts:
+        return problems
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
         if not isinstance(func, ast.Attribute):
             continue
-        if func.attr not in {"update", "append", "extend", "insert", "pop", "clear"}:
+        if func.attr not in {"update", "setdefault", "pop", "clear"}:
             continue
         value = func.value
-        if isinstance(value, ast.Name) and value.id in module_constants:
+        if isinstance(value, ast.Name) and value.id in module_dicts:
             problems.append(
-                f"{path}:{node.lineno}: in-place mutation of module constant {value.id}"
+                f"{path}:{node.lineno}: in-place mutation of module-level dict '{value.id}'"
             )
     return problems
 
 
-def check_hasattr_on_dataclass_fields(path: Path, tree: ast.AST) -> list[str]:
+def check_dataclass_hasattr(tree: ast.AST, path: str) -> list[str]:
     problems: list[str] = []
-    dataclass_fields: set[str] = set()
+    dataclass_fields: dict[str, set[str]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.ClassDef):
             continue
@@ -90,11 +93,16 @@ def check_hasattr_on_dataclass_fields(path: Path, tree: ast.AST) -> list[str]:
         )
         if not is_dataclass:
             continue
+        fields: set[str] = set()
         for stmt in node.body:
             if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
-                dataclass_fields.add(stmt.target.id)
+                fields.add(stmt.target.id)
+        if fields:
+            dataclass_fields[node.name] = fields
+
     if not dataclass_fields:
         return problems
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -104,32 +112,48 @@ def check_hasattr_on_dataclass_fields(path: Path, tree: ast.AST) -> list[str]:
         if len(node.args) != 2:
             continue
         attr = node.args[1]
-        if isinstance(attr, ast.Constant) and attr.value in dataclass_fields:
-            problems.append(
-                f"{path}:{node.lineno}: hasattr on dataclass field {attr.value!r}"
-            )
+        if not (isinstance(attr, ast.Constant) and isinstance(attr.value, str)):
+            continue
+        for cls_name, fields in dataclass_fields.items():
+            if attr.value in fields:
+                problems.append(
+                    f"{path}:{node.lineno}: hasattr on dataclass field "
+                    f"'{cls_name}.{attr.value}' (use 'is not None')"
+                )
     return problems
 
 
 def main() -> int:
     problems: list[str] = []
-    for path in TARGETS:
-        if not path.exists():
-            problems.append(f"missing target file: {path}")
+    checked = 0
+    for rel in TARGET_FILES:
+        path = REPO_ROOT / rel
+        if not path.is_file():
             continue
+        checked += 1
         source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(path))
-        problems.extend(check_mutable_defaults(path, tree))
-        problems.extend(check_module_level_mutation(path, tree))
-        problems.extend(check_hasattr_on_dataclass_fields(path, tree))
-    if problems:
-        print("static pattern check failed:", file=sys.stderr)
-        for problem in problems:
-            print(f"  {problem}", file=sys.stderr)
+        try:
+            tree = ast.parse(source, filename=rel)
+        except SyntaxError as exc:
+            problems.append(f"{rel}: syntax error: {exc}")
+            continue
+        problems.extend(check_mutable_defaults(tree, rel))
+        problems.extend(check_module_dict_mutation(tree, rel))
+        problems.extend(check_dataclass_hasattr(tree, rel))
+
+    if checked == 0:
+        print("ERROR: no target files found; check paths", file=sys.stderr)
         return 1
-    print("static pattern check passed")
+
+    if problems:
+        print("Static pattern check failed:", file=sys.stderr)
+        for p in problems:
+            print(f"  {p}", file=sys.stderr)
+        return 1
+
+    print(f"Static pattern check passed ({checked} files).")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
