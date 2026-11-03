@@ -8,17 +8,16 @@ mirror the production helpers in
 ``is_layer_skipped``).
 """
 
-from types import MappingProxyType
-
 import pytest
 
 
-_FALLBACK_FUSED_SHARDS = MappingProxyType(
-    {
-        "qkv_proj": ["q_proj", "k_proj", "v_proj"],
-        "gate_up_proj": ["gate_proj", "up_proj"],
-    }
-)
+# Mirror the production module-level mapping in
+# ``sglang.srt.layers.quantization.utils``: it is a plain dict, and the fix
+# is to copy it (including per-key lists) before returning it to callers.
+_FALLBACK_FUSED_SHARDS = {
+    "qkv_proj": ["q_proj", "k_proj", "v_proj"],
+    "gate_up_proj": ["gate_proj", "up_proj"],
+}
 
 
 def _effective_fused(fused_mapping=None, proj_name="qkv_proj"):
