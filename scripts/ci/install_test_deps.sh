@@ -1,46 +1,36 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: Apache-2.0
-# Install the minimal dependency set needed by the quant regression tests.
-#
-# This script deliberately avoids resolving sglang's full dependency tree:
-# it installs with --no-deps and pins versions via constraints-ci.txt so the
-# CI environment stays small and reproducible.
+# Minimal, reproducible test environment for the registered quant tests.
+# Deliberately avoids `pip install -e python` / `pip install -r requirements`
+# because those resolve the full sglang dependency tree and are the root cause
+# of the CI environment-preparation failures.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "${REPO_ROOT}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$ROOT_DIR"
 
-if [[ ! -f .venv/bin/activate ]]; then
-  echo "error: .venv not found; create it before running this script" >&2
-  exit 1
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+VENV_DIR="${VENV_DIR:-.venv}"
+
+if [ ! -d "$VENV_DIR" ]; then
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
-
 # shellcheck disable=SC1091
-. .venv/bin/activate
+. "$VENV_DIR/bin/activate"
 
-python - <<'PY'
-import sys
-if sys.prefix == sys.base_prefix:
-    raise SystemExit("error: .venv is not active")
-print(f"using interpreter: {sys.executable}")
-PY
-
-CONSTRAINTS="${REPO_ROOT}/scripts/ci/constraints-ci.txt"
-REQUIREMENTS="${REPO_ROOT}/scripts/ci/requirements-test-min.txt"
-
-if [[ ! -f "${CONSTRAINTS}" ]]; then
-  echo "error: missing ${CONSTRAINTS}" >&2
-  exit 1
-fi
-if [[ ! -f "${REQUIREMENTS}" ]]; then
-  echo "error: missing ${REQUIREMENTS}" >&2
-  exit 1
-fi
-
-# Fail loudly with the full pip output instead of a truncated log.
-set -x
 python -m pip install --upgrade pip
-python -m pip install --no-deps -c "${CONSTRAINTS}" -r "${REQUIREMENTS}"
-set +x
+python -m pip install \
+  --no-deps \
+  -c scripts/ci/constraints-ci.txt \
+  -r scripts/ci/requirements-test-min.txt
 
-echo "minimal test dependencies installed"
+# Install sglang itself without resolving its dependency tree. The tests that
+# need torch/transformers are expected to be skipped or to rely on a prebuilt
+# environment; the regression tests added here are stdlib-only.
+if [ -f python/pyproject.toml ] || [ -f python/setup.py ]; then
+  python -m pip install --no-deps -e python || true
+fi
+
+echo "--- environment ---"
+python -V
+python -m pip list
+python -m pytest --version

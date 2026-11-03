@@ -13,6 +13,31 @@ import pickle
 import pytest
 
 
+class _RestrictedUnpickler(pickle.Unpickler):
+    """Allow only plain containers/scalars; reject anything that can execute code."""
+
+    _ALLOWED = {
+        ("builtins", "dict"),
+        ("builtins", "list"),
+        ("builtins", "tuple"),
+        ("builtins", "set"),
+        ("builtins", "frozenset"),
+        ("builtins", "int"),
+        ("builtins", "float"),
+        ("builtins", "str"),
+        ("builtins", "bytes"),
+        ("builtins", "bool"),
+        ("builtins", "NoneType"),
+    }
+
+    def find_class(self, module, name):
+        if (module, name) not in self._ALLOWED:
+            raise pickle.UnpicklingError(
+                f"Refusing to load {module}.{name} from checkpoint"
+            )
+        return super().find_class(module, name)
+
+
 class _MaliciousPayload:
     def __init__(self, marker):
         self.marker = marker
@@ -23,7 +48,7 @@ class _MaliciousPayload:
 
 def _safe_load(buffer: io.BytesIO):
     """Load a checkpoint with the restricted unpickler policy."""
-    return pickle.load(buffer, fix_imports=False)
+    return _RestrictedUnpickler(buffer, fix_imports=False).load()
 
 
 def test_malicious_pickle_is_rejected_without_execution(tmp_path):

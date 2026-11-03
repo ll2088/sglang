@@ -1,7 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
-# Version pins for the minimal CI test environment.
-# Keep this file in sync with any other constraints file used by CI.
-pytest==8.3.4
-pytest-randomly==3.16.0
-numpy==1.26.4
-torch==2.5.1
+# Minimal constraints for CI test environment.
+# Keep this file small: it must not pull in the full sglang dependency tree.
+pytest>=7,<9
+pytest-randomly>=3,<5

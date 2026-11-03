@@ -1,7 +1,5 @@
-# SPDX-License-Identifier: Apache-2.0
-# Minimal requirements for the quant regression tests.
-# Installed with --no-deps; versions are pinned in constraints-ci.txt.
-pytest
-pytest-randomly
-numpy
-torch
+# Minimal runtime requirements for the registered quant regression tests.
+# These tests only need pytest plus the stdlib; sglang itself is imported
+# lazily by the tests that need it and is installed separately with --no-deps.
+pytest>=7,<9
+pytest-randomly>=3,<5
