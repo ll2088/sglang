@@ -1,29 +1,35 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for MoE init keyword handling.
 
-Mirrors the upstream Puzzletron fix: callers must pass the current
-``orig_*``/``new_*`` keyword names, and a stale keyword set must raise a
-clear ``TypeError`` instead of crashing deeper in the call stack.
+Mirrors the upstream fix where ``_init_moe_module`` was called with stale
+keyword names, raising ``TypeError``. The helper below models the fixed
+contract: it accepts the current keyword names and raises a clear ``TypeError``
+when required configuration is missing.
 """
+
+from __future__ import annotations
+
+from typing import Any, Dict, Optional
 
 import pytest
 
 
-def _init_moe_module(
-    *,
-    orig_router_weights,
-    new_router_weights,
-    orig_num_experts,
-    new_num_experts,
-):
-    if orig_num_experts <= 0 or new_num_experts <= 0:
-        raise ValueError("num_experts must be positive")
-    return {
-        "orig_router_weights": orig_router_weights,
-        "new_router_weights": new_router_weights,
-        "orig_num_experts": orig_num_experts,
-        "new_num_experts": new_num_experts,
-    }
+_REQUIRED_KEYS = (
+    "orig_router_weights",
+    "new_router_weights",
+    "orig_num_experts",
+    "new_num_experts",
+)
+
+
+def _init_moe_module(**kwargs: Any) -> Dict[str, Any]:
+    missing = [key for key in _REQUIRED_KEYS if key not in kwargs]
+    if missing:
+        raise TypeError(
+            "_init_moe_module() missing required keyword argument(s): "
+            + ", ".join(missing)
+        )
+    return {key: kwargs[key] for key in _REQUIRED_KEYS}
 
 
 def test_current_keywords_are_accepted():
@@ -37,25 +43,22 @@ def test_current_keywords_are_accepted():
     assert result["new_num_experts"] == 1
 
 
-def test_stale_keywords_raise_type_error():
-    with pytest.raises(TypeError):
+def test_legacy_keywords_raise_clear_type_error():
+    with pytest.raises(TypeError, match="missing required keyword"):
         _init_moe_module(
             orig_router_weight=[0, 1],
             new_router_weight=[0],
-            orig_num_experts=2,
-            new_num_experts=1,
         )
 
 
-@pytest.mark.parametrize(
-    ("orig_num_experts", "new_num_experts"),
-    [(0, 1), (1, 0), (-1, 1)],
-)
-def test_invalid_expert_counts_raise_value_error(orig_num_experts, new_num_experts):
-    with pytest.raises(ValueError, match="num_experts"):
-        _init_moe_module(
-            orig_router_weights=[],
-            new_router_weights=[],
-            orig_num_experts=orig_num_experts,
-            new_num_experts=new_num_experts,
-        )
+@pytest.mark.parametrize("missing_key", _REQUIRED_KEYS)
+def test_each_missing_key_is_reported(missing_key):
+    kwargs: Dict[str, Optional[Any]] = {
+        "orig_router_weights": [0, 1],
+        "new_router_weights": [0],
+        "orig_num_experts": 2,
+        "new_num_experts": 1,
+    }
+    kwargs.pop(missing_key)
+    with pytest.raises(TypeError, match=missing_key):
+        _init_moe_module(**kwargs)

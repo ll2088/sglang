@@ -1,3 +1,3 @@
-# Minimal dependencies for the self-contained quant regression tests.
-# These tests only use pytest + stdlib and must not pull in sglang runtime deps.
+# Minimal test dependencies for the upstream-pattern regression tests.
+# Intentionally does NOT install sglang or its heavy runtime deps.
 pytest>=7.0

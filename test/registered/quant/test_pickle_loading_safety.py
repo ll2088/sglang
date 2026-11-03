@@ -1,59 +1,86 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for safe checkpoint loading.
+"""Security regression tests for safe pickle loading.
 
-A malicious pickle payload must be rejected without executing its
-``__reduce__`` callable. The helper below mirrors the upstream pattern:
-``torch.load(..., weights_only=True)`` first, and any fallback must be
-explicitly gated by a caller-supplied checksum.
+Only the standard library and pytest are required; the module under test is
+imported directly from its file path so that importing sglang is not needed.
 """
 
+from __future__ import annotations
+
 import hashlib
+import importlib.util
 import os
+import pickle
+from pathlib import Path
 
 import pytest
 
+_MODULE_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "python"
+    / "sglang"
+    / "srt"
+    / "utils"
+    / "safe_pickle.py"
+)
+_SPEC = importlib.util.spec_from_file_location("safe_pickle_under_test", _MODULE_PATH)
+assert _SPEC is not None and _SPEC.loader is not None
+safe_pickle = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(safe_pickle)
 
-torch = pytest.importorskip("torch")
+UnsafePickleError = safe_pickle.UnsafePickleError
+safe_pickle_load = safe_pickle.safe_pickle_load
+safe_pickle_loads = safe_pickle.safe_pickle_loads
+sha256_file = safe_pickle.sha256_file
 
 
-class _UnsupportedCheckpoint:
-    def __init__(self, marker):
+class _Malicious:
+    def __init__(self, marker: Path):
         self.marker = marker
 
     def __reduce__(self):
         return os.mkdir, (str(self.marker),)
 
 
-def _load_weights(path, expected_sha256=None):
-    if expected_sha256 is not None:
-        digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
-        if digest.lower() != expected_sha256.lower():
-            raise RuntimeError("Checkpoint checksum mismatch")
-    try:
-        return torch.load(path, map_location="cpu", weights_only=True)
-    except Exception as exc:
-        raise RuntimeError("Checkpoint rejected by safe loader") from exc
-
-
-def test_malicious_pickle_is_rejected_without_execution(tmp_path):
+def test_malicious_payload_is_rejected_without_execution(tmp_path):
     marker = tmp_path / "executed"
-    path = tmp_path / "evil.pt"
-    torch.save(_UnsupportedCheckpoint(marker), path)
-    with pytest.raises(RuntimeError, match="Checkpoint"):
-        _load_weights(str(path))
+    payload = pickle.dumps(_Malicious(marker))
+    with pytest.raises(UnsafePickleError):
+        safe_pickle_loads(payload)
     assert not marker.exists()
 
 
-def test_checksum_mismatch_is_rejected(tmp_path):
-    path = tmp_path / "weights.pt"
-    torch.save({"w": torch.zeros(1)}, path)
-    with pytest.raises(RuntimeError, match="checksum"):
-        _load_weights(str(path), expected_sha256="0" * 64)
+def test_allow_listed_payload_round_trips():
+    payload = pickle.dumps({"a": [1, 2, 3], "b": ("x", "y")})
+    assert safe_pickle_loads(payload) == {"a": [1, 2, 3], "b": ("x", "y")}
 
 
-def test_checksum_match_allows_state_dict(tmp_path):
-    path = tmp_path / "weights.pt"
-    torch.save({"w": torch.zeros(1)}, path)
+def test_load_requires_explicit_digest(tmp_path):
+    path = tmp_path / "data.pkl"
+    path.write_bytes(pickle.dumps({"k": 1}))
+    with pytest.raises(UnsafePickleError, match="SHA-256"):
+        safe_pickle_load(path)
+
+
+def test_load_rejects_wrong_digest(tmp_path):
+    path = tmp_path / "data.pkl"
+    path.write_bytes(pickle.dumps({"k": 1}))
+    with pytest.raises(UnsafePickleError, match="failed SHA-256"):
+        safe_pickle_load(path, expected_sha256="0" * 64)
+
+
+def test_load_accepts_matching_digest(tmp_path):
+    path = tmp_path / "data.pkl"
+    path.write_bytes(pickle.dumps({"k": 1}))
+    digest = sha256_file(path)
+    assert safe_pickle_load(path, expected_sha256=digest.upper()) == {"k": 1}
+
+
+def test_load_rejects_malicious_payload_even_with_valid_digest(tmp_path):
+    marker = tmp_path / "executed"
+    path = tmp_path / "evil.pkl"
+    path.write_bytes(pickle.dumps(_Malicious(marker)))
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    loaded = _load_weights(str(path), expected_sha256=digest.upper())
-    assert set(loaded) == {"w"}
+    with pytest.raises(UnsafePickleError):
+        safe_pickle_load(path, expected_sha256=digest)
+    assert not marker.exists()
