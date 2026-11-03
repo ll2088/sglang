@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Constraints for the lightweight quantization regression test environment.
+# Keep this list minimal: the tests under test/registered/quant/ only require
+# the standard library and pytest.
+pytest>=8.0,<9.0

@@ -1,31 +1,27 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# Lightweight test dependency installer for the quantization regression tests.
 #
-# Install the minimal dependency set required by the self-contained regression
-# tests under test/registered/quant/. This script intentionally avoids
-# `pip install -e python` so CI does not pull the full sglang runtime stack.
-#
-# Usage: scripts/ci/install_test_deps.sh
+# These tests only need the Python standard library and pytest, so we avoid
+# installing the full sglang dependency tree (which pulls heavy packages such
+# as py-spy, quack-kernels, etc. and can fail on newer Python versions).
 set -euo pipefail
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+CONSTRAINTS="${REPO_ROOT}/constraints-ci.txt"
 
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-    echo "error: ${PYTHON_BIN} not found" >&2
-    exit 1
+if [[ ! -f "${CONSTRAINTS}" ]]; then
+  echo "[install_test_deps] missing constraints file: ${CONSTRAINTS}" >&2
+  exit 1
 fi
 
-echo "python: $(${PYTHON_BIN} -V 2>&1)"
-echo "pip:    $(${PYTHON_BIN} -m pip -V 2>&1)"
+echo "[install_test_deps] using constraints file: ${CONSTRAINTS}"
+echo "[install_test_deps] python: $(python -V 2>&1)"
 
-# Pin pytest to a version that supports the Python interpreter in use.
-# The regression tests only need stdlib + pytest.
-if ! "${PYTHON_BIN}" -m pip install --disable-pip-version-check \
-        -c "$(dirname "$0")/constraints-ci.txt" \
-        "pytest>=7.4,<9"; then
-    echo "error: failed to install pytest" >&2
-    "${PYTHON_BIN}" -m pip -V >&2 || true
-    exit 1
-fi
+# Only install what the lightweight regression tests need. Pin pytest via the
+# constraints file so resolution stays deterministic across runners.
+python -m pip install --upgrade pip
+python -m pip install --only-binary=:all: -c "${CONSTRAINTS}" pytest
 
-echo "test dependencies installed"
+echo "[install_test_deps] done"
