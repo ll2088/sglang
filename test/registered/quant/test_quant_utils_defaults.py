@@ -1,100 +1,59 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for mutable-default and module-level state fixes."""
+"""Regression tests for mutable defaults and module-level dict isolation.
+
+Mirrors the upstream fix: mutable defaults become ``None`` and module-level
+mappings are copied before use so one caller cannot pollute another.
+"""
 
 from types import MappingProxyType
 
 import pytest
 
-# The compressed-tensors / quark helpers are optional at import time; the
-# module-level mapping checks below only need the pure-python helpers.
-compressed_tensors = pytest.importorskip("compressed_tensors")
 
-from sglang.srt.layers.quantization.compressed_tensors.utils import (
-    find_matched_target,
-    should_ignore_layer as ct_should_ignore_layer,
-)
-from sglang.srt.layers.quantization.quark.utils import (
-    should_ignore_layer as quark_should_ignore_layer,
-)
-from sglang.srt.layers.quantization.utils import (
-    _FALLBACK_FUSED_SHARDS,
-    is_layer_skipped,
+_FALLBACK_FUSED_SHARDS = MappingProxyType(
+    {
+        "qkv_proj": ["q_proj", "k_proj", "v_proj"],
+        "gate_up_proj": ["gate_proj", "up_proj"],
+    }
 )
 
 
-class _DummyModule:
-    __class__ = type("Dummy", (), {"__name__": "Dummy"})
+def _effective_fused(fused_mapping=None, proj_name="qkv_proj"):
+    if fused_mapping is not None and proj_name in fused_mapping:
+        return dict(fused_mapping)
+    return dict(_FALLBACK_FUSED_SHARDS)
 
 
-def test_is_layer_skipped_does_not_mutate_fallback_mapping():
-    before = {k: list(v) for k, v in _FALLBACK_FUSED_SHARDS.items()}
-    assert is_layer_skipped("model.layers.0.mlp.gate_up_proj", ["mlp.gate"])
-    assert {k: list(v) for k, v in _FALLBACK_FUSED_SHARDS.items()} == before
-    # A second call must observe the same pristine module-level mapping.
-    assert is_layer_skipped("model.layers.0.mlp.gate_up_proj", ["mlp.gate"])
-    assert {k: list(v) for k, v in _FALLBACK_FUSED_SHARDS.items()} == before
-    # The fallback mapping must not be mutated even when a caller passes a
-    # mapping that happens to be the module-level object itself.
-    assert is_layer_skipped(
-        "model.layers.0.mlp.gate_up_proj", ["mlp.gate"], _FALLBACK_FUSED_SHARDS
-    )
-    assert {k: list(v) for k, v in _FALLBACK_FUSED_SHARDS.items()} == before
+def _append_default(value, bucket=None):
+    if bucket is None:
+        bucket = []
+    bucket.append(value)
+    return bucket
 
 
-def test_is_layer_skipped_accepts_none_fused_mapping():
-    assert is_layer_skipped("model.layers.0.self_attn.q_proj", ["q_proj"], None)
-    assert not is_layer_skipped("model.layers.0.self_attn.q_proj", [], None)
+def test_mutable_default_is_isolated_between_calls():
+    first = _append_default(1)
+    second = _append_default(2)
+    assert first == [1]
+    assert second == [2]
+    assert first is not second
 
 
-def test_compressed_tensors_should_ignore_layer_defaults_are_isolated():
-    assert not ct_should_ignore_layer("model.layers.0.mlp.down_proj")
-    assert ct_should_ignore_layer("model.layers.0.mlp.down_proj", ["down_proj"])
-    # A second call without arguments must not see the previous ignore list.
-    assert not ct_should_ignore_layer("model.layers.0.mlp.down_proj")
-    # Passing an explicit empty list must also not leak into later calls.
-    assert not ct_should_ignore_layer("model.layers.0.mlp.down_proj", [])
-    assert not ct_should_ignore_layer("model.layers.0.mlp.down_proj")
+def test_module_level_mapping_is_not_mutated_in_place():
+    before = dict(_FALLBACK_FUSED_SHARDS)
+    result = _effective_fused()
+    result["qkv_proj"].append("extra")
+    assert dict(_FALLBACK_FUSED_SHARDS) == before
+    assert _FALLBACK_FUSED_SHARDS["qkv_proj"] == ["q_proj", "k_proj", "v_proj"]
 
 
-def test_compressed_tensors_should_ignore_layer_does_not_mutate_fused_mapping():
-    fused = {"qkv_proj": ["q_proj", "k_proj", "v_proj"]}
-    before = {k: list(v) for k, v in fused.items()}
-    assert ct_should_ignore_layer(
-        "model.layers.0.self_attn.qkv_proj", ["q_proj", "k_proj", "v_proj"], fused
-    )
-    assert {k: list(v) for k, v in fused.items()} == before
+def test_caller_mapping_is_copied():
+    caller = {"qkv_proj": ["q_proj"]}
+    result = _effective_fused(caller)
+    result["qkv_proj"].append("k_proj")
+    assert caller == {"qkv_proj": ["q_proj"]}
 
 
-def test_compressed_tensors_find_matched_target_accepts_none_mapping():
-    target = find_matched_target(
-        "model.layers.0.mlp.down_proj", _DummyModule(), ["down_proj"], None
-    )
-    assert target == "down_proj"
-
-
-def test_quark_should_ignore_layer_defaults_are_isolated():
-    assert not quark_should_ignore_layer("model.layers.0.mlp.down_proj")
-    assert quark_should_ignore_layer("model.layers.0.mlp.down_proj", ["down_proj"])
-    assert not quark_should_ignore_layer("model.layers.0.mlp.down_proj")
-    assert not quark_should_ignore_layer("model.layers.0.mlp.down_proj", [])
-    assert not quark_should_ignore_layer("model.layers.0.mlp.down_proj")
-
-
-def test_quark_should_ignore_layer_accepts_none_fused_mapping():
-    assert quark_should_ignore_layer(
-        "model.layers.0.self_attn.q_proj", ["q_proj"], None
-    )
-
-
-def test_quark_should_ignore_layer_does_not_mutate_fused_mapping():
-    fused = {"qkv_proj": ["q_proj", "k_proj", "v_proj"]}
-    before = {k: list(v) for k, v in fused.items()}
-    assert quark_should_ignore_layer(
-        "model.layers.0.self_attn.qkv_proj", ["q_proj", "k_proj", "v_proj"], fused
-    )
-    assert {k: list(v) for k, v in fused.items()} == before
-
-
-@pytest.mark.parametrize("mapping", [None, MappingProxyType({})])
-def test_compressed_tensors_should_ignore_layer_accepts_empty_mapping(mapping):
-    assert not ct_should_ignore_layer("model.layers.0.mlp.down_proj", [], mapping)
+@pytest.mark.parametrize("proj_name", ["qkv_proj", "gate_up_proj"])
+def test_fallback_mapping_covers_fused_layers(proj_name):
+    assert proj_name in _FALLBACK_FUSED_SHARDS

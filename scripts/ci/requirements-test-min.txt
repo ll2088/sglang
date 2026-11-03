@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-# Minimal, dependency-free test requirements for the quantization suite.
-# Installed with --no-deps; transitive pins live in constraints-ci.txt.
+# Minimal requirements for the quant regression tests.
+# Installed with --no-deps; versions are pinned in constraints-ci.txt.
 pytest
+pytest-randomly
+numpy
+torch

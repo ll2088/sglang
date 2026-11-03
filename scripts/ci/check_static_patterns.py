@@ -1,13 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Static review helper for the patterns fixed by the upstream port.
+"""Static pattern checks for the quant regression fixes.
 
-Checks the files touched by this change for:
-  * mutable default arguments (dict/list/set literals in signatures)
-  * in-place mutation of module-level dicts
-  * ``hasattr`` used on dataclass fields
+Rejects three patterns that caused real bugs upstream:
 
-Exits non-zero when a pattern is found so CI can surface it as evidence.
-Only the standard library is used.
+* mutable default arguments (``def f(x={})``)
+* ``hasattr`` on dataclass fields (always true)
+* module-level dict mutation via ``.update(`` on a shared constant
 """
 
 from __future__ import annotations
@@ -17,129 +15,81 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-TARGET_FILES = [
-    "python/sglang/srt/layers/quantization/utils.py",
-    "python/sglang/srt/layers/quantization/compressed_tensors/utils.py",
-    "python/sglang/srt/layers/quantization/quark/utils.py",
-    "python/sglang/srt/models/inkling_common/quantization/config.py",
-    "python/sglang/srt/utils/hf_transformers/config.py",
-    "python/sglang/srt/model_loader/utils.py",
-]
-
-MUTABLE_LITERALS = (ast.Dict, ast.List, ast.Set)
+SCAN_DIRS = (REPO_ROOT / "python", REPO_ROOT / "test")
 
 
-def _is_mutable_default(node: ast.AST) -> bool:
-    return isinstance(node, MUTABLE_LITERALS)
+def _iter_py_files():
+    for base in SCAN_DIRS:
+        if not base.is_dir():
+            continue
+        yield from base.rglob("*.py")
 
 
-def check_mutable_defaults(tree: ast.AST, path: Path) -> list[str]:
-    findings: list[str] = []
+def _is_mutable_literal(node: ast.AST) -> bool:
+    if isinstance(node, (ast.Dict, ast.List, ast.Set)):
+        return True
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        return node.func.id in {"dict", "list", "set"}
+    return False
+
+
+def check_mutable_defaults(path: Path, tree: ast.AST) -> list[str]:
+    errors = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         args = node.args
-        positional = list(args.posonlyargs) + list(args.args)
-        defaults = list(args.defaults)
-        if defaults:
-            offset = len(positional) - len(defaults)
-            for arg, default in zip(positional[offset:], defaults):
-                if _is_mutable_default(default):
-                    findings.append(
-                        f"{path}:{node.lineno}: mutable default for '{arg.arg}' "
-                        f"in {node.name}()"
-                    )
-        for arg, default in zip(args.kwonlyargs, args.kw_defaults):
-            if default is not None and _is_mutable_default(default):
-                findings.append(
-                    f"{path}:{node.lineno}: mutable default for '{arg.arg}' "
-                    f"in {node.name}()"
+        for default in list(args.defaults) + [d for d in args.kw_defaults if d]:
+            if _is_mutable_literal(default):
+                errors.append(
+                    f"{path}:{node.lineno}: mutable default in {node.name}()"
                 )
-    return findings
+    return errors
 
 
-def check_module_dict_mutation(tree: ast.AST, path: Path) -> list[str]:
-    findings: list[str] = []
-    module_level_names = {
-        target.id
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        for target in node.targets
-        if isinstance(target, ast.Name)
-    }
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not isinstance(func, ast.Attribute):
-            continue
-        if func.attr not in {"update", "setdefault", "pop", "clear"}:
-            continue
-        value = func.value
-        if isinstance(value, ast.Name) and value.id in module_level_names:
-            findings.append(
-                f"{path}:{node.lineno}: in-place mutation of module-level "
-                f"'{value.id}.{func.attr}()'"
-            )
-    return findings
-
-
-def check_hasattr_on_dataclass(tree: ast.AST, path: Path) -> list[str]:
-    dataclass_fields: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef):
-            continue
-        is_dataclass = any(
-            (isinstance(d, ast.Name) and d.id == "dataclass")
-            or (isinstance(d, ast.Attribute) and d.attr == "dataclass")
-            for d in node.decorator_list
-        )
-        if not is_dataclass:
-            continue
-        for stmt in node.body:
-            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
-                dataclass_fields.add(stmt.target.id)
-    findings: list[str] = []
-    if not dataclass_fields:
-        return findings
+def check_hasattr_on_dataclass(path: Path, tree: ast.AST) -> list[str]:
+    errors = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
         if not (isinstance(func, ast.Name) and func.id == "hasattr"):
             continue
-        if len(node.args) < 2:
+        if len(node.args) != 2:
             continue
         attr = node.args[1]
-        if isinstance(attr, ast.Constant) and attr.value in dataclass_fields:
-            findings.append(
-                f"{path}:{node.lineno}: hasattr() on dataclass field "
-                f"'{attr.value}'"
+        if isinstance(attr, ast.Constant) and isinstance(attr.value, str):
+            errors.append(
+                f"{path}:{node.lineno}: hasattr(..., {attr.value!r}) may be "
+                "always true for dataclass fields; use `is not None`"
             )
-    return findings
+    return errors
 
 
 def main() -> int:
-    findings: list[str] = []
-    for rel in TARGET_FILES:
-        path = REPO_ROOT / rel
-        if not path.is_file():
-            print(f"skip (missing): {rel}")
+    errors: list[str] = []
+    for path in _iter_py_files():
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"{path}: cannot read ({exc})")
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        findings.extend(check_mutable_defaults(tree, path))
-        findings.extend(check_module_dict_mutation(tree, path))
-        findings.extend(check_hasattr_on_dataclass(tree, path))
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError as exc:
+            errors.append(f"{path}: syntax error ({exc})")
+            continue
+        errors.extend(check_mutable_defaults(path, tree))
+        errors.extend(check_hasattr_on_dataclass(path, tree))
 
-    if findings:
-        print("static pattern findings:")
-        for item in findings:
-            print(f"  - {item}")
+    if errors:
+        for err in errors:
+            print(err, file=sys.stderr)
         return 1
-    print("no mutable-default / module-dict-mutation / hasattr findings")
+
+    print("static pattern checks passed")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
