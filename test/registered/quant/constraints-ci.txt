@@ -1,0 +1,3 @@
+# Constraints for the minimal CI environment used by the quant tests.
+# Pin only what is required to keep the interpreter and pytest stable.
+pytest==8.3.4

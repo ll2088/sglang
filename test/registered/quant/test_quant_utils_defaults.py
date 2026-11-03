@@ -1,21 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for mutable-default and module-level mapping fixes.
+"""Regression tests for mutable defaults and module-level dict isolation.
 
-These tests are self-contained (stdlib + pytest only) and mirror the upstream
-fix that replaced mutable defaults with ``None`` and copied module-level
-mappings before use.
+These tests are self-contained (stdlib + pytest only) and do not import
+sglang, so they can run in the minimal CI environment.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from types import MappingProxyType
 
 import pytest
-
-# NOTE: this module is intentionally self-contained (stdlib + pytest only).
-# It must not import sglang, so that it can run in the minimal CI environment
-# installed by scripts/ci/install_test_deps.sh.
 
 _FALLBACK_FUSED_SHARDS = {
     "qkv_proj": ["q_proj", "k_proj", "v_proj"],
@@ -24,11 +18,8 @@ _FALLBACK_FUSED_SHARDS = {
 
 
 def _copy_fused_mapping(fused_mapping=None):
-    if fused_mapping is not None and not isinstance(fused_mapping, Mapping):
-        raise TypeError(
-            "fused_mapping must be a mapping of fused layer names to shard "
-            f"names, got {type(fused_mapping).__name__}"
-        )
+    if fused_mapping is not None and not isinstance(fused_mapping, dict):
+        raise TypeError("fused_mapping must be a mapping")
     source = (
         fused_mapping
         if fused_mapping is not None
@@ -37,35 +28,35 @@ def _copy_fused_mapping(fused_mapping=None):
     return {key: list(value) for key, value in source.items()}
 
 
-def _make_mapping(func_kwargs=None):
-    return {} if func_kwargs is None else func_kwargs
+def _with_mutable_default(value, extra=None):
+    if extra is None:
+        extra = {}
+    extra["value"] = value
+    return extra
 
 
 def test_mutable_default_is_isolated_between_calls():
-    first = _make_mapping()
-    first["custom_option"] = True
-    second = _make_mapping()
-    assert second == {}
+    first = _with_mutable_default(1)
+    second = _with_mutable_default(2)
+    assert first == {"value": 1}
+    assert second == {"value": 2}
+    assert first is not second
 
 
-def test_module_level_mapping_is_not_mutated_in_place():
+def test_module_level_fallback_is_not_mutated():
     original = {key: list(value) for key, value in _FALLBACK_FUSED_SHARDS.items()}
     copied = _copy_fused_mapping()
-    copied["qkv_proj"].append("extra_proj")
+    copied["qkv_proj"].append("extra")
     assert _FALLBACK_FUSED_SHARDS == original
 
 
 def test_caller_mapping_is_copied():
-    caller = {"qkv_proj": ["q_proj", "k_proj", "v_proj"]}
+    caller = {"qkv_proj": ["q_proj"]}
     copied = _copy_fused_mapping(caller)
-    copied["qkv_proj"].append("extra_proj")
-    assert caller["qkv_proj"] == ["q_proj", "k_proj", "v_proj"]
+    copied["qkv_proj"].append("k_proj")
+    assert caller == {"qkv_proj": ["q_proj"]}
 
 
-@pytest.mark.parametrize("value", [None, {}, {"qkv_proj": ["q_proj"]}])
-def test_copy_fused_mapping_accepts_optional_inputs(value):
-    result = _copy_fused_mapping(value)
-    assert isinstance(result, dict)
-    for key, shards in result.items():
-        assert isinstance(key, str)
-        assert isinstance(shards, list)
+def test_invalid_mapping_raises_type_error():
+    with pytest.raises(TypeError):
+        _copy_fused_mapping(["not", "a", "mapping"])

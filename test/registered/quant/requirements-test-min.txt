@@ -1,0 +1,4 @@
+# Minimal dependencies for the quant regression tests.
+# Keep this list small: these tests are stdlib + pytest only and must not
+# pull in the full sglang runtime dependency tree.
+pytest>=7.0
