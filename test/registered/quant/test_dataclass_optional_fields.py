@@ -16,11 +16,20 @@ class _Config(InklingQuantizationConfigBase):
 
 def test_exclude_layer_without_exclude_modules_attribute():
     config = _Config()
+    # The base class only annotates `exclude_modules`; a subclass that never
+    # sets it must be treated as "no exclusions" rather than raising.
+    assert not hasattr(config, "exclude_modules")
     assert config.exclude_layer("model.layers.0.mlp.down_proj") is False
 
 
 def test_exclude_layer_with_empty_exclude_modules():
     config = _Config(exclude_modules=[])
+    assert config.exclude_layer("model.layers.0.mlp.down_proj") is False
+
+
+def test_exclude_layer_with_none_exclude_modules():
+    config = _Config()
+    config.exclude_modules = None
     assert config.exclude_layer("model.layers.0.mlp.down_proj") is False
 
 

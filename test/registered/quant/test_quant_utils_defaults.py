@@ -26,6 +26,9 @@ def test_is_layer_skipped_does_not_mutate_fallback_mapping():
     before = {k: list(v) for k, v in _FALLBACK_FUSED_SHARDS.items()}
     assert is_layer_skipped("model.layers.0.mlp.gate_up_proj", ["mlp.gate"])
     assert {k: list(v) for k, v in _FALLBACK_FUSED_SHARDS.items()} == before
+    # A second call must observe the same pristine module-level mapping.
+    assert is_layer_skipped("model.layers.0.mlp.gate_up_proj", ["mlp.gate"])
+    assert {k: list(v) for k, v in _FALLBACK_FUSED_SHARDS.items()} == before
 
 
 def test_is_layer_skipped_accepts_none_fused_mapping():
@@ -37,6 +40,9 @@ def test_compressed_tensors_should_ignore_layer_defaults_are_isolated():
     assert not ct_should_ignore_layer("model.layers.0.mlp.down_proj")
     assert ct_should_ignore_layer("model.layers.0.mlp.down_proj", ["down_proj"])
     # A second call without arguments must not see the previous ignore list.
+    assert not ct_should_ignore_layer("model.layers.0.mlp.down_proj")
+    # Passing an explicit empty list must also not leak into later calls.
+    assert not ct_should_ignore_layer("model.layers.0.mlp.down_proj", [])
     assert not ct_should_ignore_layer("model.layers.0.mlp.down_proj")
 
 
@@ -50,6 +56,8 @@ def test_compressed_tensors_find_matched_target_accepts_none_mapping():
 def test_quark_should_ignore_layer_defaults_are_isolated():
     assert not quark_should_ignore_layer("model.layers.0.mlp.down_proj")
     assert quark_should_ignore_layer("model.layers.0.mlp.down_proj", ["down_proj"])
+    assert not quark_should_ignore_layer("model.layers.0.mlp.down_proj")
+    assert not quark_should_ignore_layer("model.layers.0.mlp.down_proj", [])
     assert not quark_should_ignore_layer("model.layers.0.mlp.down_proj")
 
 
