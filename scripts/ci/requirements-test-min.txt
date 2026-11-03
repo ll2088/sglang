@@ -1,3 +1,3 @@
-# Minimal dependency set for the quantization regression tests.
-# Keep this list tiny: the tests are intentionally stdlib + pytest only.
+# Minimal test dependencies for quant regression tests.
+# Intentionally excludes the full sglang runtime dependency set.
 pytest>=7.0

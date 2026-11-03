@@ -1,2 +1,4 @@
-# Pinned upper bounds for the minimal CI dependency set.
-pytest<9
+# Constraints for the minimal CI test environment.
+# Keep this file free of sglang runtime pins so that
+# `pip install -r scripts/ci/requirements-test-min.txt -c scripts/ci/constraints-ci.txt`
+# never resolves the full sglang dependency graph.

@@ -13,6 +13,10 @@ from types import MappingProxyType
 
 import pytest
 
+# NOTE: this module is intentionally self-contained (stdlib + pytest only).
+# It must not import sglang, so that it can run in the minimal CI environment
+# installed by scripts/ci/install_test_deps.sh.
+
 _FALLBACK_FUSED_SHARDS = {
     "qkv_proj": ["q_proj", "k_proj", "v_proj"],
     "gate_up_proj": ["gate_proj", "up_proj"],
