@@ -1,7 +1,5 @@
-# SPDX-License-Identifier: Apache-2.0
-# Minimal test requirements for the quantization regression suite.
-# Installed with --no-deps and constrained by scripts/ci/constraints-ci.txt.
-
-pytest
-numpy
-torch
+# Minimal test dependencies for the quant regression suite.
+# Intentionally does NOT include the full sglang runtime dependency set.
+pytest>=7.4,<9
+numpy>=1.24
+torch>=2.1

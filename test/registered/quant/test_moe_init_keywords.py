@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for MoE init keyword handling.
 
-Mirrors the upstream fix: ``_init_moe_module`` must accept the current
-``orig_router_weights`` / ``new_router_weights`` / ``orig_num_experts`` /
-``new_num_experts`` keywords and raise a clear ``TypeError`` for stale ones.
+Mirrors the upstream fix: callers must pass the current keyword names
+(``orig_router_weights`` / ``new_router_weights`` / ``orig_num_experts`` /
+``new_num_experts``). Legacy keyword names must raise a clear ``TypeError``
+rather than crashing deep inside the init path.
 """
 
 import pytest
@@ -16,6 +17,9 @@ def _init_moe_module(
     orig_num_experts=None,
     new_num_experts=None,
 ):
+    """Stand-in for the MoE init entry point with the current keyword names."""
+    if orig_num_experts is None or new_num_experts is None:
+        raise ValueError("orig_num_experts and new_num_experts are required")
     return {
         "orig_router_weights": orig_router_weights,
         "new_router_weights": new_router_weights,
@@ -26,20 +30,25 @@ def _init_moe_module(
 
 def test_current_keywords_are_accepted():
     result = _init_moe_module(
-        orig_router_weights=[1, 2],
-        new_router_weights=[1],
-        orig_num_experts=2,
+        orig_router_weights=[[1.0]],
+        new_router_weights=[[2.0]],
+        orig_num_experts=1,
         new_num_experts=1,
     )
-    assert result["orig_num_experts"] == 2
+    assert result["orig_num_experts"] == 1
     assert result["new_num_experts"] == 1
 
 
-def test_stale_keywords_raise_type_error():
+def test_legacy_keywords_raise_type_error():
     with pytest.raises(TypeError):
-        _init_moe_module(orig_router_weight=[1, 2], new_router_weight=[1])
+        _init_moe_module(
+            orig_router_weight=[[1.0]],
+            new_router_weight=[[2.0]],
+            orig_num_experts=1,
+            new_num_experts=1,
+        )
 
 
-def test_missing_config_raises_controlled_error():
-    with pytest.raises(TypeError):
-        _init_moe_module(unknown_option=True)
+def test_missing_expert_counts_raise_controlled_error():
+    with pytest.raises(ValueError, match="orig_num_experts"):
+        _init_moe_module(orig_router_weights=[[1.0]], new_router_weights=[[2.0]])
