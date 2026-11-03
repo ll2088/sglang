@@ -27,6 +27,18 @@ from sglang.multimodal_gen.runtime.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 
+def _require_usable_communicator(comm: "PyNcclCommunicator") -> "PyNcclCommunicator":
+    """A disabled communicator makes every collective a silent no-op."""
+    if comm.disabled:
+        raise RuntimeError(
+            "PyNccl communicator is disabled "
+            f"(world_size={comm.world_size}, available={comm.available}); "
+            "NCCL collectives would be a no-op. Check that libnccl is loadable "
+            "and that VLLM_DISABLE_PYNCCL is not set."
+        )
+    return comm
+
+
 _previous_set_stream = torch.cuda.set_stream
 
 _current_stream = None

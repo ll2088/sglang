@@ -119,6 +119,18 @@ def test_deterministic_reduce_scatterv_selects_rank_shard(monkeypatch, rank, siz
     coordinator.all_reduce.assert_called_once()
 
 
+def test_pynccl_comm_disabled_fails_fast(monkeypatch):
+    """parallel_state must not silently proceed with a disabled pynccl comm."""
+    from sglang.srt.distributed.device_communicators import pynccl as srt_pynccl
+
+    comm = srt_pynccl.PyNcclCommunicator.__new__(srt_pynccl.PyNcclCommunicator)
+    comm.disabled = True
+    comm.available = False
+    comm.world_size = 2
+    with pytest.raises(RuntimeError, match="disabled"):
+        srt_pynccl._require_usable_communicator(comm)
+
+
 def test_nondeterministic_reduce_scatter_keeps_native_path(monkeypatch):
     monkeypatch.setenv("SGLANG_ENABLE_DETERMINISTIC_INFERENCE", "0")
     monkeypatch.setattr(parallel_state, "_is_cpu", True)

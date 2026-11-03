@@ -27,6 +27,23 @@ from sglang.srt.utils.common import get_current_device_stream_fast
 logger = logging.getLogger(__name__)
 
 
+def _require_usable_communicator(comm: "PyNcclCommunicator") -> "PyNcclCommunicator":
+    """A disabled communicator makes every collective a silent no-op.
+
+    Weight-transfer / rendezvous paths must not proceed with stale weights, so
+    reject the communicator at creation time instead of returning early from
+    every collective later.
+    """
+    if comm.disabled:
+        raise RuntimeError(
+            "PyNccl communicator is disabled "
+            f"(world_size={comm.world_size}, available={comm.available}); "
+            "NCCL collectives would be a no-op. Check that libnccl is loadable "
+            "and that VLLM_DISABLE_PYNCCL is not set."
+        )
+    return comm
+
+
 class PyNcclCommunicator:
     def __init__(
         self,
