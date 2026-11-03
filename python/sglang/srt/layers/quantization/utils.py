@@ -87,6 +87,8 @@ def is_layer_skipped(
     if fused_mapping is not None and proj_name in fused_mapping:
         effective_fused = {key: list(value) for key, value in fused_mapping.items()}
     else:
+        # Copy the module-level fallback (including per-key lists) so callers
+        # can never mutate shared state through the returned view.
         effective_fused = {
             key: list(value) for key, value in _FALLBACK_FUSED_SHARDS.items()
         }

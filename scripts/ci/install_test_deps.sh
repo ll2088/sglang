@@ -1,38 +1,21 @@
 #!/usr/bin/env bash
-# Install the minimal dependency set required by the registered quant tests.
-# Uses --no-deps plus a constraints file so pip never resolves the full
-# sglang dependency tree (py-spy, quack-kernels, ...), which previously made
-# CI environment setup fail before pytest could run.
+# Install the minimal dependencies needed by the self-contained regression
+# tests, then install the local sglang package without pulling its full
+# runtime dependency tree. This keeps the test/stability/security dimensions
+# independent from heavy runtime dependency resolution.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-PYTHON_BIN="${PYTHON_BIN:-python}"
+python -m pip install --upgrade pip
+python -m pip install -r "${SCRIPT_DIR}/requirements-test-min.txt" \
+  -c "${SCRIPT_DIR}/constraints-ci.txt"
 
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  echo "error: python interpreter '${PYTHON_BIN}' not found" >&2
-  exit 1
+# Install the package itself without resolving runtime dependencies so that
+# the self-contained tests can run even if a heavy dependency is unavailable.
+if [ -d "${REPO_ROOT}/python" ]; then
+  python -m pip install --no-deps -e "${REPO_ROOT}/python"
+else
+  python -m pip install --no-deps -e "${REPO_ROOT}"
 fi
-
-CONSTRAINTS="${SCRIPT_DIR}/constraints-ci.txt"
-REQUIREMENTS="${SCRIPT_DIR}/requirements-test-min.txt"
-
-for f in "${CONSTRAINTS}" "${REQUIREMENTS}"; do
-  if [[ ! -f "${f}" ]]; then
-    echo "error: required file not found: ${f}" >&2
-    exit 1
-  fi
-done
-
-set -x
-"${PYTHON_BIN}" -m pip install --upgrade pip
-"${PYTHON_BIN}" -m pip install --no-deps -c "${CONSTRAINTS}" -r "${REQUIREMENTS}"
-# Install the project itself without resolving dependencies.
-if [[ -f "${REPO_ROOT}/pyproject.toml" ]]; then
-  "${PYTHON_BIN}" -m pip install --no-deps -e "${REPO_ROOT}"
-fi
-"${PYTHON_BIN}" -m pip freeze
-set +x
-
-echo "minimal test dependencies installed"
