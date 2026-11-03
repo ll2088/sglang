@@ -1,4 +1,5 @@
-# Constraints for the lightweight CI environment.
-# Keep pytest on a version that supports the test suite and is available
-# as a wheel for the Python versions used by CI (3.10/3.11/3.12).
-pytest<9
+# SPDX-License-Identifier: Apache-2.0
+# Constraints for the lightweight CI test environment used by
+# test/registered/quant/. Keep this list minimal: the regression tests are
+# self-contained and must not require the full sglang dependency tree.
+pytest>=7.4,<9
