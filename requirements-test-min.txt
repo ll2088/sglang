@@ -1,8 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Minimal requirements for the quant regression tests.
-# These tests only need the standard library plus pytest; torch/numpy are
-# listed because the quantization utilities import them at module scope.
-pytest
-pytest-randomly
-numpy
-torch
+# Minimal dependencies for the sonar-fix regression tests.
+# These tests are self-contained (stdlib + pytest only) and do not import sglang.
+pytest>=7.0
