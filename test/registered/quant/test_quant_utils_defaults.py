@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for mutable defaults and module-level dict isolation.
 
-Mirrors the upstream fix: mutable defaults become ``None`` and module-level
-mappings are copied before use so one caller cannot pollute another.
+These tests are intentionally self-contained: they do not import ``sglang`` so
+that they can run without the full runtime dependency tree. The patterns below
+mirror the production helpers in
+``sglang.srt.layers.quantization.utils`` (``_FALLBACK_FUSED_SHARDS`` and
+``is_layer_skipped``).
 """
 
 from types import MappingProxyType

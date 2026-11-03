@@ -81,12 +81,15 @@ def is_layer_skipped(
     # from the fused version to unfused + check to make sure that
     # each shard of the fused layer has the same scheme.
     # Copy the module-level fallback mapping so that callers can never
-    # mutate shared state through the returned view.
-    effective_fused = (
-        dict(fused_mapping)
-        if fused_mapping is not None and proj_name in fused_mapping
-        else dict(_FALLBACK_FUSED_SHARDS)
-    )
+    # mutate shared state through the returned view. The per-key lists are
+    # copied as well, otherwise ``effective_fused[proj_name].append(...)``
+    # would still mutate ``_FALLBACK_FUSED_SHARDS`` in place.
+    if fused_mapping is not None and proj_name in fused_mapping:
+        effective_fused = {key: list(value) for key, value in fused_mapping.items()}
+    else:
+        effective_fused = {
+            key: list(value) for key, value in _FALLBACK_FUSED_SHARDS.items()
+        }
     if proj_name in effective_fused:
         shard_prefixes = [
             prefix.replace(proj_name, shard_proj_name)
