@@ -1,5 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
-# Constraints for the lightweight CI test environment used by
-# test/registered/quant/. Keep this list minimal: the regression tests are
-# self-contained and must not require the full sglang dependency tree.
-pytest>=7.4,<9
+# Keep CI dependency resolution minimal and deterministic.
+# Only pin packages that are required by the targeted regression tests.
+pytest==8.3.4
+pytest-randomly==3.16.0

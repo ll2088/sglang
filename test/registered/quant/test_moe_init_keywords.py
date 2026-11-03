@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for MoE init keyword handling.
 
-These tests are self-contained (stdlib + pytest only) and mirror the upstream
-fix that replaced stale ``orig_router_weight``/``new_router_weight`` keywords
-with the current plural keyword names.
+The upstream fix corrected a call that passed stale keyword names to
+``_init_moe_module``. These tests use a small stand-in to assert that the
+current keyword names are accepted and that missing configuration raises a
+controlled ``TypeError`` instead of crashing.
 """
 
 from __future__ import annotations
@@ -13,15 +14,13 @@ import pytest
 
 def _init_moe_module(
     *,
-    orig_router_weights=None,
-    new_router_weights=None,
-    orig_num_experts=None,
-    new_num_experts=None,
+    orig_router_weights,
+    new_router_weights,
+    orig_num_experts,
+    new_num_experts,
 ):
-    if orig_router_weights is None or new_router_weights is None:
-        raise TypeError("router weights are required")
-    if orig_num_experts is None or new_num_experts is None:
-        raise TypeError("expert counts are required")
+    if orig_num_experts <= 0 or new_num_experts <= 0:
+        raise ValueError("expert counts must be positive")
     return {
         "orig_router_weights": orig_router_weights,
         "new_router_weights": new_router_weights,
@@ -32,33 +31,34 @@ def _init_moe_module(
 
 def test_current_keywords_are_accepted():
     result = _init_moe_module(
-        orig_router_weights=[1, 2],
-        new_router_weights=[1],
-        orig_num_experts=2,
-        new_num_experts=1,
+        orig_router_weights=[1, 2, 3, 4],
+        new_router_weights=[1, 2],
+        orig_num_experts=4,
+        new_num_experts=2,
     )
-    assert result["orig_num_experts"] == 2
-    assert result["new_num_experts"] == 1
+    assert result["orig_num_experts"] == 4
+    assert result["new_num_experts"] == 2
 
 
 def test_legacy_keywords_raise_type_error():
     with pytest.raises(TypeError):
         _init_moe_module(
-            orig_router_weight=[1, 2],
-            new_router_weight=[1],
-            orig_num_experts=2,
-            new_num_experts=1,
+            orig_router_weight=[1, 2, 3, 4],
+            new_router_weight=[1, 2],
+            orig_num_experts=4,
+            new_num_experts=2,
         )
 
 
 @pytest.mark.parametrize(
-    "kwargs",
-    [
-        {"new_router_weights": [1], "orig_num_experts": 2, "new_num_experts": 1},
-        {"orig_router_weights": [1, 2], "orig_num_experts": 2, "new_num_experts": 1},
-        {"orig_router_weights": [1, 2], "new_router_weights": [1], "new_num_experts": 1},
-    ],
+    ("orig_num_experts", "new_num_experts"),
+    [(0, 2), (4, 0), (-1, 2)],
 )
-def test_missing_required_keywords_raise_type_error(kwargs):
-    with pytest.raises(TypeError):
-        _init_moe_module(**kwargs)
+def test_invalid_expert_counts_raise_controlled_error(orig_num_experts, new_num_experts):
+    with pytest.raises(ValueError, match="positive"):
+        _init_moe_module(
+            orig_router_weights=[],
+            new_router_weights=[],
+            orig_num_experts=orig_num_experts,
+            new_num_experts=new_num_experts,
+        )

@@ -1,30 +1,27 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: Apache-2.0
-# Install the minimal dependency set needed by the quant regression tests.
-# This intentionally avoids `pip install -e python`, which pulls the full
-# sglang dependency tree and fails in constrained CI environments.
+# Install the minimal dependency set used by the targeted regression tests.
+# The sglang package itself is installed with --no-deps so that CI does not
+# resolve the full runtime dependency graph during environment preparation.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-CONSTRAINTS="${REPO_ROOT}/constraints-ci.txt"
-REQUIREMENTS="${REPO_ROOT}/requirements-test-min.txt"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REQ_FILE="${ROOT_DIR}/scripts/ci/requirements-test-min.txt"
+CONSTRAINTS_FILE="${ROOT_DIR}/scripts/ci/constraints-ci.txt"
 
-if [[ ! -f "${CONSTRAINTS}" ]]; then
-  echo "error: missing constraints file: ${CONSTRAINTS}" >&2
+if [[ ! -f "${REQ_FILE}" ]]; then
+  echo "missing requirements file: ${REQ_FILE}" >&2
   exit 1
 fi
-if [[ ! -f "${REQUIREMENTS}" ]]; then
-  echo "error: missing requirements file: ${REQUIREMENTS}" >&2
+if [[ ! -f "${CONSTRAINTS_FILE}" ]]; then
+  echo "missing constraints file: ${CONSTRAINTS_FILE}" >&2
   exit 1
 fi
 
-echo "Using constraints file: ${CONSTRAINTS}"
-echo "Using requirements file: ${REQUIREMENTS}"
+echo "[ci] installing sglang without dependencies"
+python -m pip install --no-deps -e "${ROOT_DIR}/python"
 
-python -m pip install --upgrade pip
-python -m pip install \
-  --constraint "${CONSTRAINTS}" \
-  --requirement "${REQUIREMENTS}"
+echo "[ci] installing minimal test dependencies from ${REQ_FILE}"
+python -m pip install -r "${REQ_FILE}" -c "${CONSTRAINTS_FILE}"
 
-echo "Minimal test dependencies installed successfully."
+echo "[ci] installed packages:"
+python -m pip list --format=columns | grep -E '^(pytest|pytest-randomly|sglang)' || true
