@@ -23,11 +23,15 @@ def is_activation_quantization_format(format: str) -> bool:
 
 def should_ignore_layer(
     layer_name: Optional[str],
-    ignore: Iterable[str] = tuple(),
-    fused_mapping: Mapping[str, List[str]] = MappingProxyType({}),
+    ignore: Optional[Iterable[str]] = None,
+    fused_mapping: Optional[Mapping[str, List[str]]] = None,
 ) -> bool:
     if layer_name is None:
         return False
+    if ignore is None:
+        ignore = ()
+    if fused_mapping is None:
+        fused_mapping = MappingProxyType({})
 
     # layer_name = model.layers.0.self_attn.qkv_proj
     # proj_name = qkv_proj
@@ -104,7 +108,7 @@ def find_matched_target(
     layer_name: Optional[str],
     module: Module,
     targets: Iterable[str],
-    fused_mapping: Mapping[str, List[str]] = MappingProxyType({}),
+    fused_mapping: Optional[Mapping[str, List[str]]] = None,
 ) -> str:
     """
     Helper function to look up which "target" in the compressed-tensors
@@ -133,6 +137,8 @@ def find_matched_target(
 
     if layer_name is None:
         layer_name = ""
+    if fused_mapping is None:
+        fused_mapping = MappingProxyType({})
 
     matched_target = (
         _find_first_match(layer_name, targets)

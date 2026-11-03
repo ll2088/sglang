@@ -70,7 +70,7 @@ _FALLBACK_FUSED_SHARDS: Mapping[str, List[str]] = {
 def is_layer_skipped(
     prefix: str,
     ignored_layers: List[str],
-    fused_mapping: Mapping[str, List[str]] = MappingProxyType({}),
+    fused_mapping: Optional[Mapping[str, List[str]]] = None,
 ) -> bool:
     # prefix: model.layers.0.self_attn.q_proj
     # proj_name: q_proj
@@ -81,7 +81,9 @@ def is_layer_skipped(
     # from the fused version to unfused + check to make sure that
     # each shard of the fused layer has the same scheme.
     effective_fused = (
-        fused_mapping if proj_name in fused_mapping else _FALLBACK_FUSED_SHARDS
+        fused_mapping
+        if fused_mapping is not None and proj_name in fused_mapping
+        else _FALLBACK_FUSED_SHARDS
     )
     if proj_name in effective_fused:
         shard_prefixes = [

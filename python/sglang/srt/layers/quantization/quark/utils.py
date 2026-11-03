@@ -45,11 +45,15 @@ def deep_compare(dict1: Any, dict2: Any) -> bool:
 
 def should_ignore_layer(
     layer_name: Optional[str],
-    ignore: Iterable[str],
-    fused_mapping: Mapping[str, list[str]] = MappingProxyType({}),
+    ignore: Optional[Iterable[str]] = None,
+    fused_mapping: Optional[Mapping[str, list[str]]] = None,
 ) -> bool:
     if layer_name is None:
         return False
+    if ignore is None:
+        ignore = ()
+    if fused_mapping is None:
+        fused_mapping = MappingProxyType({})
 
     # layer_name = model.layers.0.self_attn.qkv_proj
     # proj_name = qkv_proj

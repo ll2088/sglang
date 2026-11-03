@@ -107,7 +107,8 @@ class InklingQuantizationConfigBase:
         ) == (4, 3)
 
     def exclude_layer(self, prefix: str) -> bool:
-        if len(self.exclude_modules) == 0:
+        exclude_modules = getattr(self, "exclude_modules", None)
+        if not exclude_modules:
             return False
         return any(
             module in prefix
@@ -115,7 +116,7 @@ class InklingQuantizationConfigBase:
                 prefix.startswith("language_model.")
                 and module in prefix.removeprefix("language_model.")
             )
-            for module in self.exclude_modules
+            for module in exclude_modules
         )
 
 

@@ -317,7 +317,7 @@ def maybe_executor_submit(
     futures: List[concurrent.futures.Future],
     use_async: bool,
     func: Callable[..., Any],
-    func_args: Iterable[Any] = (),
+    func_args: Optional[Iterable[Any]] = None,
     func_kwargs: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Submit a task to the executor if async loading is enabled.
@@ -330,6 +330,8 @@ def maybe_executor_submit(
     - func_args: positional args for the callable (defaults to empty tuple)
     - func_kwargs: keyword args for the callable (defaults to empty dict)
     """
+    if func_args is None:
+        func_args = ()
     if func_kwargs is None:
         func_kwargs = {}
     if use_async:

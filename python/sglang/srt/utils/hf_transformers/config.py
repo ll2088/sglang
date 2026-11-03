@@ -142,12 +142,15 @@ def _apply_gemma4_attention_overrides(config):
     text_config.swa_v_head_dim = swa_head_dim
     text_config.swa_num_key_value_heads = swa_kv_heads
 
-    if not hasattr(text_config, "v_head_dim"):
+    if getattr(text_config, "v_head_dim", None) is None:
         text_config.v_head_dim = text_config.head_dim
 
     # Unified Gemma4 names the end-of-audio token `eoa_token_index`,
     # but the multimodal processor expects `eoa_token_id`.
-    if not hasattr(config, "eoa_token_id") and hasattr(config, "eoa_token_index"):
+    if (
+        getattr(config, "eoa_token_id", None) is None
+        and getattr(config, "eoa_token_index", None) is not None
+    ):
         config.eoa_token_id = config.eoa_token_index
 
 
