@@ -34,6 +34,15 @@ from checks import (  # noqa: E402  (re-exported for pytest collection)
 )
 
 
+def test_checks_are_stdlib_only():
+    """The checks module must not import sglang or pytest."""
+    import checks
+
+    source = open(checks.__file__, "r", encoding="utf-8").read()
+    assert "import sglang" not in source
+    assert "import pytest" not in source
+
+
 if __name__ == "__main__":
     # Allow `python3 test/dockerfile_permissions/test_dockerfile_permissions.py`
     # to run without pytest installed. Import lazily so pytest collection is
