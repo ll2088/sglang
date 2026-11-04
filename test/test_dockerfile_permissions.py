@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """Compatibility entry point for the Dockerfile permission checks.
 
-This module re-exports the stdlib-only checks from
-``test/dockerfile_permissions/checks.py`` as ``test_*`` functions so pytest can
-collect them, and also runs them directly when executed as a script::
+This file exists so CI can invoke the checks with the historical path
+``test/test_dockerfile_permissions.py`` without installing sglang. It is
+stdlib-only and delegates to ``test/dockerfile_permissions/checks.py``.
 
+Usage:
     python3 test/test_dockerfile_permissions.py
-
-It intentionally imports nothing from sglang so CI can run it with a bare
-``python3`` interpreter.
+    python3 -m pytest -q test/test_dockerfile_permissions.py
 """
 
 import os
@@ -25,10 +24,9 @@ from checks import (  # noqa: E402
     check_no_world_writable_permissions as test_no_world_writable_permissions,
     check_readme_keyword_hit_threshold as test_readme_keyword_hit_threshold,
     check_readme_non_root_cache_guidance as test_readme_non_root_cache_guidance,
+    main as _main,
 )
 
 
 if __name__ == "__main__":
-    from checks import main as _main
-
     sys.exit(_main())

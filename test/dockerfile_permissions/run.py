@@ -4,8 +4,7 @@
 Usage:
     python3 test/dockerfile_permissions/run.py
 
-This entry point requires only the Python standard library and never imports
-sglang or pytest, so CI can run it without installing the full dependency tree.
+Requires only a Python 3 interpreter; no sglang or pytest install needed.
 """
 
 import os
