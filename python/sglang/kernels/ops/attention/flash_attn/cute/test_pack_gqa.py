@@ -26,6 +26,15 @@ def _requires_cute():
     )
 
 
+def _requires_sglang():
+    """Skip tests that import the sglang package when it is not installed."""
+    try:
+        import sglang  # noqa: F401
+    except ImportError:
+        return pytest.mark.skip(reason="pack_gqa needs the sglang package")
+    return pytest.mark.skipif(False, reason="")
+
+
 def _load_predicate():
     """Load the predicate without importing the sglang package (no CUDA deps)."""
     path = pathlib.Path(__file__).with_name("mla_head_padding.py")
@@ -98,6 +107,7 @@ def test_predicate_loads_without_cuda_deps():
 
 
 @_requires_cute()
+@_requires_sglang()
 def test_pack_gqa_imports_without_sglang_package(monkeypatch):
     """pack_gqa must resolve the predicate with only its own dir on sys.path.
 
@@ -126,6 +136,7 @@ def test_pack_gqa_imports_without_sglang_package(monkeypatch):
 
 
 @_requires_cute()
+@_requires_sglang()
 def test_pack_gqa_fallback_import_in_subprocess():
     """The sibling-module fallback must work in a fresh interpreter.
 

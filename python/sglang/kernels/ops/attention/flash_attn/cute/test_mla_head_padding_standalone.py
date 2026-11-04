@@ -17,6 +17,9 @@ import sys
 
 import pytest
 
+# This module must stay importable with only the standard library and pytest:
+# it is the CPU-only smoke path for the dense 2CTA MLA head-padding rule.
+
 
 def _load_predicate():
     path = pathlib.Path(__file__).with_name("mla_head_padding.py")
@@ -36,6 +39,14 @@ def test_predicate_does_not_import_sglang():
 
     _load_predicate()
     assert "sglang" not in sys.modules
+
+
+def test_predicate_module_has_no_third_party_imports():
+    """The predicate source must not import CUDA/torch/quack/sglang at module scope."""
+    path = pathlib.Path(__file__).with_name("mla_head_padding.py")
+    source = path.read_text()
+    for forbidden in ("import cutlass", "import torch", "import quack", "import sglang"):
+        assert forbidden not in source
 
 
 def test_predicate_does_not_import_cutlass_or_torch():
