@@ -677,6 +677,41 @@ class TestStackedFp4FakeQuant(CustomTestCase):
         with self.assertRaises(ValueError):
             fake_quant_fp4_stacked(x, torch.ones(3))
 
+    def test_stacked_empty_experts_returns_shape(self):
+        from sglang.kernels.ops.quantization.fp4_fake_quant import (
+            fake_quant_fp4_stacked,
+        )
+
+        x = torch.empty(0, 8, 64)
+        out = fake_quant_fp4_stacked(x, torch.empty(0))
+        self.assertEqual(out.shape, x.shape)
+
+    def test_stacked_single_expert_matches_per_slice(self):
+        from sglang.kernels.ops.quantization.fp4_fake_quant import (
+            fake_quant_fp4,
+            fake_quant_fp4_stacked,
+        )
+
+        torch.manual_seed(0)
+        x = torch.randn(1, 8, 64)
+        amax = x.abs().flatten(1).amax(dim=1)
+        stacked = fake_quant_fp4_stacked(x, amax)
+        ref = fake_quant_fp4(x[0]).unsqueeze(0)
+        torch.testing.assert_close(stacked, ref)
+
+    def test_stacked_multi_expert_matches_per_slice(self):
+        from sglang.kernels.ops.quantization.fp4_fake_quant import (
+            fake_quant_fp4,
+            fake_quant_fp4_stacked,
+        )
+
+        torch.manual_seed(0)
+        x = torch.randn(4, 8, 64)
+        amax = x.abs().flatten(1).amax(dim=1)
+        stacked = fake_quant_fp4_stacked(x, amax)
+        ref = torch.stack([fake_quant_fp4(x[i]) for i in range(x.shape[0])])
+        torch.testing.assert_close(stacked, ref)
+
 
 if __name__ == "__main__":
     unittest.main()

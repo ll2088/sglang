@@ -447,6 +447,53 @@ class TestReplaceFunctionExceptionSafety(CustomTestCase):
                     target.fn()
         self.assertIs(target.fn, original)
 
+    def test_restores_after_kernel_exception(self):
+        """A kernel raising inside the patch must not leak the patch."""
+        from sglang.kernels.ops.quantization.fp4_fake_quant import (
+            replace_function,
+        )
+
+        class Target:
+            def kernel(self):
+                return "original"
+
+        target = Target()
+        original = target.kernel
+
+        def failing_kernel():
+            raise RuntimeError("kernel boom")
+
+        with self.assertRaises(RuntimeError):
+            with replace_function(target, "kernel", failing_kernel):
+                target.kernel()
+        self.assertIs(target.kernel, original)
+        self.assertEqual(target.kernel(), "original")
+
+    def test_restores_after_exception_then_reuse(self):
+        """After an exception, a later patch still restores the original."""
+        from sglang.kernels.ops.quantization.fp4_fake_quant import (
+            replace_function,
+        )
+
+        class Target:
+            def fn(self):
+                return "original"
+
+        target = Target()
+        original = target.fn
+
+        def failing():
+            raise RuntimeError("boom")
+
+        with self.assertRaises(RuntimeError):
+            with replace_function(target, "fn", failing):
+                target.fn()
+        self.assertIs(target.fn, original)
+
+        with replace_function(target, "fn", lambda: "patched"):
+            self.assertEqual(target.fn(), "patched")
+        self.assertIs(target.fn, original)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,8 @@ Indexer values use per-32 UE8M0 scales; compressed KV uses per-16 E4M3 scales.
 Both paths round to the E2M1 grid with ties to even.
 """
 
+from contextlib import contextmanager
+
 import torch
 
 FP8_MAX = 448.0
@@ -62,6 +64,23 @@ def fake_quant_compressed_kv(x: torch.Tensor) -> torch.Tensor:
     return deq.flatten(-2).to(x.dtype)
 
 
+@contextmanager
+def replace_function(obj, name: str, new):
+    """Temporarily replace ``obj.name`` with ``new``, restoring it on exit.
+
+    The original attribute is restored in a ``finally`` so an exception raised
+    inside the ``with`` body (e.g. a kernel failure, or a non-reentrant
+    activation-checkpoint recompute that ends early) cannot leave the patch
+    installed for the rest of the process.
+    """
+    old = getattr(obj, name)
+    setattr(obj, name, new)
+    try:
+        yield new
+    finally:
+        setattr(obj, name, old)
+
+
 def fake_quant_fp4_stacked(
     x: torch.Tensor,
     amax: torch.Tensor,
@@ -77,6 +96,9 @@ def fake_quant_fp4_stacked(
     """
     if x.dim() == 0:
         raise ValueError("fake_quant_fp4_stacked expects a tensor with at least one dim")
+    if x.shape[0] == 0:
+        # No slices: nothing to quantize, and no kernel launch.
+        return x.clone()
     amax = amax.reshape(-1)
     if amax.numel() == 1:
         amax = amax.expand(x.shape[0])
