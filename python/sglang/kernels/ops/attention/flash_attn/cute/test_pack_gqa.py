@@ -6,6 +6,11 @@ import textwrap
 
 import pytest
 
+# pack_gqa imports CUDA/CuTe modules at module scope. Skip the whole file when
+# those are unavailable (e.g. a CPU-only CI job) instead of failing collection.
+pytest.importorskip("cutlass")
+pytest.importorskip("cutlass.cute")
+
 
 def _load_predicate():
     """Load the predicate without importing the sglang package (no CUDA deps)."""
