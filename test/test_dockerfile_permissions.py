@@ -9,7 +9,9 @@ from pathlib import Path
 #
 # Keep this file free of any `import sglang` / `import pytest` at module scope:
 # CI runs it with a minimal environment (python3 only) and pytest collection
-# must not pull in the full sglang dependency tree.
+# must not pull in the full sglang dependency tree. test/conftest.py and
+# test/pytest.ini keep collection scoped to this file so the repository-level
+# pytest configuration cannot trigger a full sglang install during setup.
 #
 # The checks below are plain functions named test_* so pytest can collect them,
 # but they never import pytest or sglang. If pytest is unavailable, main() still
@@ -113,15 +115,6 @@ def _run_checks() -> int:
         else:
             print(f"PASS {check.__name__}")
     return 1 if failures else 0
-
-
-def _pytest_available() -> bool:
-    """Return True only when pytest is importable, without importing sglang."""
-    try:
-        import pytest  # noqa: F401  (local import keeps module import stdlib-only)
-    except Exception:
-        return False
-    return True
 
 
 def _missing_paths() -> list[Path]:
