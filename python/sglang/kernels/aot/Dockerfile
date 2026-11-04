@@ -109,6 +109,10 @@ WORKDIR /sgl-kernel
 # Only copy sgl-kernel source so code changes only affect later layers
 COPY . /sgl-kernel/
 
+# The build tree is loaded into the build process; keep it non-writable for
+# group and others so a non-root user cannot replace sources or artifacts.
+RUN chown -R root:root /sgl-kernel && chmod -R go-w /sgl-kernel
+
 # Optional: enable CMake/Ninja profiling (pass non-empty via --build-arg ENABLE_*)
 ARG ENABLE_CMAKE_PROFILE
 ARG ENABLE_BUILD_PROFILE

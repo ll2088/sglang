@@ -21,7 +21,7 @@ RUN cp -r /root/.oh-my-zsh /home/devuser/.oh-my-zsh && \
 
 # Set workspace directory and ownership
 WORKDIR /sgl-workspace/sglang
-RUN chown -R devuser:devuser /sgl-workspace
+RUN chown -R devuser:devuser /sgl-workspace && chmod -R go-w /sgl-workspace
 
 # Switch to devuser
 USER devuser
