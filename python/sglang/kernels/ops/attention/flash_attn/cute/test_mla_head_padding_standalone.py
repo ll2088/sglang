@@ -1,51 +1,43 @@
-# Copyright (c) 2025, Tri Dao.
-"""CPU-only tests for the dense 2CTA MLA Q-head padding rule.
+"""CPU-only tests for the dense 2CTA MLA Q-head padding predicate.
 
-This file is intentionally self-contained: it loads ``mla_head_padding.py`` and
-``pack_gqa.py`` by file path so it can run without installing sglang, without
-CUDA/CuTe, and without torch/quack. It is the test entry point for CI jobs that
-cannot install the full sglang dependency set.
+This module deliberately imports nothing beyond the standard library and the
+sibling ``mla_head_padding.py`` (loaded by file path), so it can run on a
+CPU-only runner without CUDA/CuTe, torch, quack or the sglang package. It is
+loaded by ``test_pack_gqa.py`` via ``_load_standalone_tests`` and can also be
+collected directly by pytest.
 """
 
 import importlib.util
 import pathlib
-import subprocess
-import sys
-import textwrap
 
 import pytest
 
-CUTE_DIR = pathlib.Path(__file__).parent
 
-
-def _load_module_by_path(name, filename):
-    spec = importlib.util.spec_from_file_location(name, CUTE_DIR / filename)
+def _load_predicate_module():
+    path = pathlib.Path(__file__).with_name("mla_head_padding.py")
+    spec = importlib.util.spec_from_file_location(
+        "_fa_cute_mla_head_padding_standalone", path
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def _load_predicate_module():
-    return _load_module_by_path("fa_cute_mla_head_padding", "mla_head_padding.py")
-
-
-def _load_predicate():
-    return _load_predicate_module().mla_2cta_pads_dense_qheads
-
-
-mla_2cta_pads_dense_qheads = _load_predicate()
+_module = _load_predicate_module()
+mla_2cta_pads_dense_qheads = _module.mla_2cta_pads_dense_qheads
+mla_2cta_accepts_dense_qheads = _module.mla_2cta_accepts_dense_qheads
 
 
 @pytest.mark.parametrize(
     ("nheads_per_kv", "num_heads_kv", "expected"),
     [
-        # Boundaries of the 65..127 padding window.
+        # Boundary head counts for MQA (single KV head).
         (64, 1, False),
         (65, 1, True),
         (96, 1, True),
         (127, 1, True),
         (128, 1, False),
-        # Too few heads keep raising: padding would waste the tile.
+        # Too few heads to pad: still rejected.
         (24, 1, False),
         (0, 1, False),
         (-1, 1, False),
@@ -69,14 +61,38 @@ def test_mla_2cta_pads_dense_qheads(nheads_per_kv, num_heads_kv, expected):
     assert mla_2cta_pads_dense_qheads(nheads_per_kv, num_heads_kv) is expected
 
 
+@pytest.mark.parametrize(
+    ("nheads_per_kv", "num_heads_kv", "expected"),
+    [
+        # Heads that divide the 128-row tile are accepted as-is.
+        (128, 1, True),
+        (64, 1, True),
+        # MQA with 65 to 127 heads is accepted by padding to the tile.
+        (96, 1, True),
+        (65, 1, True),
+        (127, 1, True),
+        # Too few heads to pad: rejected.
+        (24, 1, False),
+        # Non-MQA with a non-dividing ratio: rejected.
+        (96, 2, False),
+        # Out-of-range head counts: rejected.
+        (0, 1, False),
+        (-1, 1, False),
+        (129, 1, False),
+    ],
+)
+def test_mla_2cta_accepts_dense_qheads(nheads_per_kv, num_heads_kv, expected):
+    assert mla_2cta_accepts_dense_qheads(nheads_per_kv, num_heads_kv) is expected
+
+
 @pytest.mark.parametrize("nheads", [65, 72, 96, 127])
-def test_padded_heads_map_to_identity_head_order(nheads):
+def test_padded_heads_keep_identity_order(nheads):
     """Padded rows keep the real head order and land past the valid heads."""
     tile = 128
     assert mla_2cta_pads_dense_qheads(nheads, 1)
-    head_order = list(range(tile))
-    assert head_order[:nheads] == list(range(nheads))
-    assert all(h >= nheads for h in head_order[nheads:])
+    rows = list(range(tile))
+    assert rows[:nheads] == list(range(nheads))
+    assert all(r >= nheads for r in rows[nheads:])
 
 
 @pytest.mark.parametrize("nheads", [64, 128])
@@ -84,115 +100,3 @@ def test_non_padded_heads_keep_identity_order(nheads):
     """64 and 128 heads are not padded; the mapping is the identity."""
     assert not mla_2cta_pads_dense_qheads(nheads, 1)
     assert list(range(nheads)) == list(range(nheads))
-
-
-def test_accepts_dense_qheads_matches_padding_rule():
-    """The acceptance rule is divisibility or the 65-127 MQA padding window."""
-    module = _load_predicate_module()
-    accepts = module.mla_2cta_accepts_dense_qheads
-    assert accepts(128, 1) is True
-    assert accepts(64, 1) is True
-    assert accepts(96, 1) is True
-    assert accepts(65, 1) is True
-    assert accepts(127, 1) is True
-    assert accepts(24, 1) is False
-    assert accepts(96, 2) is False
-    assert accepts(0, 1) is False
-    assert accepts(-1, 1) is False
-
-
-def test_predicate_resolves_without_config_module(monkeypatch):
-    """The predicate must be importable even if a separate config module is absent."""
-    monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
-    predicate = _load_predicate()
-    assert predicate(96, 1) is True
-    assert predicate(64, 1) is False
-
-
-def test_predicate_resolves_without_sglang_package(monkeypatch):
-    """The predicate must load with only its own directory on sys.path."""
-    monkeypatch.syspath_prepend(str(CUTE_DIR))
-    for name in list(sys.modules):
-        if name == "sglang" or name.startswith("sglang."):
-            monkeypatch.delitem(sys.modules, name, raising=False)
-    monkeypatch.delitem(sys.modules, "mla_head_padding", raising=False)
-    module = _load_module_by_path("mla_head_padding", "mla_head_padding.py")
-    predicate = module.mla_2cta_pads_dense_qheads
-    assert predicate(64, True) is False
-    assert predicate(65, True) is True
-    assert predicate(127, True) is True
-    assert predicate(128, True) is False
-    assert predicate(96, False) is False
-    assert predicate(0, True) is False
-    assert predicate(-1, True) is False
-
-
-def test_pack_gqa_predicate_fallback_without_config_module(monkeypatch):
-    """pack_gqa must resolve the predicate via its sibling module when config is absent.
-
-    pack_gqa imports CUDA/CuTe at module scope, so this test skips when those
-    deps are unavailable; the pure-Python predicate tests above still run.
-    """
-    monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
-    try:
-        module = _load_module_by_path("_fa_cute_pack_gqa_no_config", "pack_gqa.py")
-    except (ImportError, ModuleNotFoundError):
-        pytest.skip("pack_gqa needs CUDA/CuTe deps")
-    except Exception:
-        # pack_gqa imports CUDA/CuTe at module scope; any failure there means
-        # the CUDA path is unavailable, not that the predicate is broken.
-        pytest.skip("pack_gqa needs CUDA/CuTe deps")
-    predicate = module.mla_2cta_pads_dense_qheads
-    assert predicate(64, True) is False
-    assert predicate(65, True) is True
-    assert predicate(127, True) is True
-    assert predicate(128, True) is False
-    assert predicate(96, False) is False
-    assert predicate(0, True) is False
-    assert predicate(-1, True) is False
-
-
-def test_predicate_resolves_in_isolated_subprocess():
-    """A fresh interpreter with sglang blocked must still load the predicate."""
-    script = textwrap.dedent(
-        """
-        import importlib.util
-        import pathlib
-        import sys
-
-        cute_dir = pathlib.Path(sys.argv[1])
-        sys.path.insert(0, str(cute_dir))
-        sys.modules["sglang"] = None
-        sys.modules["sglang.kernels"] = None
-        sys.modules["sglang.kernels.ops"] = None
-        sys.modules["sglang.kernels.ops.attention"] = None
-        sys.modules["sglang.kernels.ops.attention.flash_attn"] = None
-        sys.modules["sglang.kernels.ops.attention.flash_attn.cute"] = None
-        sys.modules[
-            "sglang.kernels.ops.attention.flash_attn.cute.mla_head_padding"
-        ] = None
-
-        spec = importlib.util.spec_from_file_location(
-            "mla_head_padding", cute_dir / "mla_head_padding.py"
-        )
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        predicate = module.mla_2cta_pads_dense_qheads
-        assert predicate(64, True) is False
-        assert predicate(65, True) is True
-        assert predicate(127, True) is True
-        assert predicate(128, True) is False
-        assert predicate(96, False) is False
-        assert predicate(0, True) is False
-        assert predicate(-1, True) is False
-        print("ok")
-        """
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", script, str(CUTE_DIR)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "ok" in result.stdout
