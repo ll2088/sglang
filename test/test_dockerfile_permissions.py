@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Compatibility entry point for the Dockerfile permission checks.
+"""Stdlib-only entrypoint for the Dockerfile permission/documentation checks.
 
-This file exists so CI can invoke the checks with the historical path
-``test/test_dockerfile_permissions.py`` without installing sglang. It is
-stdlib-only and delegates to ``test/dockerfile_permissions/checks.py``.
+CI invokes this file directly (``python3 test/test_dockerfile_permissions.py``)
+and via pytest (``python3 -m pytest -q test/test_dockerfile_permissions.py``).
+It must not import sglang or any third-party package at module scope so the
+checks can run in a minimal environment without installing the full sglang
+dependency tree.
 
-Usage:
-    python3 test/test_dockerfile_permissions.py
-    python3 -m pytest -q test/test_dockerfile_permissions.py
+The actual assertions live in ``test/dockerfile_permissions/checks.py``; this
+module only re-exports them as ``test_*`` functions and provides a ``__main__``
+runner for environments without pytest.
 """
 
 import os
@@ -18,15 +20,34 @@ _CHECKS_DIR = os.path.join(_HERE, "dockerfile_permissions")
 if _CHECKS_DIR not in sys.path:
     sys.path.insert(0, _CHECKS_DIR)
 
-from checks import (  # noqa: E402
+from checks import (  # noqa: E402  (re-exported for pytest collection)
+    CHECKS,
     check_devcontainer_workspace_not_world_writable as test_devcontainer_workspace_not_world_writable,
     check_minimal_permission_statements as test_minimal_permission_statements,
     check_no_world_writable_permissions as test_no_world_writable_permissions,
     check_readme_keyword_hit_threshold as test_readme_keyword_hit_threshold,
     check_readme_non_root_cache_guidance as test_readme_non_root_cache_guidance,
-    main as _main,
+    main as _checks_main,
 )
 
 
+def test_checks_pass():
+    """All stdlib-only checks must pass on the current tree."""
+    failures = []
+    for check in CHECKS:
+        failures.extend(check())
+    assert not failures, "\n".join(failures)
+
+
+def test_checks_module_is_stdlib_only():
+    """The checks module must not import sglang or pytest."""
+    import checks
+
+    with open(checks.__file__, "r", encoding="utf-8") as fh:
+        source = fh.read()
+    assert "import sglang" not in source
+    assert "import pytest" not in source
+
+
 if __name__ == "__main__":
-    sys.exit(_main())
+    sys.exit(_checks_main())
