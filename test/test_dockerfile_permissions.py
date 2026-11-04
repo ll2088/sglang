@@ -35,15 +35,11 @@ HARDENED_DOCKERFILES = [
     REPO_ROOT / "python" / "sglang" / "kernels" / "aot" / "Dockerfile",
 ]
 
-README_KEYWORDS = [
-    "cache",
-    "缓存",
-    "chown",
-    "chmod",
-    "go-w",
-    "非默认用户",
-    "non-root",
-    "TORCH_EXTENSIONS_DIR",
+README_KEYWORD_GROUPS = [
+    ("cache", "缓存"),
+    ("chown", "chmod", "go-w"),
+    ("non-root", "非默认用户"),
+    ("TORCH_EXTENSIONS_DIR",),
 ]
 
 
@@ -68,10 +64,14 @@ def _check_minimal_permission_statements(dockerfile: Path) -> None:
 
 def _check_readme_non_root_cache_guidance(readme: Path) -> None:
     content = _read(readme)
-    hits = sum(1 for keyword in README_KEYWORDS if keyword in content)
-    assert hits >= 6, (
-        f"{readme} should document non-root cache guidance "
-        f"(found {hits} keyword hits, need >= 6)"
+    missing = [
+        group
+        for group in README_KEYWORD_GROUPS
+        if not any(keyword in content for keyword in group)
+    ]
+    assert not missing, (
+        f"{readme} should document non-root cache guidance; "
+        f"missing keyword groups: {missing}"
     )
     assert "```bash" in content, f"{readme} should include an executable command block"
 
