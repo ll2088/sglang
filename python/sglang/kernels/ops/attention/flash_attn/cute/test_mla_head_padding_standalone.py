@@ -27,6 +27,14 @@ def _load_predicate():
     return module.mla_2cta_pads_dense_qheads
 
 
+def test_predicate_does_not_import_sglang():
+    """Loading the predicate must not pull in the sglang package."""
+    import sys
+
+    _load_predicate()
+    assert "sglang" not in sys.modules
+
+
 mla_2cta_pads_dense_qheads = _load_predicate()
 
 

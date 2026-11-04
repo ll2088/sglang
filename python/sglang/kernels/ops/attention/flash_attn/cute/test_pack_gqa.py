@@ -39,7 +39,7 @@ def test_pack_gqa_imports_without_sglang_package(monkeypatch):
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)
-    except ImportError as exc:  # pragma: no cover - CUDA deps absent in CI
+    except (ImportError, ModuleNotFoundError) as exc:  # pragma: no cover - CUDA deps absent in CI
         pytest.skip(f"pack_gqa needs CUDA/CuTe deps: {exc}")
     predicate = module.mla_2cta_pads_dense_qheads
     assert predicate(64, True) is False
