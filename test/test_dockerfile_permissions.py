@@ -24,6 +24,26 @@ WORLD_WRITABLE = re.compile(r"chmod\s+(-R\s+)?777")
 MIN_PERMISSION = re.compile(r"chmod\s+-R\s+go-w")
 CHOWN = re.compile(r"chown\s+-R\s+\S+")
 
+# Dockerfiles that must carry the minimal-permission hardening. The acceptance
+# grep only forbids world-writable modes in all four files, but the hardening
+# statements are expected in the three images that ship runtime/build trees.
+HARDENED_DOCKERFILES = [
+    REPO_ROOT / "docker" / "Dockerfile",
+    REPO_ROOT / "examples" / "frontend_language" / "usage" / "triton" / "Dockerfile",
+    REPO_ROOT / "python" / "sglang" / "kernels" / "aot" / "Dockerfile",
+]
+
+README_KEYWORDS = [
+    "cache",
+    "缓存",
+    "chown",
+    "chmod",
+    "go-w",
+    "非默认用户",
+    "non-root",
+    "TORCH_EXTENSIONS_DIR",
+]
+
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -46,9 +66,11 @@ def _check_minimal_permission_statements(dockerfile: Path) -> None:
 
 def _check_readme_non_root_cache_guidance(readme: Path) -> None:
     content = _read(readme)
-    keywords = ["cache", "chown", "chmod", "go-w", "non-root", "TORCH_EXTENSIONS_DIR"]
-    hits = sum(1 for keyword in keywords if keyword in content)
-    assert hits >= 3, f"{readme} should document non-root cache guidance"
+    hits = sum(1 for keyword in README_KEYWORDS if keyword in content)
+    assert hits >= 6, (
+        f"{readme} should document non-root cache guidance "
+        f"(found {hits} keyword hits, need >= 6)"
+    )
     assert "```bash" in content, f"{readme} should include an executable command block"
 
 
@@ -75,7 +97,7 @@ def test_no_world_writable_permissions() -> None:
 
 
 def test_minimal_permission_statements() -> None:
-    for dockerfile in DOCKERFILES:
+    for dockerfile in HARDENED_DOCKERFILES:
         _check_minimal_permission_statements(dockerfile)
 
 
