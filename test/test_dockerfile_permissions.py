@@ -1,41 +1,73 @@
 #!/usr/bin/env python3
-"""Compatibility entry point for the stdlib-only Dockerfile permission checks.
+"""Stdlib-only entrypoint for the Dockerfile permission/documentation checks.
 
-This module lets the checks be invoked with the paths used by the validation
-plan (``python3 test/test_dockerfile_permissions.py`` and
-``python3 -m pytest -q test/test_dockerfile_permissions.py``) while the actual
-implementation lives in ``test/dockerfile_permissions/``.
+This file exists so CI can run the checks with a bare ``python3`` interpreter
+without installing sglang or any third-party dependency. It delegates to the
+canonical implementation in ``test/dockerfile_permissions/checks.py`` and
+supports both direct execution and pytest collection.
 
-It imports only the standard library and the sibling ``checks`` module, so it
-runs without installing sglang or any third-party package.
+Usage:
+    python3 test/test_dockerfile_permissions.py
+    python3 -m pytest -q test/test_dockerfile_permissions.py
 """
 
-from __future__ import annotations
-
+import os
 import sys
-from pathlib import Path
 
-_HERE = Path(__file__).resolve().parent
-_CHECKS_DIR = _HERE / "dockerfile_permissions"
-if str(_CHECKS_DIR) not in sys.path:
-    sys.path.insert(0, str(_CHECKS_DIR))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_CHECKS_DIR = os.path.join(_HERE, "dockerfile_permissions")
+if _CHECKS_DIR not in sys.path:
+    sys.path.insert(0, _CHECKS_DIR)
 
-from checks import (  # noqa: E402,F401  (re-exported for pytest collection)
+from checks import (  # noqa: E402  (path set up above)
     ALL_CHECKS,
-    check_devcontainer_workspace_not_world_writable as test_devcontainer_workspace_not_world_writable,
-    check_minimal_permission_statements as test_minimal_permission_statements,
-    check_no_world_writable_permissions as test_no_world_writable_permissions,
-    check_readme_keyword_hit_threshold as test_readme_keyword_hit_threshold,
-    check_readme_non_root_cache_guidance as test_readme_non_root_cache_guidance,
-    run_all,
+    check_devcontainer_workspace_not_world_writable,
+    check_minimal_permission_statements,
+    check_no_world_writable_permissions,
+    check_readme_keyword_hit_threshold,
+    check_readme_non_root_cache_guidance,
 )
 
 
-def test_all_checks_pass() -> None:
-    """Run every check so a single pytest invocation covers the full suite."""
+def test_no_world_writable_permissions():
+    check_no_world_writable_permissions()
+
+
+def test_minimal_permission_statements():
+    check_minimal_permission_statements()
+
+
+def test_devcontainer_workspace_not_world_writable():
+    check_devcontainer_workspace_not_world_writable()
+
+
+def test_readme_non_root_cache_guidance():
+    check_readme_non_root_cache_guidance()
+
+
+def test_readme_keyword_hit_threshold():
+    check_readme_keyword_hit_threshold()
+
+
+def test_all_checks_pass():
     for check in ALL_CHECKS:
         check()
 
 
+def main():
+    failures = []
+    for check in ALL_CHECKS:
+        try:
+            check()
+        except AssertionError as exc:
+            failures.append((check.__name__, str(exc)))
+    if failures:
+        for name, message in failures:
+            print(f"FAIL: {name}: {message}", file=sys.stderr)
+        return 1
+    print(f"OK: {len(ALL_CHECKS)} checks passed")
+    return 0
+
+
 if __name__ == "__main__":
-    raise SystemExit(run_all())
+    sys.exit(main())
