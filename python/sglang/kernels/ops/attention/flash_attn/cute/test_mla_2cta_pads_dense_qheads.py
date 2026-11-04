@@ -119,6 +119,17 @@ def test_predicate_resolves_without_config_module(monkeypatch):
     assert predicate(64, 1) is False
 
 
+def test_predicate_resolves_without_config_module_boundaries(monkeypatch):
+    """Boundary head counts resolve without a config module and match the rule."""
+    monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
+    predicate = _load_predicate()
+    assert predicate(64, 1) is False
+    assert predicate(65, 1) is True
+    assert predicate(127, 1) is True
+    assert predicate(128, 1) is False
+    assert predicate(96, 2) is False
+
+
 def test_predicate_resolves_without_sglang_package(monkeypatch):
     """The predicate must load with only its own directory on sys.path.
 
