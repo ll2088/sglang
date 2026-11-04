@@ -15,9 +15,11 @@ from sglang.kernels.ops.attention.flash_attn.cute.pack_gqa import (
         (128, 1, False),
         (24, 1, False),
         (0, 1, False),
+        (-1, 1, False),
         (129, 1, False),
         (96, 2, False),
         (65, 2, False),
+        (96, 0, False),
     ],
 )
 def test_mla_2cta_pads_dense_qheads(nheads_per_kv, num_heads_kv, expected):
