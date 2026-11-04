@@ -10,6 +10,10 @@ from pathlib import Path
 # Keep this file free of any `import sglang` / `import pytest` at module scope:
 # CI runs it with a minimal environment (python3 only) and pytest collection
 # must not pull in the full sglang dependency tree.
+#
+# The checks below are plain functions named test_* so pytest can collect them,
+# but they never import pytest or sglang. If pytest is unavailable, main() still
+# runs every check and reports PASS/FAIL without third-party packages.
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -111,6 +115,15 @@ def _run_checks() -> int:
     return 1 if failures else 0
 
 
+def _pytest_available() -> bool:
+    """Return True only when pytest is importable, without importing sglang."""
+    try:
+        import pytest  # noqa: F401  (local import keeps module import stdlib-only)
+    except Exception:
+        return False
+    return True
+
+
 def _missing_paths() -> list[Path]:
     paths = [*DOCKERFILES, *READMES]
     return [path for path in paths if not path.is_file()]
@@ -129,6 +142,22 @@ def test_minimal_permission_statements() -> None:
 def test_readme_non_root_cache_guidance() -> None:
     for readme in READMES:
         _check_readme_non_root_cache_guidance(readme)
+
+
+def test_devcontainer_workspace_not_world_writable() -> None:
+    """The devcontainer image must not leave /sgl-workspace world-writable."""
+    devcontainer = REPO_ROOT / ".devcontainer" / "Dockerfile"
+    content = _read(devcontainer)
+    assert not WORLD_WRITABLE.search(content), (
+        f"{devcontainer} must not grant world-writable permissions"
+    )
+    assert not WORKSPACE_WORLD_WRITABLE.search(content), (
+        f"{devcontainer} must not make /sgl-workspace world-writable"
+    )
+    assert CHOWN.search(content), f"{devcontainer} should chown the runtime directory"
+    assert MIN_PERMISSION.search(content), (
+        f"{devcontainer} should remove group/other write access with chmod -R go-w"
+    )
 
 
 def main() -> int:
