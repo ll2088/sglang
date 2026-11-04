@@ -1,54 +1,53 @@
-"""Stdlib-only CPU runner for the dense 2CTA MLA Q-head padding rule.
+#!/usr/bin/env python3
+"""Stdlib-only runner for the dense 2CTA MLA Q-head padding tests.
 
-This script is the CPU-only verification entry point. It deliberately imports
-nothing beyond the Python standard library: no sglang, cutlass, quack or
-torch. The predicate and the pack_gqa fallback are loaded by file path so the
-same rule the kernel uses is exercised without the GPU dependency chain.
+This script deliberately imports nothing beyond the Python standard library
+and the sibling ``mla_head_padding.py`` / ``test_mla_head_padding_standalone.py``
+files, which are loaded by file path. It lets CI validate the padding predicate
+without installing sglang, torch, quack, cutlass or CuTe.
 
 Usage::
 
-    python run_mla_head_padding_cpu_tests.py
+    python python/sglang/kernels/ops/attention/flash_attn/cute/run_mla_head_padding_cpu_tests.py
 
-Exit code 0 means every check passed.
+Exit code 0 means every check passed; 1 means at least one check failed.
 """
 
 import importlib.util
 import pathlib
 import sys
+import traceback
 
 
 _HERE = pathlib.Path(__file__).resolve().parent
 
 
-def _load_by_path(name, filename):
-    path = _HERE / filename
+def _load_module(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def _load_predicate():
-    return _load_by_path("_fa_cute_mla_head_padding_cpu", "mla_head_padding.py")
+def _load_predicate_module():
+    return _load_module("_fa_cute_mla_head_padding_runner", _HERE / "mla_head_padding.py")
 
 
-def _load_pack_gqa_predicate_only():
-    """Mirror pack_gqa's sibling-module fallback without importing pack_gqa.
-
-    pack_gqa imports cutlass/quack at module scope, so a CPU-only runner cannot
-    import it. The predicate lives in the sibling mla_head_padding.py; this
-    helper resolves it the same way pack_gqa's fallback does.
-    """
-    return _load_predicate().mla_2cta_pads_dense_qheads
+def _load_standalone_tests():
+    return _load_module(
+        "_fa_cute_mla_head_padding_standalone_runner",
+        _HERE / "test_mla_head_padding_standalone.py",
+    )
 
 
-def _check(cond, msg):
-    if not cond:
-        raise AssertionError(msg)
+def _check(condition, message):
+    if not condition:
+        raise AssertionError(message)
 
 
-def check_predicate_boundaries():
-    predicate = _load_predicate().mla_2cta_pads_dense_qheads
+def _run_predicate_checks(predicate):
     cases = [
         (64, 1, False),
         (65, 1, True),
@@ -71,16 +70,16 @@ def check_predicate_boundaries():
         (-1, True, False),
         (96, False, False),
     ]
-    for nheads, heads_kv, expected in cases:
-        got = predicate(nheads, heads_kv)
+    for nheads_per_kv, num_heads_kv, expected in cases:
+        got = predicate(nheads_per_kv, num_heads_kv)
         _check(
             got is expected,
-            f"predicate({nheads}, {heads_kv}) = {got!r}, expected {expected!r}",
+            f"mla_2cta_pads_dense_qheads({nheads_per_kv}, {num_heads_kv}) "
+            f"returned {got!r}, expected {expected!r}",
         )
 
 
-def check_accepts_dense_qheads():
-    accepts = _load_predicate().mla_2cta_accepts_dense_qheads
+def _run_accepts_checks(accepts):
     cases = [
         (128, 1, True),
         (64, 1, True),
@@ -93,64 +92,106 @@ def check_accepts_dense_qheads():
         (-1, 1, False),
         (129, 1, False),
     ]
-    for nheads, heads_kv, expected in cases:
-        got = accepts(nheads, heads_kv)
+    for nheads_per_kv, num_heads_kv, expected in cases:
+        got = accepts(nheads_per_kv, num_heads_kv)
         _check(
             got is expected,
-            f"accepts({nheads}, {heads_kv}) = {got!r}, expected {expected!r}",
+            f"mla_2cta_accepts_dense_qheads({nheads_per_kv}, {num_heads_kv}) "
+            f"returned {got!r}, expected {expected!r}",
         )
 
 
-def check_pack_gqa_fallback():
-    predicate = _load_pack_gqa_predicate_only()
-    cases = [
-        (64, True, False),
-        (65, True, True),
-        (127, True, True),
-        (128, True, False),
-        (96, False, False),
-        (0, True, False),
-        (-1, True, False),
-    ]
-    for nheads, heads_kv, expected in cases:
-        got = predicate(nheads, heads_kv)
-        _check(
-            got is expected,
-            f"pack_gqa predicate({nheads}, {heads_kv}) = {got!r}, "
-            f"expected {expected!r}",
-        )
-
-
-def check_padded_head_order():
-    predicate = _load_predicate().mla_2cta_pads_dense_qheads
+def _run_head_order_checks(predicate):
     tile = 128
     for nheads in (65, 72, 96, 127):
-        _check(predicate(nheads, 1), f"{nheads} heads should pad")
+        _check(predicate(nheads, 1), f"{nheads} heads should be padded")
         rows = list(range(tile))
-        _check(rows[:nheads] == list(range(nheads)), "real heads keep order")
+        _check(rows[:nheads] == list(range(nheads)), f"{nheads} heads lost identity order")
         _check(
             all(r >= nheads for r in rows[nheads:]),
-            "padded rows land past the valid heads",
+            f"{nheads} heads: padded rows overlap valid heads",
         )
     for nheads in (64, 128):
-        _check(not predicate(nheads, 1), f"{nheads} heads should not pad")
-        _check(list(range(nheads)) == list(range(nheads)), "identity mapping")
+        _check(not predicate(nheads, 1), f"{nheads} heads should not be padded")
+        _check(list(range(nheads)) == list(range(nheads)), f"{nheads} heads mapping changed")
 
 
-def check_no_heavy_imports():
-    """The runner must not pull in sglang/cutlass/quack/torch."""
-    heavy = ("sglang", "cutlass", "quack", "torch")
-    loaded = [name for name in sys.modules if name.split(".")[0] in heavy]
-    _check(not loaded, f"heavy modules imported: {loaded}")
+def _run_config_missing_checks():
+    """The predicate must resolve even when flash_attn.cute.config is absent."""
+    saved = {}
+    for name in (
+        "flash_attn",
+        "flash_attn.cute",
+        "flash_attn.cute.config",
+        "sglang",
+        "sglang.kernels",
+        "sglang.kernels.ops",
+        "sglang.kernels.ops.attention",
+        "sglang.kernels.ops.attention.flash_attn",
+        "sglang.kernels.ops.attention.flash_attn.cute",
+        "sglang.kernels.ops.attention.flash_attn.cute.mla_head_padding",
+    ):
+        saved[name] = sys.modules.get(name, _MISSING)
+        sys.modules[name] = None
+    try:
+        module = _load_predicate_module()
+        predicate = module.mla_2cta_pads_dense_qheads
+        _check(predicate(96, 1) is True, "predicate(96, 1) should be True without config")
+        _check(predicate(64, 1) is False, "predicate(64, 1) should be False without config")
+    finally:
+        for name, value in saved.items():
+            if value is _MISSING:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = value
+
+
+class _Missing:
+    pass
+
+
+_MISSING = _Missing()
 
 
 def main():
-    check_predicate_boundaries()
-    check_accepts_dense_qheads()
-    check_pack_gqa_fallback()
-    check_padded_head_order()
-    check_no_heavy_imports()
-    print("ok")
+    failures = []
+
+    def run(name, fn):
+        try:
+            fn()
+        except Exception:
+            failures.append(name)
+            print(f"FAIL {name}")
+            traceback.print_exc()
+        else:
+            print(f"ok   {name}")
+
+    module = _load_predicate_module()
+    predicate = module.mla_2cta_pads_dense_qheads
+    accepts = module.mla_2cta_accepts_dense_qheads
+
+    run("predicate boundaries", lambda: _run_predicate_checks(predicate))
+    run("accepts boundaries", lambda: _run_accepts_checks(accepts))
+    run("head order", lambda: _run_head_order_checks(predicate))
+    run("config module missing", _run_config_missing_checks)
+
+    def run_standalone():
+        standalone = _load_standalone_tests()
+        _check(
+            standalone.mla_2cta_pads_dense_qheads(65, True) is True,
+            "standalone predicate(65, True) should be True",
+        )
+        _check(
+            standalone.mla_2cta_pads_dense_qheads(64, True) is False,
+            "standalone predicate(64, True) should be False",
+        )
+
+    run("standalone module loads", run_standalone)
+
+    if failures:
+        print(f"\n{len(failures)} check(s) failed: {', '.join(failures)}")
+        return 1
+    print("\nall checks passed")
     return 0
 
 

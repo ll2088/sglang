@@ -123,6 +123,24 @@ def test_predicate_loads_without_config_module(monkeypatch):
 
 
 @cpu_only
+def test_pack_gqa_predicate_resolves_without_config_module(monkeypatch):
+    """pack_gqa's sibling-module fallback must not need flash_attn.cute.config.
+
+    pack_gqa imports CUDA/CuTe at module scope, so this exercises the same
+    sibling-module resolution order without importing pack_gqa itself.
+    """
+    monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
+    predicate = _load_pack_gqa_predicate_only()
+    assert predicate(64, True) is False
+    assert predicate(65, True) is True
+    assert predicate(127, True) is True
+    assert predicate(128, True) is False
+    assert predicate(96, False) is False
+    assert predicate(0, True) is False
+    assert predicate(-1, True) is False
+
+
+@cpu_only
 def test_standalone_cpu_only_module_is_collectable():
     """The CPU-only standalone module must load without sglang/CUDA deps."""
     module = _load_standalone_tests()

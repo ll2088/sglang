@@ -9,6 +9,7 @@ collected directly by pytest.
 
 import importlib.util
 import pathlib
+import sys
 
 import pytest
 
@@ -100,3 +101,36 @@ def test_non_padded_heads_keep_identity_order(nheads):
     """64 and 128 heads are not padded; the mapping is the identity."""
     assert not mla_2cta_pads_dense_qheads(nheads, 1)
     assert list(range(nheads)) == list(range(nheads))
+
+
+def test_predicate_resolves_without_config_module(monkeypatch):
+    """The predicate must resolve even when flash_attn.cute.config is absent.
+
+    The rule lives in this stdlib-only sibling module, so a missing package
+    config module must not raise ImportError when the predicate is queried.
+    """
+    monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
+    module = _load_predicate_module()
+    predicate = module.mla_2cta_pads_dense_qheads
+    assert predicate(96, 1) is True
+    assert predicate(64, 1) is False
+
+
+def test_predicate_resolves_without_sglang_or_cuda_deps(monkeypatch):
+    """The predicate must load with sglang/cutlass/torch/quack blocked."""
+    for name in list(sys.modules):
+        if name == "sglang" or name.startswith("sglang."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.setitem(sys.modules, "sglang", None)
+    monkeypatch.setitem(sys.modules, "cutlass", None)
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "quack", None)
+    module = _load_predicate_module()
+    predicate = module.mla_2cta_pads_dense_qheads
+    assert predicate(64, True) is False
+    assert predicate(65, True) is True
+    assert predicate(127, True) is True
+    assert predicate(128, True) is False
+    assert predicate(96, False) is False
+    assert predicate(0, True) is False
+    assert predicate(-1, True) is False
