@@ -392,7 +392,7 @@ class TestReplaceFunctionExceptionSafety(CustomTestCase):
     """A monkey-patch context manager must restore the original on exceptions."""
 
     def test_restores_on_exception(self):
-        from contextlib import contextmanager
+        from sglang.kernels.ops.quantization.fp4_fake_quant import replace_function
 
         class Target:
             def fn(self):
@@ -400,15 +400,6 @@ class TestReplaceFunctionExceptionSafety(CustomTestCase):
 
         target = Target()
         original = target.fn
-
-        @contextmanager
-        def replace_function(obj, name, new):
-            old = getattr(obj, name)
-            setattr(obj, name, new)
-            try:
-                yield
-            finally:
-                setattr(obj, name, old)
 
         def patched():
             raise RuntimeError("boom")
@@ -420,7 +411,7 @@ class TestReplaceFunctionExceptionSafety(CustomTestCase):
         self.assertEqual(target.fn(), "original")
 
     def test_restores_on_nested_exception(self):
-        from contextlib import contextmanager
+        from sglang.kernels.ops.quantization.fp4_fake_quant import replace_function
 
         class Target:
             def fn(self):
@@ -428,15 +419,6 @@ class TestReplaceFunctionExceptionSafety(CustomTestCase):
 
         target = Target()
         original = target.fn
-
-        @contextmanager
-        def replace_function(obj, name, new):
-            old = getattr(obj, name)
-            setattr(obj, name, new)
-            try:
-                yield
-            finally:
-                setattr(obj, name, old)
 
         def patched():
             raise RuntimeError("boom")

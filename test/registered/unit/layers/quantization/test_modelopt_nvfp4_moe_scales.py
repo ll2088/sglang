@@ -625,7 +625,11 @@ class TestAlignFp4MoeWeights(CustomTestCase):
 
 
 class TestStackedFp4FakeQuant(CustomTestCase):
-    """Per-slice amax stacked fake quant matches per-slice independent calls."""
+    """Per-slice amax stacked fake quant matches per-slice independent calls.
+
+    These tests are pure CPU torch and import only the quantization kernel
+    module, so they run without the GPU/ModelOpt dependency stack.
+    """
 
     def test_stacked_matches_per_slice(self):
         from sglang.kernels.ops.quantization.fp4_fake_quant import (
