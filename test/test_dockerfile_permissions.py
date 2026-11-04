@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Entry point for the stdlib-only Dockerfile permission checks.
+"""Thin shim so the Dockerfile permission checks can be run from the
+repository root without importing sglang or any third-party package.
 
-Runs the checks directly when executed as a script, and exposes them as
-``test_*`` functions for pytest. This module must not import sglang or any
-third-party package so CI can run it with a bare ``python3`` interpreter.
-
-Usage:
+This file exists because CI invokes:
     python3 test/test_dockerfile_permissions.py
     python3 -m pytest -q test/test_dockerfile_permissions.py
+
+Both forms must work with a bare python3 interpreter. The real check logic
+lives in ``test/dockerfile_permissions/checks.py`` and is stdlib-only.
 """
 
 import os
@@ -18,55 +18,32 @@ _CHECKS_DIR = os.path.join(_HERE, "dockerfile_permissions")
 if _CHECKS_DIR not in sys.path:
     sys.path.insert(0, _CHECKS_DIR)
 
-from checks import (  # noqa: E402  (path set up above)
-    ALL_CHECKS,
-    check_devcontainer_workspace_not_world_writable,
-    check_minimal_permission_statements,
-    check_no_world_writable_permissions,
-    check_readme_keyword_hit_threshold,
-    check_readme_non_root_cache_guidance,
-)
-
-
-def test_no_world_writable_permissions():
-    check_no_world_writable_permissions()
-
-
-def test_minimal_permission_statements():
-    check_minimal_permission_statements()
-
-
-def test_devcontainer_workspace_not_world_writable():
-    check_devcontainer_workspace_not_world_writable()
-
-
-def test_readme_non_root_cache_guidance():
-    check_readme_non_root_cache_guidance()
-
-
-def test_readme_keyword_hit_threshold():
-    check_readme_keyword_hit_threshold()
+from checks import ALL_CHECKS  # noqa: E402  (path set up above)
 
 
 def test_all_checks_pass():
+    """Run every check so a single pytest invocation covers the full suite."""
     for check in ALL_CHECKS:
         check()
 
 
-def main():
-    failures = 0
+def main() -> int:
+    failures = []
     for check in ALL_CHECKS:
+        name = getattr(check, "__name__", repr(check))
         try:
             check()
         except AssertionError as exc:
-            failures += 1
-            print(f"FAIL {check.__name__}: {exc}", file=sys.stderr)
-        else:
-            print(f"PASS {check.__name__}")
+            failures.append((name, str(exc)))
+        except Exception as exc:  # noqa: BLE001 - report any check error
+            failures.append((name, f"{type(exc).__name__}: {exc}"))
+
     if failures:
-        print(f"{failures} check(s) failed", file=sys.stderr)
+        for name, message in failures:
+            print(f"FAIL {name}: {message}", file=sys.stderr)
         return 1
-    print("all checks passed")
+
+    print(f"OK: {len(ALL_CHECKS)} Dockerfile permission checks passed")
     return 0
 
 
