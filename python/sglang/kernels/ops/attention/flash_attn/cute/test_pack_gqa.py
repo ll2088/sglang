@@ -60,6 +60,25 @@ def test_predicate_loads_without_config_module(monkeypatch):
     assert predicate(64, 1) is False
 
 
+def test_predicate_loads_without_sglang_or_cuda_deps(monkeypatch):
+    """The predicate must load with sglang/cutlass/torch/quack blocked."""
+    for name in list(sys.modules):
+        if name == "sglang" or name.startswith("sglang."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.setitem(sys.modules, "sglang", None)
+    monkeypatch.setitem(sys.modules, "cutlass", None)
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "quack", None)
+    predicate = _load_predicate()
+    assert predicate(64, True) is False
+    assert predicate(65, True) is True
+    assert predicate(127, True) is True
+    assert predicate(128, True) is False
+    assert predicate(96, False) is False
+    assert predicate(0, True) is False
+    assert predicate(-1, True) is False
+
+
 mla_2cta_pads_dense_qheads = _load_predicate()
 
 # The predicate boundary tests live in test_mla_head_padding_standalone.py so

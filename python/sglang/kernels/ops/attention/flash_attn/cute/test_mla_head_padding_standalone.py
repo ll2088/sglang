@@ -38,6 +38,20 @@ def test_predicate_does_not_import_sglang():
     assert "sglang" not in sys.modules
 
 
+def test_predicate_does_not_import_cutlass_or_torch():
+    """The predicate must stay importable without CUDA/CuTe or torch deps."""
+    for name in list(sys.modules):
+        if name in ("cutlass", "torch", "quack") or name.startswith(
+            ("cutlass.", "torch.", "quack.")
+        ):
+            del sys.modules[name]
+
+    _load_predicate()
+    assert "cutlass" not in sys.modules
+    assert "torch" not in sys.modules
+    assert "quack" not in sys.modules
+
+
 def test_predicate_resolves_without_config_module(monkeypatch):
     """The predicate must load even when a separate config module is absent."""
     monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
