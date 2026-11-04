@@ -28,6 +28,14 @@ def _print_env() -> None:
     print(f"version: {sys.version.split()[0]}")
     print(f"module: {Path(__file__).resolve()}")
     print(f"cwd: {Path.cwd()}")
+    # Show whether pytest is importable so CI logs distinguish a bare-python
+    # run from a pytest-collected run without installing anything extra.
+    try:
+        import pytest  # noqa: F401
+    except Exception:
+        print("pytest: not importable (stdlib-only run)")
+    else:
+        print("pytest: importable")
 
 
 if __name__ == "__main__":

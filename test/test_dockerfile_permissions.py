@@ -197,6 +197,145 @@ def _pytest_available() -> bool:
     return True
 
 
+def _assert_stdlib_only() -> None:
+    """Fail fast if this module ever grows a non-stdlib import.
+
+    The CI job that runs these checks intentionally installs nothing beyond
+    the interpreter. A stray third-party import would make the job fail during
+    collection instead of reporting a real permission/documentation problem,
+    so keep the module importable with a bare python3.
+    """
+    allowed = {
+        "re",
+        "sys",
+        "pathlib",
+        "__future__",
+        "typing",
+        "os",
+        "io",
+        "collections",
+        "functools",
+        "itertools",
+        "subprocess",
+        "tempfile",
+        "shutil",
+        "json",
+        "textwrap",
+        "unittest",
+        "dataclasses",
+        "enum",
+        "abc",
+        "contextlib",
+        "warnings",
+        "traceback",
+        "inspect",
+        "types",
+        "copy",
+        "math",
+        "stat",
+        "glob",
+        "fnmatch",
+        "string",
+        "datetime",
+        "time",
+        "random",
+        "hashlib",
+        "base64",
+        "binascii",
+        "struct",
+        "array",
+        "operator",
+        "weakref",
+        "gc",
+        "platform",
+        "getpass",
+        "socket",
+        "select",
+        "signal",
+        "threading",
+        "queue",
+        "asyncio",
+        "concurrent",
+        "multiprocessing",
+        "logging",
+        "argparse",
+        "configparser",
+        "csv",
+        "sqlite3",
+        "xml",
+        "html",
+        "http",
+        "urllib",
+        "email",
+        "mimetypes",
+        "uuid",
+        "secrets",
+        "hmac",
+        "zlib",
+        "gzip",
+        "bz2",
+        "lzma",
+        "zipfile",
+        "tarfile",
+        "pickle",
+        "shelve",
+        "dbm",
+        "marshal",
+        "codecs",
+        "unicodedata",
+        "locale",
+        "gettext",
+        "calendar",
+        "zoneinfo",
+        "decimal",
+        "fractions",
+        "numbers",
+        "cmath",
+        "statistics",
+        "pprint",
+        "reprlib",
+        "difflib",
+        "filecmp",
+        "fileinput",
+        "linecache",
+        "tokenize",
+        "token",
+        "keyword",
+        "ast",
+        "symtable",
+        "compileall",
+        "py_compile",
+        "dis",
+        "pickletools",
+        "tabnanny",
+        "pyclbr",
+        "pydoc",
+        "doctest",
+        "unittest",
+        "venv",
+        "ensurepip",
+        "zipapp",
+        "sysconfig",
+        "site",
+        "builtins",
+        "__main__",
+    }
+    for name, module in list(sys.modules.items()):
+        if module is None:
+            continue
+        top = name.split(".", 1)[0]
+        if top in allowed or top.startswith("_"):
+            continue
+        # pytest is allowed only when it is already imported by the runner;
+        # this module never imports it at module scope.
+        if top == "pytest":
+            continue
+        raise AssertionError(
+            f"test_dockerfile_permissions must stay stdlib-only; "
+            f"unexpected module imported: {name}"
+        )
+
+
 def _readme_keyword_hit_count() -> int:
     """Count README keyword hits the same way the acceptance grep does.
 
@@ -258,6 +397,16 @@ def _run_standalone() -> int:
         )
     else:
         print(f"PASS readme_keyword_hits ({hits})")
+
+    # Guard against a future edit that pulls in a third-party dependency and
+    # makes the CI job fail during import instead of reporting a real check.
+    try:
+        _assert_stdlib_only()
+    except AssertionError as exc:
+        failures += 1
+        print(f"FAIL stdlib_only: {exc}", file=sys.stderr)
+    else:
+        print("PASS stdlib_only")
     return 1 if failures else 0
 
 
