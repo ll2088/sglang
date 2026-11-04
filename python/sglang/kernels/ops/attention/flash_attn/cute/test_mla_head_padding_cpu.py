@@ -1,10 +1,14 @@
 # Copyright (c) 2025, Tri Dao.
 """CPU-only tests for the dense 2CTA MLA Q-head padding rule.
 
-This file imports nothing from the sglang package and needs no CUDA/CuTe
-dependencies. It loads ``mla_head_padding.py`` by file path so the predicate
-boundaries and the identity head-order contract can be checked in a minimal
-CI job with only pytest installed.
+This file deliberately imports nothing from the sglang package and needs no
+CUDA/CuTe, torch, or quack dependencies, so it can run in a minimal CI job
+with only pytest installed:
+
+    python -m pytest -q python/sglang/kernels/ops/attention/flash_attn/cute/test_mla_head_padding_cpu.py
+
+It loads ``mla_head_padding.py`` by file path and checks the predicate
+boundaries plus the identity head-order contract used by the 2CTA tile.
 """
 
 import importlib.util
@@ -24,17 +28,33 @@ def _load_predicate():
     return module.mla_2cta_pads_dense_qheads
 
 
-def test_predicate_loads_without_third_party_deps():
-    """Loading the predicate must not pull in sglang, cutlass, torch or quack."""
+def test_predicate_does_not_import_sglang():
+    """Loading the predicate must not pull in the sglang package."""
     for name in list(sys.modules):
-        if name in ("sglang", "cutlass", "torch", "quack") or name.startswith(
-            ("sglang.", "cutlass.", "torch.", "quack.")
-        ):
+        if name == "sglang" or name.startswith("sglang."):
             del sys.modules[name]
 
     _load_predicate()
     assert "sglang" not in sys.modules
+
+
+def test_predicate_does_not_import_cutlass():
+    """The predicate must stay importable without CUDA/CuTe dependencies."""
+    for name in list(sys.modules):
+        if name == "cutlass" or name.startswith("cutlass."):
+            del sys.modules[name]
+
+    _load_predicate()
     assert "cutlass" not in sys.modules
+
+
+def test_predicate_does_not_import_third_party():
+    """The predicate must not require torch, quack, or other third-party deps."""
+    for name in list(sys.modules):
+        if name in ("torch", "quack") or name.startswith(("torch.", "quack.")):
+            del sys.modules[name]
+
+    _load_predicate()
     assert "torch" not in sys.modules
     assert "quack" not in sys.modules
 
@@ -81,7 +101,6 @@ def test_predicate_boundaries(nheads_per_kv, num_heads_kv, expected):
 
 @pytest.mark.parametrize("nheads", [65, 72, 96, 127])
 def test_padded_heads_keep_identity_order(nheads):
-    """Padded rows keep the real head order and land past the valid heads."""
     tile = 128
     assert mla_2cta_pads_dense_qheads(nheads, 1)
     rows = list(range(tile))
@@ -91,6 +110,5 @@ def test_padded_heads_keep_identity_order(nheads):
 
 @pytest.mark.parametrize("nheads", [64, 128])
 def test_non_padded_heads_keep_identity_order(nheads):
-    """64 and 128 heads are not padded; the mapping is the identity."""
     assert not mla_2cta_pads_dense_qheads(nheads, 1)
     assert list(range(nheads)) == list(range(nheads))
