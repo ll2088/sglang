@@ -31,6 +31,11 @@ def test_predicate_does_not_import_sglang():
     """Loading the predicate must not pull in the sglang package."""
     import sys
 
+    # Drop any cached sglang modules so the assertion reflects this load only.
+    for name in list(sys.modules):
+        if name == "sglang" or name.startswith("sglang."):
+            del sys.modules[name]
+
     _load_predicate()
     assert "sglang" not in sys.modules
 
