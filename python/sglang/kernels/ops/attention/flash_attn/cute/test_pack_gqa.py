@@ -113,23 +113,6 @@ def _load_pack_gqa_predicate_only():
     return module.mla_2cta_pads_dense_qheads
 
 
-def _load_pack_gqa_predicate_only():
-    """Load only the predicate from pack_gqa without importing CUDA/CuTe.
-
-    pack_gqa imports cutlass/quack at module scope, so a CPU-only runner cannot
-    import it. The predicate itself lives in the sibling mla_head_padding.py;
-    this helper mirrors pack_gqa's fallback resolution order so the CPU-only
-    tests exercise the same rule without the CUDA dependency chain.
-    """
-    cute_dir = pathlib.Path(__file__).parent
-    spec = importlib.util.spec_from_file_location(
-        "_fa_cute_mla_head_padding_for_pack_gqa", cute_dir / "mla_head_padding.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.mla_2cta_pads_dense_qheads
-
-
 @cpu_only
 def test_predicate_loads_without_config_module(monkeypatch):
     """The predicate must resolve even if flash_attn.cute.config is absent."""

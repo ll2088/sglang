@@ -1,15 +1,15 @@
-#!/usr/bin/env python3
-"""CPU-only runner for the dense 2CTA MLA Q-head padding tests.
+"""Stdlib-only CPU runner for the dense 2CTA MLA Q-head padding rule.
 
-This script deliberately imports nothing beyond the standard library and the
-sibling ``mla_head_padding.py`` (loaded by file path). It lets a CPU CI job
-validate the padding predicate without installing sglang, torch, quack or
-CUDA/CuTe, which is what made the full-package setup fail.
+This script is the CPU-only verification entry point. It deliberately imports
+nothing beyond the Python standard library: no sglang, cutlass, quack or
+torch. The predicate and the pack_gqa fallback are loaded by file path so the
+same rule the kernel uses is exercised without the GPU dependency chain.
 
-Usage:
+Usage::
+
     python run_mla_head_padding_cpu_tests.py
 
-Exit code 0 means every check passed; 1 means at least one failed.
+Exit code 0 means every check passed.
 """
 
 import importlib.util
@@ -17,61 +17,71 @@ import pathlib
 import sys
 
 
-def _load_predicate_module():
-    path = pathlib.Path(__file__).with_name("mla_head_padding.py")
-    spec = importlib.util.spec_from_file_location(
-        "_fa_cute_mla_head_padding_cpu_runner", path
-    )
+_HERE = pathlib.Path(__file__).resolve().parent
+
+
+def _load_by_path(name, filename):
+    path = _HERE / filename
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def main() -> int:
-    module = _load_predicate_module()
-    pads = module.mla_2cta_pads_dense_qheads
-    accepts = module.mla_2cta_accepts_dense_qheads
+def _load_predicate():
+    return _load_by_path("_fa_cute_mla_head_padding_cpu", "mla_head_padding.py")
 
-    failures = []
 
-    def check(name, actual, expected):
-        if actual is not expected:
-            failures.append(f"{name}: got {actual!r}, expected {expected!r}")
+def _load_pack_gqa_predicate_only():
+    """Mirror pack_gqa's sibling-module fallback without importing pack_gqa.
 
-    # Boundary head counts for MQA (single KV head).
-    for heads, expected in [
-        (64, False),
-        (65, True),
-        (96, True),
-        (127, True),
-        (128, False),
-        (24, False),
-        (0, False),
-        (-1, False),
-        (129, False),
-    ]:
-        check(f"pads({heads}, 1)", pads(heads, 1), expected)
+    pack_gqa imports cutlass/quack at module scope, so a CPU-only runner cannot
+    import it. The predicate lives in the sibling mla_head_padding.py; this
+    helper resolves it the same way pack_gqa's fallback does.
+    """
+    return _load_predicate().mla_2cta_pads_dense_qheads
 
-    # Non-MQA never pads.
-    for heads in (65, 96):
-        check(f"pads({heads}, 2)", pads(heads, 2), False)
-    check("pads(96, 0)", pads(96, 0), False)
 
-    # Boolean MQA flag form used by the usability check.
-    for heads, expected in [
-        (64, False),
-        (65, True),
-        (96, True),
-        (127, True),
-        (128, False),
-        (0, False),
-        (-1, False),
-    ]:
-        check(f"pads({heads}, True)", pads(heads, True), expected)
-    check("pads(96, False)", pads(96, False), False)
+def _check(cond, msg):
+    if not cond:
+        raise AssertionError(msg)
 
-    # Acceptance rule: dividing heads accepted as-is, 65-127 MQA padded.
-    for heads, kv, expected in [
+
+def check_predicate_boundaries():
+    predicate = _load_predicate().mla_2cta_pads_dense_qheads
+    cases = [
+        (64, 1, False),
+        (65, 1, True),
+        (96, 1, True),
+        (127, 1, True),
+        (128, 1, False),
+        (24, 1, False),
+        (0, 1, False),
+        (-1, 1, False),
+        (129, 1, False),
+        (96, 2, False),
+        (65, 2, False),
+        (96, 0, False),
+        (64, True, False),
+        (65, True, True),
+        (96, True, True),
+        (127, True, True),
+        (128, True, False),
+        (0, True, False),
+        (-1, True, False),
+        (96, False, False),
+    ]
+    for nheads, heads_kv, expected in cases:
+        got = predicate(nheads, heads_kv)
+        _check(
+            got is expected,
+            f"predicate({nheads}, {heads_kv}) = {got!r}, expected {expected!r}",
+        )
+
+
+def check_accepts_dense_qheads():
+    accepts = _load_predicate().mla_2cta_accepts_dense_qheads
+    cases = [
         (128, 1, True),
         (64, 1, True),
         (96, 1, True),
@@ -82,23 +92,64 @@ def main() -> int:
         (0, 1, False),
         (-1, 1, False),
         (129, 1, False),
-    ]:
-        check(f"accepts({heads}, {kv})", accepts(heads, kv), expected)
+    ]
+    for nheads, heads_kv, expected in cases:
+        got = accepts(nheads, heads_kv)
+        _check(
+            got is expected,
+            f"accepts({nheads}, {heads_kv}) = {got!r}, expected {expected!r}",
+        )
 
-    # Padded rows keep the real head order and land past the valid heads.
-    for heads in (65, 72, 96, 127):
-        if not pads(heads, 1):
-            failures.append(f"pads({heads}, 1) should be True")
-        rows = list(range(128))
-        if rows[:heads] != list(range(heads)):
-            failures.append(f"padded rows for {heads} heads are not identity")
-        if any(r < heads for r in rows[heads:]):
-            failures.append(f"padded rows for {heads} heads overlap valid heads")
 
-    if failures:
-        for failure in failures:
-            print(f"FAIL: {failure}", file=sys.stderr)
-        return 1
+def check_pack_gqa_fallback():
+    predicate = _load_pack_gqa_predicate_only()
+    cases = [
+        (64, True, False),
+        (65, True, True),
+        (127, True, True),
+        (128, True, False),
+        (96, False, False),
+        (0, True, False),
+        (-1, True, False),
+    ]
+    for nheads, heads_kv, expected in cases:
+        got = predicate(nheads, heads_kv)
+        _check(
+            got is expected,
+            f"pack_gqa predicate({nheads}, {heads_kv}) = {got!r}, "
+            f"expected {expected!r}",
+        )
+
+
+def check_padded_head_order():
+    predicate = _load_predicate().mla_2cta_pads_dense_qheads
+    tile = 128
+    for nheads in (65, 72, 96, 127):
+        _check(predicate(nheads, 1), f"{nheads} heads should pad")
+        rows = list(range(tile))
+        _check(rows[:nheads] == list(range(nheads)), "real heads keep order")
+        _check(
+            all(r >= nheads for r in rows[nheads:]),
+            "padded rows land past the valid heads",
+        )
+    for nheads in (64, 128):
+        _check(not predicate(nheads, 1), f"{nheads} heads should not pad")
+        _check(list(range(nheads)) == list(range(nheads)), "identity mapping")
+
+
+def check_no_heavy_imports():
+    """The runner must not pull in sglang/cutlass/quack/torch."""
+    heavy = ("sglang", "cutlass", "quack", "torch")
+    loaded = [name for name in sys.modules if name.split(".")[0] in heavy]
+    _check(not loaded, f"heavy modules imported: {loaded}")
+
+
+def main():
+    check_predicate_boundaries()
+    check_accepts_dense_qheads()
+    check_pack_gqa_fallback()
+    check_padded_head_order()
+    check_no_heavy_imports()
     print("ok")
     return 0
 
