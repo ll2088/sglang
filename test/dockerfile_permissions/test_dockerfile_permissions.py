@@ -18,3 +18,11 @@ from checks import (  # noqa: F401  (re-exported for pytest collection)
     check_readme_non_root_cache_guidance as test_readme_non_root_cache_guidance,
 )
 
+
+def test_all_checks_pass():
+    """Run every check so a single pytest invocation covers the full suite."""
+    from checks import ALL_CHECKS
+
+    for check in ALL_CHECKS:
+        check()
+
