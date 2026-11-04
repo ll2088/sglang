@@ -176,5 +176,36 @@ def _pytest_available() -> bool:
     return True
 
 
+def _run_standalone() -> int:
+    """Run every check without pytest, including the devcontainer check.
+
+    This is the entry point used by CI so the permission/documentation checks
+    never require installing sglang or pytest. It mirrors the pytest-collected
+    test functions but reports PASS/FAIL and returns a process exit code.
+    """
+    missing = _missing_paths()
+    if missing:
+        for path in missing:
+            print(f"FAIL missing expected file: {path}", file=sys.stderr)
+        return 1
+
+    failures = 0
+    checks = (
+        test_no_world_writable_permissions,
+        test_minimal_permission_statements,
+        test_readme_non_root_cache_guidance,
+        test_devcontainer_workspace_not_world_writable,
+    )
+    for check in checks:
+        try:
+            check()
+        except AssertionError as exc:
+            failures += 1
+            print(f"FAIL {check.__name__}: {exc}", file=sys.stderr)
+        else:
+            print(f"PASS {check.__name__}")
+    return 1 if failures else 0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_run_standalone())
