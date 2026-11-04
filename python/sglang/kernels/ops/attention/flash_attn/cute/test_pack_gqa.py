@@ -54,3 +54,20 @@ def test_mla_2cta_pads_dense_qheads_accepts_boolean_mqa_flag():
     assert mla_2cta_pads_dense_qheads(96, False) is False
     assert mla_2cta_pads_dense_qheads(0, True) is False
     assert mla_2cta_pads_dense_qheads(-1, True) is False
+
+
+@pytest.mark.parametrize("nheads", [65, 72, 96, 127])
+def test_padded_heads_keep_identity_order(nheads):
+    """Padded rows keep the real head order and land past the valid heads."""
+    tile = 128
+    assert mla_2cta_pads_dense_qheads(nheads, 1)
+    rows = list(range(tile))
+    assert rows[:nheads] == list(range(nheads))
+    assert all(r >= nheads for r in rows[nheads:])
+
+
+@pytest.mark.parametrize("nheads", [64, 128])
+def test_non_padded_heads_keep_identity_order(nheads):
+    """64 and 128 heads are not padded; the mapping is the identity."""
+    assert not mla_2cta_pads_dense_qheads(nheads, 1)
+    assert list(range(nheads)) == list(range(nheads))

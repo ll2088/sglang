@@ -9,9 +9,13 @@ from cutlass.cute.nvgpu import cpasync
 from quack import layout_utils
 
 import sglang.kernels.ops.attention.flash_attn.cute.utils as utils
-from sglang.kernels.ops.attention.flash_attn.cute.mla_head_padding import (
-    mla_2cta_pads_dense_qheads,
-)
+
+try:
+    from sglang.kernels.ops.attention.flash_attn.cute.mla_head_padding import (
+        mla_2cta_pads_dense_qheads,
+    )
+except ImportError:  # pragma: no cover - standalone predicate tests
+    from mla_head_padding import mla_2cta_pads_dense_qheads
 
 __all__ = [
     "mla_2cta_pads_dense_qheads",
