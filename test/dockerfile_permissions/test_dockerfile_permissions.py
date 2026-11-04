@@ -130,6 +130,15 @@ def test_readme_non_root_cache_guidance() -> None:
     assert not missing, "README guidance missing:\n" + "\n".join(missing)
 
 
+def test_readme_keyword_hit_threshold() -> None:
+    # The acceptance criteria require at least six keyword hits across the
+    # affected READMEs. Keep this as a separate assertion so a regression is
+    # reported with the per-file counts rather than a bare boolean.
+    hits = readme_keyword_hits_per_file()
+    total = sum(hits.values())
+    assert total >= 6, f"README keyword hits too low: total={total} per_file={hits}"
+
+
 def test_devcontainer_workspace_not_world_writable() -> None:
     path = REPO_ROOT / ".devcontainer" / "Dockerfile"
     if not path.is_file():
@@ -143,6 +152,7 @@ CHECKS = (
     test_no_world_writable_permissions,
     test_minimal_permission_statements,
     test_readme_non_root_cache_guidance,
+    test_readme_keyword_hit_threshold,
     test_devcontainer_workspace_not_world_writable,
 )
 
