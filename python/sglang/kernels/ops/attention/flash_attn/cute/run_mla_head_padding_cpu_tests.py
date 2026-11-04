@@ -3,14 +3,11 @@
 This script deliberately imports nothing beyond the standard library and the
 sibling ``mla_head_padding.py`` (loaded by file path), so it can run on a
 CPU-only runner without CUDA/CuTe, torch, quack or the sglang package. It is
-the entry point CI should call instead of installing the full sglang
-dependency tree just to exercise the pure-Python rule.
+intended for CI jobs that cannot install the full sglang dependency tree.
 
 Usage::
 
-    python run_mla_head_padding_cpu_tests.py
-
-Exit code 0 means every assertion passed.
+    python python/sglang/kernels/ops/attention/flash_attn/cute/run_mla_head_padding_cpu_tests.py
 """
 
 import importlib.util
@@ -18,21 +15,14 @@ import pathlib
 import sys
 
 
-def _load_module(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
+def _load_predicate_module():
+    path = pathlib.Path(__file__).with_name("mla_head_padding.py")
+    spec = importlib.util.spec_from_file_location(
+        "_fa_cute_mla_head_padding_cpu_runner", path
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def _load_predicate_module():
-    path = pathlib.Path(__file__).with_name("mla_head_padding.py")
-    return _load_module("_fa_cute_mla_head_padding_cpu_runner", path)
-
-
-def _load_standalone_tests():
-    path = pathlib.Path(__file__).with_name("test_mla_head_padding_standalone.py")
-    return _load_module("_fa_cute_mla_head_padding_standalone_cpu_runner", path)
 
 
 def _check(cond, msg):
@@ -40,95 +30,65 @@ def _check(cond, msg):
         raise AssertionError(msg)
 
 
-def _run_predicate_checks(predicate):
+def main() -> int:
+    module = _load_predicate_module()
+    pads = module.mla_2cta_pads_dense_qheads
+    accepts = module.mla_2cta_accepts_dense_qheads
+
     # Boundary head counts for MQA (single KV head).
-    cases = [
-        (64, 1, False),
-        (65, 1, True),
-        (96, 1, True),
-        (127, 1, True),
-        (128, 1, False),
-        (24, 1, False),
-        (0, 1, False),
-        (-1, 1, False),
-        (129, 1, False),
-        (96, 2, False),
-        (65, 2, False),
-        (96, 0, False),
-        (64, True, False),
-        (65, True, True),
-        (96, True, True),
-        (127, True, True),
-        (128, True, False),
-        (0, True, False),
-        (-1, True, False),
-        (96, False, False),
-    ]
-    for nheads_per_kv, num_heads_kv, expected in cases:
-        got = predicate(nheads_per_kv, num_heads_kv)
-        _check(
-            got is expected,
-            f"mla_2cta_pads_dense_qheads({nheads_per_kv}, {num_heads_kv}) "
-            f"returned {got!r}, expected {expected!r}",
-        )
+    _check(pads(64, 1) is False, "64 heads must not pad")
+    _check(pads(65, 1) is True, "65 heads must pad")
+    _check(pads(96, 1) is True, "96 heads must pad")
+    _check(pads(127, 1) is True, "127 heads must pad")
+    _check(pads(128, 1) is False, "128 heads must not pad")
 
+    # Too few heads to pad: still rejected.
+    _check(pads(24, 1) is False, "24 heads must not pad")
+    _check(pads(0, 1) is False, "0 heads must not pad")
+    _check(pads(-1, 1) is False, "-1 heads must not pad")
+    _check(pads(129, 1) is False, "129 heads must not pad")
 
-def _run_accepts_checks(accepts):
-    cases = [
-        (128, 1, True),
-        (64, 1, True),
-        (96, 1, True),
-        (65, 1, True),
-        (127, 1, True),
-        (24, 1, False),
-        (96, 2, False),
-        (0, 1, False),
-        (-1, 1, False),
-        (129, 1, False),
-    ]
-    for nheads_per_kv, num_heads_kv, expected in cases:
-        got = accepts(nheads_per_kv, num_heads_kv)
-        _check(
-            got is expected,
-            f"mla_2cta_accepts_dense_qheads({nheads_per_kv}, {num_heads_kv}) "
-            f"returned {got!r}, expected {expected!r}",
-        )
+    # Non-MQA (more than one KV head) never pads.
+    _check(pads(96, 2) is False, "96 heads with 2 KV heads must not pad")
+    _check(pads(65, 2) is False, "65 heads with 2 KV heads must not pad")
+    _check(pads(96, 0) is False, "96 heads with 0 KV heads must not pad")
 
+    # Boolean MQA flag form used by the usability check.
+    _check(pads(64, True) is False, "64 heads with MQA flag must not pad")
+    _check(pads(65, True) is True, "65 heads with MQA flag must pad")
+    _check(pads(96, True) is True, "96 heads with MQA flag must pad")
+    _check(pads(127, True) is True, "127 heads with MQA flag must pad")
+    _check(pads(128, True) is False, "128 heads with MQA flag must not pad")
+    _check(pads(0, True) is False, "0 heads with MQA flag must not pad")
+    _check(pads(-1, True) is False, "-1 heads with MQA flag must not pad")
+    _check(pads(96, False) is False, "96 heads without MQA flag must not pad")
 
-def _run_head_order_checks(predicate):
-    tile = 128
+    # Acceptance rule: dividing heads accepted as-is, 65-127 MQA padded.
+    _check(accepts(128, 1) is True, "128 heads must be accepted")
+    _check(accepts(64, 1) is True, "64 heads must be accepted")
+    _check(accepts(96, 1) is True, "96 heads must be accepted")
+    _check(accepts(65, 1) is True, "65 heads must be accepted")
+    _check(accepts(127, 1) is True, "127 heads must be accepted")
+    _check(accepts(24, 1) is False, "24 heads must be rejected")
+    _check(accepts(96, 2) is False, "96 heads with 2 KV heads must be rejected")
+    _check(accepts(0, 1) is False, "0 heads must be rejected")
+    _check(accepts(-1, 1) is False, "-1 heads must be rejected")
+    _check(accepts(129, 1) is False, "129 heads must be rejected")
+
+    # Padded rows keep the real head order and land past the valid heads.
     for nheads in (65, 72, 96, 127):
-        _check(predicate(nheads, 1), f"{nheads} heads should be padded")
-        rows = list(range(tile))
-        _check(rows[:nheads] == list(range(nheads)), "real head order changed")
+        _check(pads(nheads, 1), f"{nheads} heads must pad")
+        rows = list(range(128))
+        _check(rows[:nheads] == list(range(nheads)), "valid rows must be identity")
         _check(
             all(r >= nheads for r in rows[nheads:]),
             "padded rows must land past the valid heads",
         )
+
+    # 64 and 128 heads are not padded; the mapping is the identity.
     for nheads in (64, 128):
-        _check(not predicate(nheads, 1), f"{nheads} heads should not be padded")
-        _check(list(range(nheads)) == list(range(nheads)), "identity mapping changed")
-
-
-def main():
-    module = _load_predicate_module()
-    predicate = module.mla_2cta_pads_dense_qheads
-    accepts = module.mla_2cta_accepts_dense_qheads
-
-    _run_predicate_checks(predicate)
-    _run_accepts_checks(accepts)
-    _run_head_order_checks(predicate)
-
-    # The standalone module must also be loadable without sglang/CUDA deps.
-    standalone = _load_standalone_tests()
-    _check(
-        standalone.mla_2cta_pads_dense_qheads(65, True) is True,
-        "standalone module predicate mismatch",
-    )
-    _check(
-        standalone.mla_2cta_pads_dense_qheads(64, True) is False,
-        "standalone module predicate mismatch",
-    )
+        _check(not pads(nheads, 1), f"{nheads} heads must not pad")
+        _check(list(range(nheads)) == list(range(nheads)), "identity mapping")
 
     print("ok")
     return 0

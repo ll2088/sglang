@@ -35,14 +35,11 @@ def _requires_sglang():
 
     A CPU-only runner may have a partial sglang install whose dependency tree
     cannot be imported; treat that as "not installed" so the CUDA-dependent
-    tests skip instead of failing at import time.
+    tests skip instead of failing at import time. The probe never imports the
+    package itself, so a broken dependency tree cannot fail collection.
     """
     if importlib.util.find_spec("sglang") is None:
         return pytest.mark.skip(reason="pack_gqa needs the sglang package")
-    try:
-        import sglang  # noqa: F401
-    except Exception:
-        return pytest.mark.skip(reason="pack_gqa needs an importable sglang package")
     return pytest.mark.skipif(False, reason="")
 
 
@@ -183,22 +180,25 @@ def test_predicate_loads_without_sglang_or_cuda_deps(monkeypatch):
     assert predicate(-1, True) is False
 
 
-mla_2cta_pads_dense_qheads = _load_predicate()
-
 # The predicate boundary tests live in test_mla_head_padding_standalone.py so
 # they run in a minimal CI job without CUDA/CuTe or the sglang package. Keep
 # this module's tests focused on pack_gqa's import fallback and head ordering.
+# Load the predicate lazily so importing this module never requires the
+# sibling file to be present (e.g. when only the CUDA tests are collected).
+def _predicate():
+    return _load_predicate()
 
 
 def test_predicate_loads_without_cuda_deps():
     """The pure-Python predicate must be collectable on a CPU-only runner."""
-    assert mla_2cta_pads_dense_qheads(64, True) is False
-    assert mla_2cta_pads_dense_qheads(65, True) is True
-    assert mla_2cta_pads_dense_qheads(127, True) is True
-    assert mla_2cta_pads_dense_qheads(128, True) is False
-    assert mla_2cta_pads_dense_qheads(96, False) is False
-    assert mla_2cta_pads_dense_qheads(0, True) is False
-    assert mla_2cta_pads_dense_qheads(-1, True) is False
+    predicate = _predicate()
+    assert predicate(64, True) is False
+    assert predicate(65, True) is True
+    assert predicate(127, True) is True
+    assert predicate(128, True) is False
+    assert predicate(96, False) is False
+    assert predicate(0, True) is False
+    assert predicate(-1, True) is False
 
 
 @_requires_cute()
@@ -311,25 +311,26 @@ def test_pack_gqa_fallback_import_in_subprocess():
     ],
 )
 def test_mla_2cta_pads_dense_qheads(nheads_per_kv, num_heads_kv, expected):
-    assert mla_2cta_pads_dense_qheads(nheads_per_kv, num_heads_kv) is expected
+    assert _predicate()(nheads_per_kv, num_heads_kv) is expected
 
 
 def test_mla_2cta_pads_dense_qheads_accepts_boolean_mqa_flag():
     # The usability check queries the predicate with a boolean MQA flag.
-    assert mla_2cta_pads_dense_qheads(64, True) is False
-    assert mla_2cta_pads_dense_qheads(65, True) is True
-    assert mla_2cta_pads_dense_qheads(127, True) is True
-    assert mla_2cta_pads_dense_qheads(128, True) is False
-    assert mla_2cta_pads_dense_qheads(96, False) is False
-    assert mla_2cta_pads_dense_qheads(0, True) is False
-    assert mla_2cta_pads_dense_qheads(-1, True) is False
+    predicate = _predicate()
+    assert predicate(64, True) is False
+    assert predicate(65, True) is True
+    assert predicate(127, True) is True
+    assert predicate(128, True) is False
+    assert predicate(96, False) is False
+    assert predicate(0, True) is False
+    assert predicate(-1, True) is False
 
 
 @pytest.mark.parametrize("nheads", [65, 72, 96, 127])
 def test_padded_heads_keep_identity_order(nheads):
     """Padded rows keep the real head order and land past the valid heads."""
     tile = 128
-    assert mla_2cta_pads_dense_qheads(nheads, 1)
+    assert _predicate()(nheads, 1)
     rows = list(range(tile))
     assert rows[:nheads] == list(range(nheads))
     assert all(r >= nheads for r in rows[nheads:])
@@ -338,5 +339,5 @@ def test_padded_heads_keep_identity_order(nheads):
 @pytest.mark.parametrize("nheads", [64, 128])
 def test_non_padded_heads_keep_identity_order(nheads):
     """64 and 128 heads are not padded; the mapping is the identity."""
-    assert not mla_2cta_pads_dense_qheads(nheads, 1)
+    assert not _predicate()(nheads, 1)
     assert list(range(nheads)) == list(range(nheads))
