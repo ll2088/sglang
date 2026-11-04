@@ -50,9 +50,9 @@ def _print_env() -> None:
 
 def _print_keyword_hits() -> None:
     """Print per-README keyword hit counts for CI log parity with grep."""
-    from test_dockerfile_permissions import _readme_keyword_hits_per_file
+    from test_dockerfile_permissions import readme_keyword_hits_per_file
 
-    for name, count in _readme_keyword_hits_per_file().items():
+    for name, count in readme_keyword_hits_per_file().items():
         print(f"readme_keyword_hits[{name}]={count}")
 
 
