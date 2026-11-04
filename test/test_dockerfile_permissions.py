@@ -19,6 +19,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# The canonical implementation lives in test/dockerfile_permissions/ so CI can
+# run it with `-c test/dockerfile_permissions/pytest.ini --rootdir
+# test/dockerfile_permissions`, which never walks up to the repository root
+# conftest.py or pyproject.toml. This module re-exports the checks for callers
+# that still invoke `python3 test/test_dockerfile_permissions.py` directly.
+
 DOCKERFILES = [
     REPO_ROOT / "docker" / "Dockerfile",
     REPO_ROOT / "examples" / "frontend_language" / "usage" / "triton" / "Dockerfile",
