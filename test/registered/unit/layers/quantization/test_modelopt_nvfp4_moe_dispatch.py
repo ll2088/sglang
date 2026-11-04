@@ -516,6 +516,33 @@ class TestReplaceFunctionExceptionSafety(CustomTestCase):
         self.assertIs(target.kernel, original)
         self.assertEqual(target.kernel(), "original")
 
+    def test_stacked_fake_quant_restores_after_kernel_error_then_reuse(self):
+        """After a kernel exception, a later patch still restores the original."""
+        from sglang.kernels.ops.quantization import fp4_fake_quant
+
+        class Target:
+            def kernel(self):
+                return "original"
+
+        target = Target()
+        original = target.kernel
+
+        def failing_kernel(*args, **kwargs):
+            raise RuntimeError("kernel boom")
+
+        with self.assertRaises(RuntimeError):
+            with fp4_fake_quant.replace_function(
+                target, "kernel", failing_kernel
+            ):
+                target.kernel()
+        self.assertIs(target.kernel, original)
+
+        with fp4_fake_quant.replace_function(
+            target, "kernel", lambda: "patched"
+        ):
+            self.assertEqual(target.kernel(), "patched")
+        self.assertIs(target.kernel, original)
+
 
 if __name__ == "__main__":
     unittest.main()

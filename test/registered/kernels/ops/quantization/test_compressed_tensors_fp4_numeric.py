@@ -318,5 +318,51 @@ def test_stacked_fp4_fake_quant_zero_and_extreme_slices():
     assert max_abs <= 1e-6, f"max abs error {max_abs} too large"
 
 
+def test_stacked_fp4_fake_quant_per_slice_amax_matches_reference():
+    """Per-slice amax must reproduce per-expert independent calls."""
+    from sglang.kernels.ops.quantization.fp4_fake_quant import (
+        fake_quant_fp4,
+        fake_quant_fp4_stacked,
+    )
+
+    torch.manual_seed(0)
+    x = torch.randn(4, 8, 64)
+    amax = x.abs().flatten(1).amax(dim=1)
+    stacked = fake_quant_fp4_stacked(x, amax)
+    ref = torch.stack([fake_quant_fp4(x[i]) for i in range(x.shape[0])])
+    max_abs = (stacked.float() - ref.float()).abs().max().item()
+    assert max_abs <= 1e-6, f"max abs error {max_abs} too large"
+
+
+def test_stacked_fp4_fake_quant_empty_and_single_expert():
+    """Empty and single-expert inputs return the right shape without error."""
+    from sglang.kernels.ops.quantization.fp4_fake_quant import (
+        fake_quant_fp4,
+        fake_quant_fp4_stacked,
+    )
+
+    empty = torch.empty(0, 8, 64)
+    out = fake_quant_fp4_stacked(empty, torch.empty(0))
+    assert out.shape == empty.shape
+
+    torch.manual_seed(0)
+    single = torch.randn(1, 8, 64)
+    amax = single.abs().flatten(1).amax(dim=1)
+    stacked = fake_quant_fp4_stacked(single, amax)
+    ref = fake_quant_fp4(single[0]).unsqueeze(0)
+    max_abs = (stacked.float() - ref.float()).abs().max().item()
+    assert max_abs <= 1e-6, f"max abs error {max_abs} too large"
+
+
+def test_stacked_fp4_fake_quant_rejects_mismatched_amax():
+    from sglang.kernels.ops.quantization.fp4_fake_quant import (
+        fake_quant_fp4_stacked,
+    )
+
+    x = torch.randn(4, 8, 64)
+    with pytest.raises(ValueError):
+        fake_quant_fp4_stacked(x, torch.ones(3))
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "-s"]))
