@@ -6,14 +6,23 @@ predicate, the pack_gqa head-order mapping, and the config-module fallback so
 they can run on any runner.
 """
 
-import importlib
+import importlib.util
+import pathlib
 import sys
 
 import pytest
 
-from sglang.kernels.ops.attention.flash_attn.cute.pack_gqa import (
-    mla_2cta_pads_dense_qheads,
-)
+
+def _load_predicate():
+    """Load the predicate without importing the sglang package (no CUDA deps)."""
+    path = pathlib.Path(__file__).with_name("pack_gqa.py")
+    spec = importlib.util.spec_from_file_location("fa_cute_pack_gqa", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.mla_2cta_pads_dense_qheads
+
+
+mla_2cta_pads_dense_qheads = _load_predicate()
 
 
 @pytest.mark.parametrize(
@@ -78,8 +87,6 @@ def test_predicate_resolves_without_config_module(monkeypatch):
     ``flash_attn.cute.config`` to exist.
     """
     monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
-    module = importlib.import_module(
-        "sglang.kernels.ops.attention.flash_attn.cute.pack_gqa"
-    )
-    assert module.mla_2cta_pads_dense_qheads(96, 1) is True
-    assert module.mla_2cta_pads_dense_qheads(64, 1) is False
+    predicate = _load_predicate()
+    assert predicate(96, 1) is True
+    assert predicate(64, 1) is False

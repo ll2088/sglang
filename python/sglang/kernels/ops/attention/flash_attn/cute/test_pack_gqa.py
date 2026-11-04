@@ -1,8 +1,19 @@
+import importlib.util
+import pathlib
+
 import pytest
 
-from sglang.kernels.ops.attention.flash_attn.cute.pack_gqa import (
-    mla_2cta_pads_dense_qheads,
-)
+
+def _load_predicate():
+    """Load the predicate without importing the sglang package (no CUDA deps)."""
+    path = pathlib.Path(__file__).with_name("pack_gqa.py")
+    spec = importlib.util.spec_from_file_location("fa_cute_pack_gqa", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.mla_2cta_pads_dense_qheads
+
+
+mla_2cta_pads_dense_qheads = _load_predicate()
 
 
 @pytest.mark.parametrize(
