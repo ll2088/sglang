@@ -52,6 +52,19 @@ def test_predicate_does_not_import_cutlass():
     assert "cutlass" not in sys.modules
 
 
+def test_predicate_does_not_import_third_party():
+    """The predicate must not require torch, quack, or other third-party deps."""
+    import sys
+
+    for name in list(sys.modules):
+        if name in ("torch", "quack") or name.startswith(("torch.", "quack.")):
+            del sys.modules[name]
+
+    _load_predicate()
+    assert "torch" not in sys.modules
+    assert "quack" not in sys.modules
+
+
 mla_2cta_pads_dense_qheads = _load_predicate()
 
 

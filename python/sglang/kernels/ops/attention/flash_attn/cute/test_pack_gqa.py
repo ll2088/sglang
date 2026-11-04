@@ -37,6 +37,10 @@ def _load_predicate():
 
 mla_2cta_pads_dense_qheads = _load_predicate()
 
+# The predicate boundary tests live in test_mla_head_padding_standalone.py so
+# they run in a minimal CI job without CUDA/CuTe or the sglang package. Keep
+# this module's tests focused on pack_gqa's import fallback and head ordering.
+
 
 def test_predicate_loads_without_cuda_deps():
     """The pure-Python predicate must be collectable on a CPU-only runner."""
