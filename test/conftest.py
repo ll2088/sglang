@@ -15,4 +15,12 @@
 # cannot itself trigger a dependency install.
 #
 # CI must invoke the checks with `-c test/pytest.ini` (or run the standalone
-# runner) so the repository-root pytest configuration is not picked up.
+# runner) so the repository-root pytest configuration is not picked up. The
+# explicit `rootdir = .` in test/pytest.ini pins the rootdir to this directory
+# so pytest does not walk up to the repository root and load a root-level
+# conftest.py or pyproject.toml that could trigger a full sglang install.
+#
+# If a future CI job still runs `pip install -e python` before pytest, that is
+# a setup-step problem outside this file: the permission/documentation checks
+# need only a bare python3 (or python3 + pytest) and must not be gated on the
+# full sglang dependency tree.
