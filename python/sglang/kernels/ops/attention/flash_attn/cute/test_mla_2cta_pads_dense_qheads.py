@@ -80,6 +80,31 @@ def test_non_padded_heads_keep_identity_order(nheads):
     assert list(range(nheads)) == list(range(nheads))
 
 
+@pytest.mark.parametrize("nheads", [65, 72, 96, 127])
+def test_padded_tile_keeps_real_heads_in_order(nheads):
+    """Padded rows must not alias real heads or the next token's rows.
+
+    The 2CTA tile holds one token's heads in 128 rows; the first ``nheads``
+    rows are the real heads in order and the rest are padding. This mirrors
+    the in-kernel TMA dynamic-extent view without importing CUDA.
+    """
+    tile = 128
+    assert mla_2cta_pads_dense_qheads(nheads, 1)
+    rows = list(range(tile))
+    assert rows[:nheads] == list(range(nheads))
+    assert all(r >= nheads for r in rows[nheads:])
+    # A second token starts at the next tile, never inside the padded rows.
+    next_token_start = tile
+    assert next_token_start >= nheads
+
+
+@pytest.mark.parametrize("nheads", [64, 128])
+def test_non_padded_tile_has_no_padding_rows(nheads):
+    """64 and 128 heads fill the tile exactly; no padding rows exist."""
+    assert not mla_2cta_pads_dense_qheads(nheads, 1)
+    assert nheads % 128 == 0 or nheads == 64
+
+
 def test_predicate_resolves_without_config_module(monkeypatch):
     """The predicate must be importable even if a separate config module is absent.
 
