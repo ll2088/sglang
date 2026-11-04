@@ -22,5 +22,17 @@ if str(_HERE) not in sys.path:
 from test_dockerfile_permissions import _run_standalone  # noqa: E402
 
 
+def _print_env() -> None:
+    """Print the interpreter and module path so CI logs show the real entry."""
+    print(f"python: {sys.executable}")
+    print(f"version: {sys.version.split()[0]}")
+    print(f"module: {Path(__file__).resolve()}")
+    print(f"cwd: {Path.cwd()}")
+
+
 if __name__ == "__main__":
+    if "--check-env" in sys.argv[1:]:
+        _print_env()
+        sys.exit(0)
+    _print_env()
     sys.exit(_run_standalone())
