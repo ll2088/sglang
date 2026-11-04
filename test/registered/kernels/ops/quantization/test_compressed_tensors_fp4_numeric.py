@@ -255,5 +255,34 @@ def test_moe_matches_dequantized_experts(fmt, is_gated, activation):
     assert rel < 0.03, f"relative error {rel:.4f} too large"
 
 
+def test_stacked_fp4_fake_quant_matches_reference():
+    """Single- and multi-expert stacked fake quant stays within tolerance."""
+    from sglang.kernels.ops.quantization.fp4_fake_quant import (
+        fake_quant_fp4,
+        fake_quant_fp4_stacked,
+    )
+
+    torch.manual_seed(0)
+    for num_experts in (1, 4):
+        x = torch.randn(num_experts, 8, 64)
+        amax = x.abs().flatten(1).amax(dim=1)
+        stacked = fake_quant_fp4_stacked(x, amax)
+        ref = torch.stack([fake_quant_fp4(x[i]) for i in range(num_experts)])
+        assert stacked.shape == x.shape
+        max_abs = (stacked.float() - ref.float()).abs().max().item()
+        assert max_abs <= 1e-6, f"max abs error {max_abs} too large"
+
+
+def test_stacked_fp4_fake_quant_empty_experts():
+    """An empty expert list must not launch a kernel or raise."""
+    from sglang.kernels.ops.quantization.fp4_fake_quant import (
+        fake_quant_fp4_stacked,
+    )
+
+    x = torch.empty(0, 8, 64)
+    out = fake_quant_fp4_stacked(x, torch.empty(0))
+    assert out.shape == x.shape
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "-s"]))

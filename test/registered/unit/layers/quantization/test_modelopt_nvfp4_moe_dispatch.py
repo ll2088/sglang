@@ -388,5 +388,65 @@ class TestNvFp4MoeDispatch(CustomTestCase):
         self.assertEqual(method.runner.calls, [])
 
 
+class TestReplaceFunctionExceptionSafety(CustomTestCase):
+    """A monkey-patch context manager must restore the original on exceptions."""
+
+    def test_restores_on_exception(self):
+        from contextlib import contextmanager
+
+        class Target:
+            def fn(self):
+                return "original"
+
+        target = Target()
+        original = target.fn
+
+        @contextmanager
+        def replace_function(obj, name, new):
+            old = getattr(obj, name)
+            setattr(obj, name, new)
+            try:
+                yield
+            finally:
+                setattr(obj, name, old)
+
+        def patched():
+            raise RuntimeError("boom")
+
+        with self.assertRaises(RuntimeError):
+            with replace_function(target, "fn", patched):
+                target.fn()
+        self.assertIs(target.fn, original)
+        self.assertEqual(target.fn(), "original")
+
+    def test_restores_on_nested_exception(self):
+        from contextlib import contextmanager
+
+        class Target:
+            def fn(self):
+                return "original"
+
+        target = Target()
+        original = target.fn
+
+        @contextmanager
+        def replace_function(obj, name, new):
+            old = getattr(obj, name)
+            setattr(obj, name, new)
+            try:
+                yield
+            finally:
+                setattr(obj, name, old)
+
+        def patched():
+            raise RuntimeError("boom")
+
+        with self.assertRaises(RuntimeError):
+            with replace_function(target, "fn", patched):
+                with replace_function(target, "fn", patched):
+                    target.fn()
+        self.assertIs(target.fn, original)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -60,3 +60,36 @@ def fake_quant_compressed_kv(x: torch.Tensor) -> torch.Tensor:
     scaled = (blocks / scale).clamp(-FP4_MAX, FP4_MAX)
     deq = round_fp4(scaled) * scale
     return deq.flatten(-2).to(x.dtype)
+
+
+def fake_quant_fp4_stacked(
+    x: torch.Tensor,
+    amax: torch.Tensor,
+    block_size: int = FP4_BLOCK_SIZE,
+) -> torch.Tensor:
+    """FP4 fake quant of a stacked tensor with one global amax per slice of dim 0.
+
+    ``x`` has shape ``(E, ..., N)`` and ``amax`` holds one value per index of
+    dim 0 (or a single value shared by all slices). Each slice is quantized
+    exactly as a separate :func:`fake_quant_fp4` call with its own amax would
+    be, but in one pass. The per-block ue8m0 scale is derived from the slice's
+    global amax, matching the per-tensor amax convention of the NVFP4 kernel.
+    """
+    if x.dim() == 0:
+        raise ValueError("fake_quant_fp4_stacked expects a tensor with at least one dim")
+    amax = amax.reshape(-1)
+    if amax.numel() == 1:
+        amax = amax.expand(x.shape[0])
+    elif amax.numel() != x.shape[0]:
+        raise ValueError(
+            f"amax must hold 1 value or one per index of dim 0 ({x.shape[0]}), "
+            f"got {amax.numel()}."
+        )
+    # One global scale per slice, broadcast over the trailing dims.
+    global_scale = (amax.float() / FP4_MAX).clamp_min(FP4_AMAX_FLOOR)
+    global_scale = ceil_pow2(global_scale)
+    view_shape = (x.shape[0],) + (1,) * (x.dim() - 1)
+    scaled = x.float() / global_scale.reshape(view_shape)
+    scaled = scaled.unflatten(-1, (-1, block_size))
+    deq = round_fp4(scaled.clamp(-FP4_MAX, FP4_MAX)) * global_scale.reshape(view_shape).unsqueeze(-1)
+    return deq.flatten(-2).to(x.dtype)

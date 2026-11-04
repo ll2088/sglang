@@ -624,5 +624,59 @@ class TestAlignFp4MoeWeights(CustomTestCase):
         self.assertEqual(p_w2.shape, (num_experts, hidden, 1008 // 2))
 
 
+class TestStackedFp4FakeQuant(CustomTestCase):
+    """Per-slice amax stacked fake quant matches per-slice independent calls."""
+
+    def test_stacked_matches_per_slice(self):
+        from sglang.kernels.ops.quantization.fp4_fake_quant import (
+            fake_quant_fp4,
+            fake_quant_fp4_stacked,
+        )
+
+        torch.manual_seed(0)
+        x = torch.randn(4, 8, 64)
+        amax = x.abs().flatten(1).amax(dim=1)
+        stacked = fake_quant_fp4_stacked(x, amax)
+        ref = torch.stack([fake_quant_fp4(x[i]) for i in range(x.shape[0])])
+        torch.testing.assert_close(stacked, ref)
+
+    def test_stacked_handles_zero_and_extreme_slices(self):
+        from sglang.kernels.ops.quantization.fp4_fake_quant import (
+            fake_quant_fp4,
+            fake_quant_fp4_stacked,
+        )
+
+        x = torch.zeros(3, 4, 32)
+        x[1].fill_(1e4)
+        x[2].fill_(-1e4)
+        amax = x.abs().flatten(1).amax(dim=1)
+        stacked = fake_quant_fp4_stacked(x, amax)
+        ref = torch.stack([fake_quant_fp4(x[i]) for i in range(x.shape[0])])
+        torch.testing.assert_close(stacked, ref)
+
+    def test_stacked_single_slice_and_shared_amax(self):
+        from sglang.kernels.ops.quantization.fp4_fake_quant import (
+            fake_quant_fp4,
+            fake_quant_fp4_stacked,
+        )
+
+        x = torch.randn(1, 4, 32)
+        amax = x.abs().amax().reshape(1)
+        torch.testing.assert_close(
+            fake_quant_fp4_stacked(x, amax), fake_quant_fp4(x[0]).unsqueeze(0)
+        )
+        shared = fake_quant_fp4_stacked(x, amax.reshape(1))
+        torch.testing.assert_close(shared, fake_quant_fp4_stacked(x, amax))
+
+    def test_stacked_rejects_mismatched_amax(self):
+        from sglang.kernels.ops.quantization.fp4_fake_quant import (
+            fake_quant_fp4_stacked,
+        )
+
+        x = torch.randn(4, 8, 64)
+        with self.assertRaises(ValueError):
+            fake_quant_fp4_stacked(x, torch.ones(3))
+
+
 if __name__ == "__main__":
     unittest.main()
