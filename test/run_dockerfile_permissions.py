@@ -36,14 +36,16 @@ def _print_env() -> None:
     print(f"version: {sys.version.split()[0]}")
     print(f"module: {Path(__file__).resolve()}")
     print(f"cwd: {Path.cwd()}")
-    # Show whether pytest is importable so CI logs distinguish a bare-python
-    # run from a pytest-collected run without installing anything extra.
-    try:
-        import pytest  # noqa: F401
-    except Exception:
-        print("pytest: not importable (stdlib-only run)")
-    else:
+    # Report whether pytest is importable without importing it: importing pytest
+    # here would make the standalone runner depend on a third-party package and
+    # could load repository-level plugins. Use importlib.util.find_spec, which
+    # only inspects the module search path.
+    import importlib.util
+
+    if importlib.util.find_spec("pytest") is not None:
         print("pytest: importable")
+    else:
+        print("pytest: not importable (stdlib-only run)")
 
 
 def _print_keyword_hits() -> None:

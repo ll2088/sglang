@@ -24,3 +24,8 @@
 # a setup-step problem outside this file: the permission/documentation checks
 # need only a bare python3 (or python3 + pytest) and must not be gated on the
 # full sglang dependency tree.
+#
+# This file must remain import-free. Do not add `import sglang`, `import pytest`,
+# or any third-party import here: pytest loads conftest.py before collecting the
+# test module, so a heavy import would reintroduce the full dependency install
+# that the stdlib-only checks are designed to avoid.

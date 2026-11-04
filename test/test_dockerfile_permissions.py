@@ -189,6 +189,10 @@ def _pytest_available() -> bool:
     The checks in this module are stdlib-only; pytest is optional. CI may run
     this file with a bare `python3` interpreter, so guard the import instead of
     letting a missing pytest turn into a collection error.
+
+    This helper is intentionally never called at module scope: importing pytest
+    here would make the module depend on a third-party package and could pull in
+    repository-level plugins. It exists only for diagnostics.
     """
     try:
         import pytest  # noqa: F401
@@ -227,6 +231,9 @@ def _assert_stdlib_only() -> None:
     the interpreter. A stray third-party import would make the job fail during
     collection instead of reporting a real permission/documentation problem,
     so keep the module importable with a bare python3.
+
+    Only modules imported by this file are inspected; the runner may have
+    already imported pytest, which is explicitly tolerated below.
     """
     allowed = {
         "re",
@@ -387,6 +394,9 @@ def _run_standalone() -> int:
     This is the entry point used by CI so the permission/documentation checks
     never require installing sglang or pytest. It mirrors the pytest-collected
     test functions but reports PASS/FAIL and returns a process exit code.
+
+    The function deliberately does not import pytest or sglang; it only reads
+    files and evaluates regular expressions from the standard library.
     """
     missing = _missing_paths()
     if missing:
