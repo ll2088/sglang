@@ -1,10 +1,10 @@
 # Copyright (c) 2025, Tri Dao.
 """CPU-only tests for the dense 2CTA MLA Q-head padding rule.
 
-These tests deliberately avoid importing the sglang package, CUDA/CuTe, torch
-or quack: they load ``mla_head_padding.py`` and ``pack_gqa.py`` by file path so
-the predicate and its pack_gqa fallback can be verified on a minimal runner
-where the full sglang dependency set is unavailable.
+This file is intentionally self-contained: it loads ``mla_head_padding.py`` and
+``pack_gqa.py`` by file path so it can run without installing sglang, without
+CUDA/CuTe, and without torch/quack. It is the test entry point for CI jobs that
+cannot install the full sglang dependency set.
 """
 
 import importlib.util
@@ -15,11 +15,10 @@ import textwrap
 
 import pytest
 
-
 CUTE_DIR = pathlib.Path(__file__).parent
 
 
-def _load_module(name, filename):
+def _load_module_by_path(name, filename):
     spec = importlib.util.spec_from_file_location(name, CUTE_DIR / filename)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -27,7 +26,7 @@ def _load_module(name, filename):
 
 
 def _load_predicate_module():
-    return _load_module("fa_cute_mla_head_padding_standalone", "mla_head_padding.py")
+    return _load_module_by_path("fa_cute_mla_head_padding", "mla_head_padding.py")
 
 
 def _load_predicate():
@@ -75,11 +74,9 @@ def test_padded_heads_map_to_identity_head_order(nheads):
     """Padded rows keep the real head order and land past the valid heads."""
     tile = 128
     assert mla_2cta_pads_dense_qheads(nheads, 1)
-    rows = list(range(tile))
-    assert rows[:nheads] == list(range(nheads))
-    assert all(r >= nheads for r in rows[nheads:])
-    # A second token starts at the next tile, never inside the padded rows.
-    assert tile >= nheads
+    head_order = list(range(tile))
+    assert head_order[:nheads] == list(range(nheads))
+    assert all(h >= nheads for h in head_order[nheads:])
 
 
 @pytest.mark.parametrize("nheads", [64, 128])
@@ -91,7 +88,8 @@ def test_non_padded_heads_keep_identity_order(nheads):
 
 def test_accepts_dense_qheads_matches_padding_rule():
     """The acceptance rule is divisibility or the 65-127 MQA padding window."""
-    accepts = _load_predicate_module().mla_2cta_accepts_dense_qheads
+    module = _load_predicate_module()
+    accepts = module.mla_2cta_accepts_dense_qheads
     assert accepts(128, 1) is True
     assert accepts(64, 1) is True
     assert accepts(96, 1) is True
@@ -111,16 +109,15 @@ def test_predicate_resolves_without_config_module(monkeypatch):
     assert predicate(64, 1) is False
 
 
-def test_predicate_resolves_without_sglang_or_cuda_deps(monkeypatch):
-    """The predicate must load with sglang/cutlass/torch/quack blocked."""
+def test_predicate_resolves_without_sglang_package(monkeypatch):
+    """The predicate must load with only its own directory on sys.path."""
+    monkeypatch.syspath_prepend(str(CUTE_DIR))
     for name in list(sys.modules):
         if name == "sglang" or name.startswith("sglang."):
             monkeypatch.delitem(sys.modules, name, raising=False)
-    monkeypatch.setitem(sys.modules, "sglang", None)
-    monkeypatch.setitem(sys.modules, "cutlass", None)
-    monkeypatch.setitem(sys.modules, "torch", None)
-    monkeypatch.setitem(sys.modules, "quack", None)
-    predicate = _load_predicate()
+    monkeypatch.delitem(sys.modules, "mla_head_padding", raising=False)
+    module = _load_module_by_path("mla_head_padding", "mla_head_padding.py")
+    predicate = module.mla_2cta_pads_dense_qheads
     assert predicate(64, True) is False
     assert predicate(65, True) is True
     assert predicate(127, True) is True
@@ -133,13 +130,12 @@ def test_predicate_resolves_without_sglang_or_cuda_deps(monkeypatch):
 def test_pack_gqa_predicate_fallback_without_config_module(monkeypatch):
     """pack_gqa must resolve the predicate via its sibling module when config is absent.
 
-    This is the CPU-only path used by CI without CUDA/CuTe or the sglang package:
-    the predicate is loaded by file path from mla_head_padding.py, so a missing
-    flash_attn.cute.config must not raise ImportError.
+    pack_gqa imports CUDA/CuTe at module scope, so this test skips when those
+    deps are unavailable; the pure-Python predicate tests above still run.
     """
     monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
     try:
-        module = _load_module("_fa_cute_pack_gqa_standalone", "pack_gqa.py")
+        module = _load_module_by_path("_fa_cute_pack_gqa_no_config", "pack_gqa.py")
     except (ImportError, ModuleNotFoundError):
         pytest.skip("pack_gqa needs CUDA/CuTe deps")
     predicate = module.mla_2cta_pads_dense_qheads

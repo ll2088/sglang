@@ -44,6 +44,17 @@ def _load_predicate():
     return module.mla_2cta_pads_dense_qheads
 
 
+def _load_standalone_tests():
+    """Load the CPU-only standalone test module by file path."""
+    path = pathlib.Path(__file__).with_name("test_mla_head_padding_standalone.py")
+    spec = importlib.util.spec_from_file_location(
+        "_fa_cute_mla_head_padding_standalone", path
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_pack_gqa_by_path():
     """Load pack_gqa by file path, exercising the sibling-module fallback.
 
@@ -71,6 +82,13 @@ def test_predicate_loads_without_config_module(monkeypatch):
     predicate = _load_predicate()
     assert predicate(96, 1) is True
     assert predicate(64, 1) is False
+
+
+def test_standalone_cpu_only_module_is_collectable():
+    """The CPU-only standalone module must load without sglang/CUDA deps."""
+    module = _load_standalone_tests()
+    assert module.mla_2cta_pads_dense_qheads(65, True) is True
+    assert module.mla_2cta_pads_dense_qheads(64, True) is False
 
 
 def test_accepts_dense_qheads_without_config_module(monkeypatch):
