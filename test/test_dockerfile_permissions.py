@@ -4,6 +4,8 @@ from pathlib import Path
 
 # This module intentionally depends only on the Python standard library so the
 # permission/documentation checks can run without installing sglang or pytest.
+# Run directly with `python3 test/test_dockerfile_permissions.py`; pytest is
+# optional and only used when the file is collected by a pytest run.
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -91,6 +93,11 @@ def _run_checks() -> int:
     return 1 if failures else 0
 
 
+def _missing_paths() -> list[Path]:
+    paths = [*DOCKERFILES, *READMES]
+    return [path for path in paths if not path.is_file()]
+
+
 def test_no_world_writable_permissions() -> None:
     for dockerfile in DOCKERFILES:
         _check_no_world_writable_permissions(dockerfile)
@@ -107,6 +114,11 @@ def test_readme_non_root_cache_guidance() -> None:
 
 
 def main() -> int:
+    missing = _missing_paths()
+    if missing:
+        for path in missing:
+            print(f"FAIL missing expected file: {path}", file=sys.stderr)
+        return 1
     return _run_checks()
 
 
