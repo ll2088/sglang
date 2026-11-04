@@ -9,7 +9,8 @@ import pytest
 # pack_gqa imports CUDA/CuTe modules at module scope. Only the tests that
 # actually import pack_gqa need those deps; the pure-Python predicate and
 # head-order tests below must run on a CPU-only runner, so do not skip the
-# whole file at collection time.
+# whole file at collection time. The CUDA probe is deferred to the tests that
+# need it so importing this module never requires cutlass.
 def _has_cute():
     try:
         import cutlass  # noqa: F401
@@ -19,9 +20,10 @@ def _has_cute():
     return True
 
 
-requires_cute = pytest.mark.skipif(
-    not _has_cute(), reason="pack_gqa needs CUDA/CuTe deps"
-)
+def _requires_cute():
+    return pytest.mark.skipif(
+        not _has_cute(), reason="pack_gqa needs CUDA/CuTe deps"
+    )
 
 
 def _load_predicate():
@@ -36,7 +38,7 @@ def _load_predicate():
 mla_2cta_pads_dense_qheads = _load_predicate()
 
 
-@requires_cute
+@_requires_cute()
 def test_pack_gqa_imports_without_sglang_package(monkeypatch):
     """pack_gqa must resolve the predicate with only its own dir on sys.path.
 
@@ -69,7 +71,7 @@ def test_pack_gqa_imports_without_sglang_package(monkeypatch):
     assert predicate(-1, True) is False
 
 
-@requires_cute
+@_requires_cute()
 def test_pack_gqa_fallback_import_in_subprocess():
     """The sibling-module fallback must work in a fresh interpreter.
 
