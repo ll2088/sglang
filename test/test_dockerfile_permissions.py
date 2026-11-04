@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Stdlib-only entrypoint for the Dockerfile permission/documentation checks.
+"""Standalone entry point for the stdlib-only Dockerfile permission checks.
 
-This module exists so CI can run the checks without installing sglang or any
-third-party dependency:
+This file is intentionally import-free of sglang and pytest at module scope so
+CI can run it with a bare ``python3`` interpreter:
 
     python3 test/test_dockerfile_permissions.py
+
+It also works under pytest:
+
     python3 -m pytest -q test/test_dockerfile_permissions.py
 
-The actual check logic lives in ``test/dockerfile_permissions/checks.py`` and
-only uses the Python standard library. This file deliberately avoids importing
-pytest or sglang at module scope so it works under a bare ``python3``
-interpreter; when pytest is available the checks are also exposed as
-``test_*`` functions for collection.
+When pytest is not installed, running this file directly executes the checks
+via ``checks.main()``.
 """
 
 import os
@@ -22,7 +22,7 @@ _CHECKS_DIR = os.path.join(_HERE, "dockerfile_permissions")
 if _CHECKS_DIR not in sys.path:
     sys.path.insert(0, _CHECKS_DIR)
 
-from checks import (  # noqa: E402  (path set up above)
+from checks import (  # noqa: E402  (re-exported for pytest collection)
     check_devcontainer_workspace_not_world_writable as test_devcontainer_workspace_not_world_writable,
     check_minimal_permission_statements as test_minimal_permission_statements,
     check_no_world_writable_permissions as test_no_world_writable_permissions,
@@ -31,12 +31,7 @@ from checks import (  # noqa: E402  (path set up above)
 )
 
 
-def main():
-    """Run every check without pytest and return a process exit code."""
+if __name__ == "__main__":
     from checks import main as _main
 
-    return _main()
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_main())
