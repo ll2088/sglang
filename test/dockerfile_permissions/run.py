@@ -1,32 +1,24 @@
 #!/usr/bin/env python3
 """Standalone runner for the stdlib-only Dockerfile permission checks.
 
-Usage:
+Usage::
+
     python3 test/dockerfile_permissions/run.py
 
-Exits 0 when all checks pass, 1 otherwise. Requires only the Python standard
-library so CI does not need to install sglang or pytest.
+Exits non-zero if any check fails. Requires only the Python standard library.
 """
 
+from __future__ import annotations
+
 import sys
+from pathlib import Path
 
-from checks import ALL_CHECKS
+# Allow running this file directly (``python3 test/dockerfile_permissions/run.py``)
+# without installing the package.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-
-def main():
-    failures = []
-    for check in ALL_CHECKS:
-        try:
-            check()
-        except AssertionError as exc:
-            failures.append(f"FAIL {check.__name__}: {exc}")
-        else:
-            print(f"PASS {check.__name__}")
-    if failures:
-        print("\n".join(failures), file=sys.stderr)
-        return 1
-    return 0
+from checks import run_all  # noqa: E402
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(run_all())

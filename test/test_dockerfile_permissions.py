@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-"""Compatibility entry point for the Dockerfile permission checks.
+"""Compatibility entry point for the stdlib-only Dockerfile permission checks.
 
-This file exists so CI commands that reference
-``test/test_dockerfile_permissions.py`` keep working. It delegates to the
-stdlib-only checks under ``test/dockerfile_permissions/`` and can be run either
-as a script or via pytest.
+This module lets the checks be invoked with the paths used by the validation
+plan (``python3 test/test_dockerfile_permissions.py`` and
+``python3 -m pytest -q test/test_dockerfile_permissions.py``) while the actual
+implementation lives in ``test/dockerfile_permissions/``.
 
-Usage:
-    python3 test/test_dockerfile_permissions.py
-    python3 -m pytest -q test/test_dockerfile_permissions.py
+It imports only the standard library and the sibling ``checks`` module, so it
+runs without installing sglang or any third-party package.
 """
 
-import os
-import sys
+from __future__ import annotations
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_CHECKS_DIR = os.path.join(_HERE, "dockerfile_permissions")
-if _CHECKS_DIR not in sys.path:
-    sys.path.insert(0, _CHECKS_DIR)
+import sys
+from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent
+_CHECKS_DIR = _HERE / "dockerfile_permissions"
+if str(_CHECKS_DIR) not in sys.path:
+    sys.path.insert(0, str(_CHECKS_DIR))
 
 from checks import (  # noqa: E402,F401  (re-exported for pytest collection)
     ALL_CHECKS,
@@ -26,28 +27,15 @@ from checks import (  # noqa: E402,F401  (re-exported for pytest collection)
     check_no_world_writable_permissions as test_no_world_writable_permissions,
     check_readme_keyword_hit_threshold as test_readme_keyword_hit_threshold,
     check_readme_non_root_cache_guidance as test_readme_non_root_cache_guidance,
+    run_all,
 )
 
 
-def test_all_checks_pass():
+def test_all_checks_pass() -> None:
+    """Run every check so a single pytest invocation covers the full suite."""
     for check in ALL_CHECKS:
         check()
 
 
-def main():
-    failures = []
-    for check in ALL_CHECKS:
-        try:
-            check()
-        except AssertionError as exc:
-            failures.append(f"FAIL {check.__name__}: {exc}")
-        else:
-            print(f"PASS {check.__name__}")
-    if failures:
-        print("\n".join(failures), file=sys.stderr)
-        return 1
-    return 0
-
-
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(run_all())
