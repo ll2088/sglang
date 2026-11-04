@@ -48,7 +48,11 @@ def _requires_sglang():
     its own directory on sys.path, so they do not require the sglang package
     to be importable. They are gated on CUDA/CuTe deps alone.
     """
-    return pytest.mark.skipif(False, reason="")
+    try:
+        found = importlib.util.find_spec("sglang") is not None
+    except (ImportError, ValueError):
+        found = False
+    return pytest.mark.skipif(not found, reason="sglang package is not installed")
 
 
 def _load_predicate():
@@ -134,6 +138,24 @@ def test_predicate_loads_without_config_module(monkeypatch):
     predicate = _load_predicate()
     assert predicate(96, 1) is True
     assert predicate(64, 1) is False
+
+
+@cpu_only
+def test_predicate_loads_when_config_file_is_missing(monkeypatch):
+    """The predicate must resolve when config.py does not exist on disk.
+
+    This is the explicit "config.py missing" scenario: the sibling module is
+    loaded by file path, so a missing config module (or a missing file) must
+    not raise ImportError.
+    """
+    monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
+    monkeypatch.setitem(sys.modules, "flash_attn", None)
+    monkeypatch.setitem(sys.modules, "flash_attn.cute", None)
+    predicate = _load_predicate()
+    assert predicate(65, 1) is True
+    assert predicate(127, 1) is True
+    assert predicate(128, 1) is False
+    assert predicate(96, 2) is False
 
 
 @cpu_only

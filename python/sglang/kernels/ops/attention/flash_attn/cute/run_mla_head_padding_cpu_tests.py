@@ -1,18 +1,27 @@
 # Copyright (c) 2025, Tri Dao.
-"""Run the CPU-only MLA head-padding tests without the sglang package.
+"""Stdlib-only entry point for the dense 2CTA MLA Q-head padding tests.
 
-This script is intentionally stdlib-only: it loads the predicate module and
-the standalone test module by file path, so CI can exercise the padding rule
-without installing torch, cutlass, quack or the full sglang dependency tree.
+This script exists so CI can validate the pure-Python padding rule without
+installing the full sglang dependency tree (torch, quack, cutlass, ...). It
+loads ``mla_head_padding.py`` and ``test_mla_head_padding_standalone.py`` by
+file path and runs the tests with pytest if available, otherwise with a tiny
+built-in runner that understands the ``@pytest.mark.parametrize`` decorator
+used by the standalone module.
 
 Usage::
 
     python run_mla_head_padding_cpu_tests.py
+
+Exit code 0 means every case passed.
 """
 
 import importlib.util
 import pathlib
 import sys
+import traceback
+
+
+_HERE = pathlib.Path(__file__).resolve().parent
 
 
 def _load_module(name, path):
@@ -22,107 +31,95 @@ def _load_module(name, path):
     return module
 
 
-def main():
-    here = pathlib.Path(__file__).resolve().parent
-    predicate = _load_module(
-        "_fa_cute_mla_head_padding_cpu", here / "mla_head_padding.py"
-    )
-    tests = _load_module(
-        "_fa_cute_mla_head_padding_standalone_cpu",
-        here / "test_mla_head_padding_standalone.py",
+def _load_standalone():
+    return _load_module(
+        "_fa_cute_mla_head_padding_standalone",
+        _HERE / "test_mla_head_padding_standalone.py",
     )
 
+
+def _run_with_pytest():
+    import pytest
+
+    return pytest.main(
+        [
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            str(_HERE / "test_mla_head_padding_standalone.py"),
+        ]
+    )
+
+
+def _iter_parametrized_cases(func):
+    """Yield (id, kwargs) for a function decorated with pytest.mark.parametrize.
+
+    Only the simple form used by the standalone module is supported: a single
+    ``parametrize`` mark whose argnames are a tuple/list of strings and whose
+    argvalues are tuples. Anything else is reported as unsupported so the
+    caller can fall back to pytest.
+    """
+    marks = getattr(func, "pytestmark", None)
+    if not marks:
+        return None
+    for mark in marks:
+        if getattr(mark, "name", None) != "parametrize":
+            continue
+        args = getattr(mark, "args", ())
+        if len(args) != 2:
+            return None
+        argnames, argvalues = args
+        if isinstance(argnames, str):
+            argnames = [a.strip() for a in argnames.split(",") if a.strip()]
+        else:
+            argnames = list(argnames)
+        cases = []
+        for values in argvalues:
+            if not isinstance(values, (tuple, list)):
+                values = (values,)
+            if len(values) != len(argnames):
+                return None
+            cases.append(dict(zip(argnames, values)))
+        return cases
+    return None
+
+
+def _run_without_pytest():
+    module = _load_standalone()
     failures = []
-
-    def check(cond, msg):
-        if not cond:
-            failures.append(msg)
-
-    pads = predicate.mla_2cta_pads_dense_qheads
-    accepts = predicate.mla_2cta_accepts_dense_qheads
-
-    # Boundary behaviour of the padding predicate.
-    for nheads, kv, expected in [
-        (64, 1, False),
-        (65, 1, True),
-        (96, 1, True),
-        (127, 1, True),
-        (128, 1, False),
-        (24, 1, False),
-        (0, 1, False),
-        (-1, 1, False),
-        (129, 1, False),
-        (96, 2, False),
-        (65, 2, False),
-        (96, 0, False),
-        (64, True, False),
-        (65, True, True),
-        (96, True, True),
-        (127, True, True),
-        (128, True, False),
-        (0, True, False),
-        (-1, True, False),
-        (96, False, False),
-    ]:
-        check(
-            pads(nheads, kv) is expected,
-            f"pads({nheads}, {kv}) != {expected}",
-        )
-
-    # Acceptance rule used by config validation.
-    for nheads, kv, expected in [
-        (128, 1, True),
-        (64, 1, True),
-        (96, 1, True),
-        (65, 1, True),
-        (127, 1, True),
-        (24, 1, False),
-        (96, 2, False),
-        (0, 1, False),
-        (-1, 1, False),
-    ]:
-        check(
-            accepts(nheads, kv) is expected,
-            f"accepts({nheads}, {kv}) != {expected}",
-        )
-
-    # Padded rows keep the real head order and land past the valid heads.
-    for nheads in (65, 72, 96, 127):
-        check(pads(nheads, 1), f"pads({nheads}, 1) should be True")
-        rows = list(range(128))
-        check(
-            rows[:nheads] == list(range(nheads)),
-            f"padded head order broken for {nheads}",
-        )
-        check(
-            all(r >= nheads for r in rows[nheads:]),
-            f"padded rows overlap valid heads for {nheads}",
-        )
-
-    # Non-padded head counts keep the identity mapping.
-    for nheads in (64, 128):
-        check(not pads(nheads, 1), f"pads({nheads}, 1) should be False")
-        check(
-            list(range(nheads)) == list(range(nheads)),
-            f"identity mapping broken for {nheads}",
-        )
-
-    # The standalone test module must expose the same rule.
-    check(
-        tests.mla_2cta_pads_dense_qheads(65, True) is True,
-        "standalone module predicate mismatch",
-    )
-    check(
-        tests.mla_2cta_pads_dense_qheads(64, True) is False,
-        "standalone module predicate mismatch",
-    )
-
+    total = 0
+    for name in sorted(dir(module)):
+        if not name.startswith("test_"):
+            continue
+        func = getattr(module, name)
+        if not callable(func):
+            continue
+        cases = _iter_parametrized_cases(func)
+        if cases is None:
+            # No parametrize mark: call with no arguments.
+            cases = [{}]
+        for kwargs in cases:
+            total += 1
+            case_id = f"{name}{tuple(kwargs.values()) if kwargs else ''}"
+            try:
+                func(**kwargs)
+            except Exception:  # noqa: BLE001 - report every failure
+                failures.append((case_id, traceback.format_exc()))
     if failures:
-        for msg in failures:
-            print(f"FAIL: {msg}", file=sys.stderr)
+        for case_id, tb in failures:
+            sys.stderr.write(f"FAILED {case_id}\n{tb}\n")
+        sys.stderr.write(f"{len(failures)} of {total} cases failed\n")
         return 1
-    print("ok")
+    sys.stdout.write(f"{total} cases passed\n")
     return 0
+
+
+def main():
+    try:
+        import pytest  # noqa: F401
+    except ImportError:
+        return _run_without_pytest()
+    return _run_with_pytest()
 
 
 if __name__ == "__main__":
