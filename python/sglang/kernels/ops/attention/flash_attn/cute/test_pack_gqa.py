@@ -432,3 +432,15 @@ def test_mla_2cta_pads_dense_qheads_accepts_boolean_mqa_flag():
     assert predicate(96, False) is False
     assert predicate(0, True) is False
     assert predicate(-1, True) is False
+
+
+@cpu_only
+def test_standalone_predicate_module_matches_pack_gqa():
+    """The stdlib-only standalone module must agree with pack_gqa's predicate."""
+    module = _load_standalone_tests()
+    predicate = _predicate()
+    for heads in (0, -1, 1, 24, 64, 65, 72, 96, 127, 128, 129):
+        for kv in (1, 2):
+            assert module.mla_2cta_pads_dense_qheads(heads, kv) is predicate(
+                heads, kv
+            )
