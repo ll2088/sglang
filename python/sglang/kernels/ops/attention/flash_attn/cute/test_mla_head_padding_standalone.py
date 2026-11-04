@@ -40,6 +40,18 @@ def test_predicate_does_not_import_sglang():
     assert "sglang" not in sys.modules
 
 
+def test_predicate_does_not_import_cutlass():
+    """The predicate must stay importable without CUDA/CuTe dependencies."""
+    import sys
+
+    for name in list(sys.modules):
+        if name == "cutlass" or name.startswith("cutlass."):
+            del sys.modules[name]
+
+    _load_predicate()
+    assert "cutlass" not in sys.modules
+
+
 mla_2cta_pads_dense_qheads = _load_predicate()
 
 

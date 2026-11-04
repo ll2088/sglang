@@ -38,6 +38,17 @@ def _load_predicate():
 mla_2cta_pads_dense_qheads = _load_predicate()
 
 
+def test_predicate_loads_without_cuda_deps():
+    """The pure-Python predicate must be collectable on a CPU-only runner."""
+    assert mla_2cta_pads_dense_qheads(64, True) is False
+    assert mla_2cta_pads_dense_qheads(65, True) is True
+    assert mla_2cta_pads_dense_qheads(127, True) is True
+    assert mla_2cta_pads_dense_qheads(128, True) is False
+    assert mla_2cta_pads_dense_qheads(96, False) is False
+    assert mla_2cta_pads_dense_qheads(0, True) is False
+    assert mla_2cta_pads_dense_qheads(-1, True) is False
+
+
 @_requires_cute()
 def test_pack_gqa_imports_without_sglang_package(monkeypatch):
     """pack_gqa must resolve the predicate with only its own dir on sys.path.
