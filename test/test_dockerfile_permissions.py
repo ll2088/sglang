@@ -3,6 +3,7 @@ from pathlib import Path
 
 # This module is a thin compatibility shim. The canonical, stdlib-only
 # implementation lives in test/dockerfile_permissions/ so CI can run it with
+# `cd test/dockerfile_permissions && python3 run.py` or
 # `-c test/dockerfile_permissions/pytest.ini --rootdir
 # test/dockerfile_permissions`, which never walks up to the repository root
 # conftest.py or pyproject.toml and therefore never triggers a sglang install.

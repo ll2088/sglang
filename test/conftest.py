@@ -4,9 +4,12 @@
 # in a minimal environment without installing the full sglang dependency tree.
 #
 # The canonical checks live in test/dockerfile_permissions/ with their own
-# pytest.ini. CI should prefer `python3 test/dockerfile_permissions/run.py` or
+# pytest.ini and run.py. CI must prefer
+# `cd test/dockerfile_permissions && python3 run.py` or
 # `python3 -m pytest -q -c test/dockerfile_permissions/pytest.ini
-# test/dockerfile_permissions/` so this conftest is never loaded at all.
+# --rootdir test/dockerfile_permissions
+# test/dockerfile_permissions/test_dockerfile_permissions.py` so this conftest
+# is never loaded at all.
 #
 # Do not add repository-wide fixtures or imports here; put them in a dedicated
 # conftest.py closer to the tests that need them.
@@ -19,11 +22,12 @@
 # import-free means collection works under a bare python3 interpreter and
 # cannot itself trigger a dependency install.
 #
-# CI must invoke the checks with `-c test/pytest.ini` (or run the standalone
-# runner) so the repository-root pytest configuration is not picked up. The
-# explicit `rootdir = .` in test/pytest.ini pins the rootdir to this directory
-# so pytest does not walk up to the repository root and load a root-level
-# conftest.py or pyproject.toml that could trigger a full sglang install.
+# CI must invoke the checks with `-c test/dockerfile_permissions/pytest.ini`
+# (or run the standalone runner) so the repository-root pytest configuration is
+# not picked up. The explicit `rootdir = .` in that pytest.ini pins the rootdir
+# to the isolated directory so pytest does not walk up to the repository root
+# and load a root-level conftest.py or pyproject.toml that could trigger a full
+# sglang install.
 #
 # If a future CI job still runs `pip install -e python` before pytest, that is
 # a setup-step problem outside this file: the permission/documentation checks
