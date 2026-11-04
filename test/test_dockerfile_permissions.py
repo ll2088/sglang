@@ -197,6 +197,29 @@ def _pytest_available() -> bool:
     return True
 
 
+def _readme_keyword_hits_per_file() -> dict:
+    """Return per-README keyword hit counts using the acceptance grep keywords.
+
+    Kept stdlib-only so CI can report the same numbers as the shell grep
+    without installing pytest or sglang.
+    """
+    keywords = (
+        "cache",
+        "缓存",
+        "chown",
+        "chmod",
+        "go-w",
+        "非默认用户",
+        "non-root",
+    )
+    return {
+        str(readme.relative_to(REPO_ROOT)): sum(
+            1 for keyword in keywords if keyword in _read(readme)
+        )
+        for readme in READMES
+    }
+
+
 def _assert_stdlib_only() -> None:
     """Fail fast if this module ever grows a non-stdlib import.
 
@@ -397,6 +420,8 @@ def _run_standalone() -> int:
         )
     else:
         print(f"PASS readme_keyword_hits ({hits})")
+    for name, count in _readme_keyword_hits_per_file().items():
+        print(f"INFO readme_keyword_hits[{name}]={count}")
 
     # Guard against a future edit that pulls in a third-party dependency and
     # makes the CI job fail during import instead of reporting a real check.

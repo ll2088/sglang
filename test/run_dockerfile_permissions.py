@@ -38,9 +38,20 @@ def _print_env() -> None:
         print("pytest: importable")
 
 
+def _print_keyword_hits() -> None:
+    """Print per-README keyword hit counts for CI log parity with grep."""
+    from test_dockerfile_permissions import _readme_keyword_hits_per_file
+
+    for name, count in _readme_keyword_hits_per_file().items():
+        print(f"readme_keyword_hits[{name}]={count}")
+
+
 if __name__ == "__main__":
     if "--check-env" in sys.argv[1:]:
         _print_env()
+        sys.exit(0)
+    if "--keyword-hits" in sys.argv[1:]:
+        _print_keyword_hits()
         sys.exit(0)
     _print_env()
     sys.exit(_run_standalone())
