@@ -55,6 +55,29 @@ def _requires_sglang():
     return pytest.mark.skipif(not found, reason="sglang package is not installed")
 
 
+def _requires_sglang_importable():
+    """Skip tests that need a fully importable sglang package.
+
+    ``find_spec`` only proves the package is on disk; a partial install whose
+    dependency tree cannot be imported still fails at import time. This probe
+    imports the package in a subprocess so a broken dependency tree cannot
+    fail collection of this module.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", "import sglang"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return pytest.mark.skip(reason="sglang package is not importable")
+    if result.returncode != 0:
+        return pytest.mark.skip(reason="sglang package is not importable")
+    return pytest.mark.skipif(False, reason="")
+
+
+
 def _load_predicate():
     """Load the predicate without importing the sglang package (no CUDA deps)."""
     path = pathlib.Path(__file__).with_name("mla_head_padding.py")
@@ -153,6 +176,33 @@ def test_predicate_loads_when_config_file_is_missing(monkeypatch):
     monkeypatch.setitem(sys.modules, "flash_attn.cute", None)
     predicate = _load_predicate()
     assert predicate(65, 1) is True
+    assert predicate(127, 1) is True
+    assert predicate(128, 1) is False
+    assert predicate(96, 2) is False
+
+
+@cpu_only
+def test_predicate_loads_when_config_file_absent_from_disk(monkeypatch, tmp_path):
+    """The predicate must resolve when no config.py exists anywhere on sys.path.
+
+    Unlike the module-blocking test above, this removes the package from
+    sys.path entirely and loads the sibling module by file path, mirroring a
+    checkout where ``flash_attn/cute/config.py`` is absent.
+    """
+    cute_dir = pathlib.Path(__file__).parent
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if str(cute_dir) not in p])
+    monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
+    monkeypatch.setitem(sys.modules, "flash_attn", None)
+    monkeypatch.setitem(sys.modules, "flash_attn.cute", None)
+    spec = importlib.util.spec_from_file_location(
+        "_fa_cute_mla_head_padding_no_config", cute_dir / "mla_head_padding.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    predicate = module.mla_2cta_pads_dense_qheads
+    assert predicate(64, 1) is False
+    assert predicate(65, 1) is True
+    assert predicate(96, 1) is True
     assert predicate(127, 1) is True
     assert predicate(128, 1) is False
     assert predicate(96, 2) is False
