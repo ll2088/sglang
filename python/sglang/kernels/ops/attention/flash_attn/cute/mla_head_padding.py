@@ -1,33 +1,39 @@
 # Copyright (c) 2025, Tri Dao.
-"""Pure-Python MLA head-padding rules.
+"""Pure-Python rule for dense 2CTA MLA Q-head padding.
 
-This module intentionally has no CUDA/CuTe imports so the routing predicate can
-be unit-tested on any runner (and imported by config validation) without
-pulling in the kernel dependencies.
+This module deliberately has no CUDA/CuTe/sglang imports so it can be loaded
+by file path on CPU-only runners and by pack_gqa as a fallback when the
+package config module is unavailable.
 """
+
+__all__ = [
+    "mla_2cta_pads_dense_qheads",
+    "mla_2cta_accepts_dense_qheads",
+]
 
 
 def mla_2cta_pads_dense_qheads(nheads_per_kv: int, num_heads_kv) -> bool:
-    """Whether dense 2CTA MLA pads Q heads to its 128-row tile: MQA with 65 to 127 heads.
+    """Whether dense 2CTA MLA pads Q heads to its 128-row tile.
 
-    ``num_heads_kv`` is the number of KV heads; a truthy value of 1 (or ``True``)
-    denotes MQA. Any other count, including 0, disables the padding rule.
-
-    This is the single source of truth shared by the 2CTA kernel constructor
-    (``flash_fwd_mla_sm100``) and ``validate_mla_fwd_config``: dense MQA with 65
-    to 127 Q heads per KV head is padded in-kernel to 128 rows, while fewer heads
-    keep raising because padding would waste over half of each tile's MMA rows.
+    The rule is MQA (a single KV head) with 65 to 127 Q heads per KV head.
+    ``num_heads_kv`` may be an int count or a boolean MQA flag; both forms are
+    accepted so the kernel and the config validation can share one predicate.
     """
-    return bool(num_heads_kv) and num_heads_kv == 1 and 64 < nheads_per_kv < 128
+    if isinstance(num_heads_kv, bool):
+        is_mqa = num_heads_kv
+    else:
+        is_mqa = num_heads_kv == 1
+    return is_mqa and 64 < nheads_per_kv < 128
 
 
 def mla_2cta_accepts_dense_qheads(nheads_per_kv: int, num_heads_kv) -> bool:
-    """Whether dense 2CTA MLA accepts this Q-head count without re-routing.
+    """Whether dense 2CTA MLA accepts this Q-head count.
 
-    The 128-row cluster tile requires the head count to divide 128, except for
-    MQA with 65 to 127 heads, which the kernel pads in-kernel. This predicate is
-    the single rule used by both the kernel constructor and config validation.
+    Heads that divide the 128-row tile are accepted as-is; MQA with 65 to 127
+    heads is accepted by padding to the tile. Everything else is rejected.
     """
-    return 128 % nheads_per_kv == 0 or mla_2cta_pads_dense_qheads(
-        nheads_per_kv, num_heads_kv
-    )
+    if nheads_per_kv <= 0 or nheads_per_kv > 128:
+        return False
+    if 128 % nheads_per_kv == 0:
+        return True
+    return mla_2cta_pads_dense_qheads(nheads_per_kv, num_heads_kv)

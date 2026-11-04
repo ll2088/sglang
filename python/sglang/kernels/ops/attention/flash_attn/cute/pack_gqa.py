@@ -25,9 +25,20 @@ try:
     _predicate_spec.loader.exec_module(_predicate_module)
     mla_2cta_pads_dense_qheads = _predicate_module.mla_2cta_pads_dense_qheads
 except (ImportError, FileNotFoundError, AttributeError):  # pragma: no cover
-    from sglang.kernels.ops.attention.flash_attn.cute.mla_head_padding import (
-        mla_2cta_pads_dense_qheads,
-    )
+    try:
+        from sglang.kernels.ops.attention.flash_attn.cute.mla_head_padding import (
+            mla_2cta_pads_dense_qheads,
+        )
+    except (ImportError, ModuleNotFoundError):
+        # Last-resort inline copy of the pure-Python rule so pack_gqa stays
+        # importable when neither the sibling file nor the sglang package is
+        # available (e.g. CPU-only CI with only this directory on sys.path).
+        def mla_2cta_pads_dense_qheads(nheads_per_kv, num_heads_kv):
+            if isinstance(num_heads_kv, bool):
+                is_mqa = num_heads_kv
+            else:
+                is_mqa = num_heads_kv == 1
+            return is_mqa and 64 < nheads_per_kv < 128
 
 __all__ = [
     "mla_2cta_pads_dense_qheads",

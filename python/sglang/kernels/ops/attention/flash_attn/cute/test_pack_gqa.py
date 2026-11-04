@@ -27,10 +27,13 @@ def _requires_cute():
 
 
 def _requires_sglang():
-    """Skip tests that import the sglang package when it is not installed."""
-    try:
-        import sglang  # noqa: F401
-    except ImportError:
+    """Skip tests that import the sglang package when it is not installed.
+
+    The probe must not import sglang: importing the package pulls in the full
+    dependency chain (torch, quack, ...) and is exactly what the CPU-only
+    tests avoid. Use importlib.util.find_spec instead.
+    """
+    if importlib.util.find_spec("sglang") is None:
         return pytest.mark.skip(reason="pack_gqa needs the sglang package")
     return pytest.mark.skipif(False, reason="")
 
@@ -59,12 +62,16 @@ def _load_pack_gqa_by_path():
     """Load pack_gqa by file path, exercising the sibling-module fallback.
 
     Returns None when CUDA/CuTe deps are unavailable so the caller can skip.
+    The module is loaded with only its own directory on sys.path so the
+    sibling mla_head_padding.py fallback is exercised without sglang.
     """
     cute_dir = pathlib.Path(__file__).parent
     spec = importlib.util.spec_from_file_location(
         "_fa_cute_pack_gqa_by_path", cute_dir / "pack_gqa.py"
     )
     module = importlib.util.module_from_spec(spec)
+    old_path = list(sys.path)
+    sys.path.insert(0, str(cute_dir))
     try:
         spec.loader.exec_module(module)
     except (ImportError, ModuleNotFoundError):
@@ -73,6 +80,8 @@ def _load_pack_gqa_by_path():
         # pack_gqa imports CUDA/CuTe at module scope; any failure there means
         # the CUDA path is unavailable, not that the predicate is broken.
         return None
+    finally:
+        sys.path[:] = old_path
     return module
 
 
@@ -123,10 +132,14 @@ def test_pack_gqa_predicate_fallback_without_config_module(monkeypatch):
         "_fa_cute_pack_gqa_no_config", cute_dir / "pack_gqa.py"
     )
     module = importlib.util.module_from_spec(spec)
+    old_path = list(sys.path)
+    sys.path.insert(0, str(cute_dir))
     try:
         spec.loader.exec_module(module)
     except (ImportError, ModuleNotFoundError):
         pytest.skip("pack_gqa needs CUDA/CuTe deps")
+    finally:
+        sys.path[:] = old_path
     predicate = module.mla_2cta_pads_dense_qheads
     assert predicate(64, True) is False
     assert predicate(65, True) is True

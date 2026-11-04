@@ -124,6 +124,17 @@ def test_predicate_resolves_without_config_module(monkeypatch):
     assert predicate(64, 1) is False
 
 
+def test_predicate_resolves_without_config_module_boundaries(monkeypatch):
+    """Boundary head counts resolve without a config module and match the rule."""
+    monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
+    predicate = _load_predicate()
+    assert predicate(64, 1) is False
+    assert predicate(65, 1) is True
+    assert predicate(127, 1) is True
+    assert predicate(128, 1) is False
+    assert predicate(96, 2) is False
+
+
 def test_accepts_dense_qheads_matches_padding_rule():
     """The acceptance rule is divisibility or the 65-127 MQA padding window."""
     module = _load_predicate_module()
