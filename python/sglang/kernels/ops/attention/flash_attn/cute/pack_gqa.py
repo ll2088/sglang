@@ -40,6 +40,29 @@ except (ImportError, FileNotFoundError, AttributeError):  # pragma: no cover
                 is_mqa = num_heads_kv == 1
             return is_mqa and 64 < nheads_per_kv < 128
 
+
+def _resolve_mla_2cta_pads_dense_qheads():
+    """Resolve the padding predicate without importing CUDA/CuTe deps.
+
+    The rule lives in the stdlib-only sibling ``mla_head_padding.py``. Loading
+    it by file path keeps the predicate queryable on CPU-only runners where
+    ``cutlass``/``quack``/``torch`` are unavailable, and avoids depending on
+    ``flash_attn.cute.config`` being present.
+    """
+    try:
+        import importlib.util as _importlib_util
+        import pathlib as _pathlib
+
+        _predicate_path = _pathlib.Path(__file__).with_name("mla_head_padding.py")
+        _predicate_spec = _importlib_util.spec_from_file_location(
+            "_fa_cute_mla_head_padding_lazy", _predicate_path
+        )
+        _predicate_module = _importlib_util.module_from_spec(_predicate_spec)
+        _predicate_spec.loader.exec_module(_predicate_module)
+        return _predicate_module.mla_2cta_pads_dense_qheads
+    except (ImportError, FileNotFoundError, AttributeError):  # pragma: no cover
+        return mla_2cta_pads_dense_qheads
+
 __all__ = [
     "mla_2cta_pads_dense_qheads",
     "pack_gqa_layout",
