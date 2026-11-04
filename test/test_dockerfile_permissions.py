@@ -162,5 +162,19 @@ def main() -> int:
     return _run_checks()
 
 
+def _pytest_available() -> bool:
+    """Return True only when pytest can be imported without side effects.
+
+    The checks in this module are stdlib-only; pytest is optional. CI may run
+    this file with a bare `python3` interpreter, so guard the import instead of
+    letting a missing pytest turn into a collection error.
+    """
+    try:
+        import pytest  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 if __name__ == "__main__":
     sys.exit(main())
