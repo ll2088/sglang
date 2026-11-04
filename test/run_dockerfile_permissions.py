@@ -17,6 +17,8 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+# Importing the test module must not require pytest or sglang; the module is
+# stdlib-only by design so this wrapper can run under a bare python3.
 from test_dockerfile_permissions import _run_standalone  # noqa: E402
 
 

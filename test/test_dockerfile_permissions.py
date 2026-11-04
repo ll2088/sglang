@@ -90,6 +90,26 @@ def _check_readme_non_root_cache_guidance(readme: Path) -> None:
         f"{readme} should document non-root cache guidance; "
         f"missing keyword groups: {missing}"
     )
+    # The acceptance check greps for these keywords and requires at least six
+    # hits across the three READMEs; assert the per-file contribution here so a
+    # regression is caught without shelling out to grep.
+    keyword_hits = sum(
+        1
+        for keyword in (
+            "cache",
+            "缓存",
+            "chown",
+            "chmod",
+            "go-w",
+            "非默认用户",
+            "non-root",
+        )
+        if keyword in content
+    )
+    assert keyword_hits >= 2, (
+        f"{readme} should mention at least two cache/permission keywords, "
+        f"found {keyword_hits}"
+    )
     assert "```bash" in content, f"{readme} should include an executable command block"
     # The guidance must be a structured section, not a stray sentence.
     assert re.search(r"^#{2,4}\s+.*(non-root|非默认用户)", content, re.MULTILINE), (
@@ -106,6 +126,7 @@ def _run_checks() -> int:
         test_no_world_writable_permissions,
         test_minimal_permission_statements,
         test_readme_non_root_cache_guidance,
+        test_devcontainer_workspace_not_world_writable,
     ):
         try:
             check()
@@ -176,6 +197,28 @@ def _pytest_available() -> bool:
     return True
 
 
+def _readme_keyword_hit_count() -> int:
+    """Count README keyword hits the same way the acceptance grep does.
+
+    Kept as a helper so the standalone runner can report the count without
+    depending on grep or pytest.
+    """
+    keywords = (
+        "cache",
+        "缓存",
+        "chown",
+        "chmod",
+        "go-w",
+        "非默认用户",
+        "non-root",
+    )
+    total = 0
+    for readme in READMES:
+        content = _read(readme)
+        total += sum(1 for keyword in keywords if keyword in content)
+    return total
+
+
 def _run_standalone() -> int:
     """Run every check without pytest, including the devcontainer check.
 
@@ -204,6 +247,17 @@ def _run_standalone() -> int:
             print(f"FAIL {check.__name__}: {exc}", file=sys.stderr)
         else:
             print(f"PASS {check.__name__}")
+
+    # Mirror the acceptance grep: at least six keyword hits across the READMEs.
+    hits = _readme_keyword_hit_count()
+    if hits < 6:
+        failures += 1
+        print(
+            f"FAIL readme_keyword_hits: expected >= 6, found {hits}",
+            file=sys.stderr,
+        )
+    else:
+        print(f"PASS readme_keyword_hits ({hits})")
     return 1 if failures else 0
 
 
