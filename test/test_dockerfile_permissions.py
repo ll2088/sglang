@@ -1,29 +1,32 @@
-import re
 import sys
 from pathlib import Path
 
-# This module intentionally depends only on the Python standard library so the
-# permission/documentation checks can run without installing sglang or pytest.
-# Run directly with `python3 test/test_dockerfile_permissions.py`; pytest is
-# optional and only used when the file is collected by a pytest run.
-#
-# Keep this file free of any `import sglang` / `import pytest` at module scope:
-# CI runs it with a minimal environment (python3 only) and pytest collection
-# must not pull in the full sglang dependency tree. test/conftest.py and
-# test/pytest.ini keep collection scoped to this file so the repository-level
-# pytest configuration cannot trigger a full sglang install during setup.
-#
-# The checks below are plain functions named test_* so pytest can collect them,
-# but they never import pytest or sglang. If pytest is unavailable, main() still
-# runs every check and reports PASS/FAIL without third-party packages.
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
-# The canonical implementation lives in test/dockerfile_permissions/ so CI can
-# run it with `-c test/dockerfile_permissions/pytest.ini --rootdir
+# This module is a thin compatibility shim. The canonical, stdlib-only
+# implementation lives in test/dockerfile_permissions/ so CI can run it with
+# `-c test/dockerfile_permissions/pytest.ini --rootdir
 # test/dockerfile_permissions`, which never walks up to the repository root
-# conftest.py or pyproject.toml. This module re-exports the checks for callers
-# that still invoke `python3 test/test_dockerfile_permissions.py` directly.
+# conftest.py or pyproject.toml and therefore never triggers a sglang install.
+#
+# Keep this file free of any `import sglang` / `import pytest` at module scope.
+# It only re-exports the checks from the isolated package so callers that still
+# invoke `python3 test/test_dockerfile_permissions.py` keep working.
+
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE / "dockerfile_permissions"))
+
+from test_dockerfile_permissions import (  # noqa: E402,F401
+    DOCKERFILES,
+    HARDENED_DOCKERFILES,
+    READMES,
+    REPO_ROOT,
+    _readme_keyword_hit_count,
+    _readme_keyword_hits_per_file,
+    _run_standalone,
+    test_devcontainer_workspace_not_world_writable,
+    test_minimal_permission_statements,
+    test_no_world_writable_permissions,
+    test_readme_non_root_cache_guidance,
+)
 
 DOCKERFILES = [
     REPO_ROOT / "docker" / "Dockerfile",
@@ -181,12 +184,7 @@ def test_devcontainer_workspace_not_world_writable() -> None:
 
 
 def main() -> int:
-    missing = _missing_paths()
-    if missing:
-        for path in missing:
-            print(f"FAIL missing expected file: {path}", file=sys.stderr)
-        return 1
-    return _run_checks()
+    return _run_standalone()
 
 
 def _pytest_available() -> bool:
@@ -452,4 +450,4 @@ def _run_standalone() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(_run_standalone())
+    sys.exit(main())

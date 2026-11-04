@@ -3,6 +3,11 @@
 # nothing from sglang so `pytest test/test_dockerfile_permissions.py` can run
 # in a minimal environment without installing the full sglang dependency tree.
 #
+# The canonical checks live in test/dockerfile_permissions/ with their own
+# pytest.ini. CI should prefer `python3 test/dockerfile_permissions/run.py` or
+# `python3 -m pytest -q -c test/dockerfile_permissions/pytest.ini
+# test/dockerfile_permissions/` so this conftest is never loaded at all.
+#
 # Do not add repository-wide fixtures or imports here; put them in a dedicated
 # conftest.py closer to the tests that need them.
 #
