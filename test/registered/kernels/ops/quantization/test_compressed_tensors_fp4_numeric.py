@@ -284,5 +284,39 @@ def test_stacked_fp4_fake_quant_empty_experts():
     assert out.shape == x.shape
 
 
+def test_stacked_fp4_fake_quant_single_expert_matches_reference():
+    """A one-expert stack must match the per-slice reference."""
+    from sglang.kernels.ops.quantization.fp4_fake_quant import (
+        fake_quant_fp4,
+        fake_quant_fp4_stacked,
+    )
+
+    torch.manual_seed(0)
+    x = torch.randn(1, 8, 64)
+    amax = x.abs().flatten(1).amax(dim=1)
+    stacked = fake_quant_fp4_stacked(x, amax)
+    ref = fake_quant_fp4(x[0]).unsqueeze(0)
+    max_abs = (stacked.float() - ref.float()).abs().max().item()
+    assert max_abs <= 1e-6, f"max abs error {max_abs} too large"
+
+
+def test_stacked_fp4_fake_quant_zero_and_extreme_slices():
+    """Zero and saturated slices stay finite and match per-slice calls."""
+    from sglang.kernels.ops.quantization.fp4_fake_quant import (
+        fake_quant_fp4,
+        fake_quant_fp4_stacked,
+    )
+
+    x = torch.zeros(3, 4, 32)
+    x[1].fill_(1e4)
+    x[2].fill_(-1e4)
+    amax = x.abs().flatten(1).amax(dim=1)
+    stacked = fake_quant_fp4_stacked(x, amax)
+    ref = torch.stack([fake_quant_fp4(x[i]) for i in range(x.shape[0])])
+    assert torch.isfinite(stacked).all()
+    max_abs = (stacked.float() - ref.float()).abs().max().item()
+    assert max_abs <= 1e-6, f"max abs error {max_abs} too large"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "-s"]))

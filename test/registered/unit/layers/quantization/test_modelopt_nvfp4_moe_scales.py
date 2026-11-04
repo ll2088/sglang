@@ -712,6 +712,72 @@ class TestStackedFp4FakeQuant(CustomTestCase):
         ref = torch.stack([fake_quant_fp4(x[i]) for i in range(x.shape[0])])
         torch.testing.assert_close(stacked, ref)
 
+    def test_stacked_zero_and_extreme_slices_match_per_slice(self):
+        """All-zero and saturated slices must not produce NaN/inf scales."""
+        from sglang.kernels.ops.quantization.fp4_fake_quant import (
+            fake_quant_fp4,
+            fake_quant_fp4_stacked,
+        )
+
+        x = torch.zeros(3, 4, 32)
+        x[1].fill_(1e4)
+        x[2].fill_(-1e4)
+        amax = x.abs().flatten(1).amax(dim=1)
+        stacked = fake_quant_fp4_stacked(x, amax)
+        ref = torch.stack([fake_quant_fp4(x[i]) for i in range(x.shape[0])])
+        torch.testing.assert_close(stacked, ref)
+        self.assertTrue(torch.isfinite(stacked).all())
+
+    def test_stacked_zero_amax_slice_is_finite(self):
+        from sglang.kernels.ops.quantization.fp4_fake_quant import (
+            fake_quant_fp4_stacked,
+        )
+
+        x = torch.zeros(2, 4, 32)
+        out = fake_quant_fp4_stacked(x, torch.zeros(2))
+        self.assertTrue(torch.isfinite(out).all())
+        torch.testing.assert_close(out, x)
+
+    def test_stacked_empty_and_single_expert_shapes(self):
+        from sglang.kernels.ops.quantization.fp4_fake_quant import (
+            fake_quant_fp4,
+            fake_quant_fp4_stacked,
+        )
+
+        empty = torch.empty(0, 8, 64)
+        self.assertEqual(
+            fake_quant_fp4_stacked(empty, torch.empty(0)).shape, empty.shape
+        )
+        torch.manual_seed(0)
+        single = torch.randn(1, 8, 64)
+        amax = single.abs().flatten(1).amax(dim=1)
+        torch.testing.assert_close(
+            fake_quant_fp4_stacked(single, amax),
+            fake_quant_fp4(single[0]).unsqueeze(0),
+        )
+
+    def test_stacked_shared_amax_matches_per_slice(self):
+        from sglang.kernels.ops.quantization.fp4_fake_quant import (
+            fake_quant_fp4_stacked,
+        )
+
+        torch.manual_seed(0)
+        x = torch.randn(4, 8, 64)
+        shared = x.abs().amax().reshape(1)
+        torch.testing.assert_close(
+            fake_quant_fp4_stacked(x, shared),
+            fake_quant_fp4_stacked(x, shared.expand(4)),
+        )
+
+    def test_stacked_rejects_mismatched_amax(self):
+        from sglang.kernels.ops.quantization.fp4_fake_quant import (
+            fake_quant_fp4_stacked,
+        )
+
+        x = torch.randn(4, 8, 64)
+        with self.assertRaises(ValueError):
+            fake_quant_fp4_stacked(x, torch.ones(3))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -107,8 +107,16 @@ def fake_quant_fp4_stacked(
             f"amax must hold 1 value or one per index of dim 0 ({x.shape[0]}), "
             f"got {amax.numel()}."
         )
-    # One global scale per slice, broadcast over the trailing dims.
-    global_scale = (amax.float() / FP4_MAX).clamp_min(FP4_AMAX_FLOOR)
+    # One global scale per slice, broadcast over the trailing dims. A zero or
+    # non-finite amax falls back to the floor so the slice quantizes to zero
+    # instead of producing NaN/inf scales.
+    amax = amax.float()
+    amax = torch.where(
+        torch.isfinite(amax) & (amax > 0),
+        amax,
+        torch.full_like(amax, FP4_AMAX_FLOOR),
+    )
+    global_scale = (amax / FP4_MAX).clamp_min(FP4_AMAX_FLOOR)
     global_scale = ceil_pow2(global_scale)
     view_shape = (x.shape[0],) + (1,) * (x.dim() - 1)
     scaled = x.float() / global_scale.reshape(view_shape)
