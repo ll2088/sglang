@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Standalone entry point for the Dockerfile permission checks.
+"""Standalone runner for the stdlib-only Dockerfile permission checks.
 
-This wrapper exists so CI can run the checks without pytest and without
-installing sglang. It imports only the stdlib-only test module and exits with
-its status code.
+This entry point lets CI run the permission and documentation checks with a
+bare ``python3`` interpreter, without installing sglang or pytest. It imports
+the checks from ``test_dockerfile_permissions.py`` in the same directory and
+reports a non-zero exit code on failure.
 
 Usage:
     python3 test/dockerfile_permissions/run.py
@@ -17,51 +18,34 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-# Keep the repository root off sys.path so a stray `import sglang` cannot
-# resolve to the in-tree package and start a dependency install.
-_REPO_ROOT = str(_HERE.parent.parent)
-if _REPO_ROOT in sys.path:
-    sys.path.remove(_REPO_ROOT)
-if "sglang" not in sys.modules:
-    sys.modules["sglang"] = None
-
-# Importing the test module must not require pytest or sglang; the module is
-# stdlib-only by design so this wrapper can run under a bare python3.
-from test_dockerfile_permissions import _run_standalone  # noqa: E402
+from test_dockerfile_permissions import (  # noqa: E402
+    CHECKS,
+    missing_paths,
+    readme_keyword_hit_count,
+)
 
 
-def _print_env() -> None:
-    """Print the interpreter and module path so CI logs show the real entry."""
-    print(f"python: {sys.executable}")
-    print(f"version: {sys.version.split()[0]}")
-    print(f"module: {Path(__file__).resolve()}")
-    print(f"cwd: {Path.cwd()}")
-    # Report whether pytest is importable without importing it: importing pytest
-    # here would make the standalone runner depend on a third-party package and
-    # could load repository-level plugins. Use importlib.util.find_spec, which
-    # only inspects the module search path.
-    import importlib.util
+def main() -> int:
+    missing = missing_paths()
+    if missing:
+        print("missing paths:")
+        for item in missing:
+            print(f"  {item}")
+        return 1
 
-    if importlib.util.find_spec("pytest") is not None:
-        print("pytest: importable")
-    else:
-        print("pytest: not importable (stdlib-only run)")
+    failures = 0
+    for check in CHECKS:
+        try:
+            check()
+        except AssertionError as exc:
+            failures += 1
+            print(f"FAIL {check.__name__}: {exc}")
+        else:
+            print(f"PASS {check.__name__}")
 
-
-def _print_keyword_hits() -> None:
-    """Print per-README keyword hit counts for CI log parity with grep."""
-    from test_dockerfile_permissions import readme_keyword_hits_per_file
-
-    for name, count in readme_keyword_hits_per_file().items():
-        print(f"readme_keyword_hits[{name}]={count}")
+    print(f"readme_keyword_hits_total={readme_keyword_hit_count()}")
+    return 0 if failures == 0 else 1
 
 
 if __name__ == "__main__":
-    if "--check-env" in sys.argv[1:]:
-        _print_env()
-        sys.exit(0)
-    if "--keyword-hits" in sys.argv[1:]:
-        _print_keyword_hits()
-        sys.exit(0)
-    _print_env()
-    sys.exit(_run_standalone())
+    sys.exit(main())
