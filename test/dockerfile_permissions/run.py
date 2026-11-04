@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Standalone runner for the stdlib-only Dockerfile permission checks.
+"""Standalone entry point for the stdlib-only Dockerfile permission checks.
 
-This entry point exists so CI can run the permission and documentation checks
-without installing sglang or any third-party package. It imports the checks
-from ``test_dockerfile_permissions.py`` and exits non-zero on the first
-failure, printing a short diagnostic for each failed check.
+This runner imports nothing outside the Python standard library and never
+imports sglang, so CI can execute the permission/documentation checks without
+installing the full sglang dependency tree:
 
-Usage:
     python3 test/dockerfile_permissions/run.py
+
+It delegates to the checks in ``test_dockerfile_permissions.py`` and exits
+non-zero if any check fails.
 """
 
 import sys
