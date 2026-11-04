@@ -2,6 +2,9 @@ import re
 import sys
 from pathlib import Path
 
+# This module intentionally depends only on the Python standard library so the
+# permission/documentation checks can run without installing sglang or pytest.
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 DOCKERFILES = [
@@ -49,6 +52,23 @@ def _check_readme_non_root_cache_guidance(readme: Path) -> None:
     assert "```bash" in content, f"{readme} should include an executable command block"
 
 
+def _run_checks() -> int:
+    failures = 0
+    for check in (
+        test_no_world_writable_permissions,
+        test_minimal_permission_statements,
+        test_readme_non_root_cache_guidance,
+    ):
+        try:
+            check()
+        except AssertionError as exc:
+            failures += 1
+            print(f"FAIL {check.__name__}: {exc}", file=sys.stderr)
+        else:
+            print(f"PASS {check.__name__}")
+    return 1 if failures else 0
+
+
 def test_no_world_writable_permissions() -> None:
     for dockerfile in DOCKERFILES:
         _check_no_world_writable_permissions(dockerfile)
@@ -65,20 +85,7 @@ def test_readme_non_root_cache_guidance() -> None:
 
 
 def main() -> int:
-    failures = 0
-    for check in (
-        test_no_world_writable_permissions,
-        test_minimal_permission_statements,
-        test_readme_non_root_cache_guidance,
-    ):
-        try:
-            check()
-        except AssertionError as exc:
-            failures += 1
-            print(f"FAIL {check.__name__}: {exc}", file=sys.stderr)
-        else:
-            print(f"PASS {check.__name__}")
-    return 1 if failures else 0
+    return _run_checks()
 
 
 if __name__ == "__main__":
