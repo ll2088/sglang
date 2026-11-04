@@ -8,7 +8,9 @@ they can run on any runner.
 
 import importlib.util
 import pathlib
+import subprocess
 import sys
+import textwrap
 
 import pytest
 
@@ -142,3 +144,54 @@ def test_predicate_resolves_without_sglang_package(monkeypatch):
     assert predicate(96, False) is False
     assert predicate(0, True) is False
     assert predicate(-1, True) is False
+
+
+def test_predicate_resolves_in_isolated_subprocess():
+    """A fresh interpreter with sglang blocked must still load the predicate.
+
+    This is the CI smoke path: no sglang install, no CUDA deps, only the cute
+    directory on sys.path. Running in a subprocess avoids any cached modules.
+    """
+    cute_dir = pathlib.Path(__file__).parent
+    script = textwrap.dedent(
+        """
+        import importlib.util
+        import pathlib
+        import sys
+
+        cute_dir = pathlib.Path(sys.argv[1])
+        sys.path.insert(0, str(cute_dir))
+        sys.modules["sglang"] = None
+        sys.modules["sglang.kernels"] = None
+        sys.modules["sglang.kernels.ops"] = None
+        sys.modules["sglang.kernels.ops.attention"] = None
+        sys.modules["sglang.kernels.ops.attention.flash_attn"] = None
+        sys.modules["sglang.kernels.ops.attention.flash_attn.cute"] = None
+        sys.modules[
+            "sglang.kernels.ops.attention.flash_attn.cute.mla_head_padding"
+        ] = None
+
+        spec = importlib.util.spec_from_file_location(
+            "mla_head_padding", cute_dir / "mla_head_padding.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        predicate = module.mla_2cta_pads_dense_qheads
+        assert predicate(64, True) is False
+        assert predicate(65, True) is True
+        assert predicate(127, True) is True
+        assert predicate(128, True) is False
+        assert predicate(96, False) is False
+        assert predicate(0, True) is False
+        assert predicate(-1, True) is False
+        print("ok")
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(cute_dir)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
