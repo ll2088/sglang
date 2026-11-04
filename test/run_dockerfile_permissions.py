@@ -17,6 +17,14 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+# Keep the repository root off sys.path so a stray `import sglang` cannot
+# resolve to the in-tree package and start a dependency install.
+_REPO_ROOT = str(_HERE.parent)
+if _REPO_ROOT in sys.path:
+    sys.path.remove(_REPO_ROOT)
+if "sglang" not in sys.modules:
+    sys.modules["sglang"] = None
+
 # Importing the test module must not require pytest or sglang; the module is
 # stdlib-only by design so this wrapper can run under a bare python3.
 from test_dockerfile_permissions import _run_standalone  # noqa: E402

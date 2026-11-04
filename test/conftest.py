@@ -21,3 +21,9 @@ import sys as _sys
 _REPO_ROOT = str(__file__.rsplit("/", 2)[0]) if "/" in __file__ else ""
 if _REPO_ROOT and _REPO_ROOT in _sys.path:
     _sys.path.remove(_REPO_ROOT)
+
+# Block accidental resolution of the in-tree sglang package during collection.
+# The permission checks are stdlib-only; if any collected module tries to import
+# sglang, fail fast instead of triggering a full dependency install.
+if "sglang" not in _sys.modules:
+    _sys.modules["sglang"] = None
