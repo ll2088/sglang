@@ -115,6 +115,18 @@ def _load_pack_gqa_predicate_only():
     return module.mla_2cta_pads_dense_qheads
 
 
+def _load_pack_gqa_accepts_only():
+    """Load the acceptance rule from the sibling module without CUDA deps."""
+    cute_dir = pathlib.Path(__file__).parent
+    spec = importlib.util.spec_from_file_location(
+        "_fa_cute_mla_head_padding_accepts_for_pack_gqa",
+        cute_dir / "mla_head_padding.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.mla_2cta_accepts_dense_qheads
+
+
 @cpu_only
 def test_predicate_loads_without_config_module(monkeypatch):
     """The predicate must resolve even if flash_attn.cute.config is absent."""
@@ -231,6 +243,21 @@ def test_predicate_loads_without_cuda_deps():
     assert predicate(96, False) is False
     assert predicate(0, True) is False
     assert predicate(-1, True) is False
+
+
+@cpu_only
+def test_accepts_rule_loads_without_cuda_deps():
+    """The acceptance rule must be queryable without CUDA/CuTe or sglang."""
+    accepts = _load_pack_gqa_accepts_only()
+    assert accepts(128, 1) is True
+    assert accepts(64, 1) is True
+    assert accepts(96, 1) is True
+    assert accepts(65, 1) is True
+    assert accepts(127, 1) is True
+    assert accepts(24, 1) is False
+    assert accepts(96, 2) is False
+    assert accepts(0, 1) is False
+    assert accepts(-1, 1) is False
 
 
 @_requires_cute()

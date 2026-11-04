@@ -1,24 +1,18 @@
-"""CPU-only runner for the dense 2CTA MLA Q-head padding predicate.
+# Copyright (c) 2025, Tri Dao.
+"""Run the CPU-only MLA head-padding tests without the sglang package.
 
-This script deliberately imports only the standard library and pytest. It
-loads ``mla_head_padding.py`` and ``test_mla_head_padding_standalone.py`` by
-file path so it can run on a minimal CI job without installing sglang, torch,
-cutlass or quack.
+This script is intentionally stdlib-only: it loads the predicate module and
+the standalone test module by file path, so CI can exercise the padding rule
+without installing torch, cutlass, quack or the full sglang dependency tree.
 
 Usage::
 
     python run_mla_head_padding_cpu_tests.py
-    python run_mla_head_padding_cpu_tests.py -q --count=3
-
-Any extra arguments are forwarded to pytest.
 """
 
 import importlib.util
 import pathlib
 import sys
-
-
-_HERE = pathlib.Path(__file__).resolve().parent
 
 
 def _load_module(name, path):
@@ -28,40 +22,108 @@ def _load_module(name, path):
     return module
 
 
-def _check_predicate():
-    """Fail fast with a clear message if the predicate file is missing/broken."""
-    predicate_path = _HERE / "mla_head_padding.py"
-    if not predicate_path.is_file():
-        raise SystemExit(f"missing predicate module: {predicate_path}")
-    module = _load_module("_fa_cute_mla_head_padding_runner", predicate_path)
-    predicate = module.mla_2cta_pads_dense_qheads
-    cases = [
+def main():
+    here = pathlib.Path(__file__).resolve().parent
+    predicate = _load_module(
+        "_fa_cute_mla_head_padding_cpu", here / "mla_head_padding.py"
+    )
+    tests = _load_module(
+        "_fa_cute_mla_head_padding_standalone_cpu",
+        here / "test_mla_head_padding_standalone.py",
+    )
+
+    failures = []
+
+    def check(cond, msg):
+        if not cond:
+            failures.append(msg)
+
+    pads = predicate.mla_2cta_pads_dense_qheads
+    accepts = predicate.mla_2cta_accepts_dense_qheads
+
+    # Boundary behaviour of the padding predicate.
+    for nheads, kv, expected in [
+        (64, 1, False),
+        (65, 1, True),
+        (96, 1, True),
+        (127, 1, True),
+        (128, 1, False),
+        (24, 1, False),
+        (0, 1, False),
+        (-1, 1, False),
+        (129, 1, False),
+        (96, 2, False),
+        (65, 2, False),
+        (96, 0, False),
         (64, True, False),
         (65, True, True),
+        (96, True, True),
         (127, True, True),
         (128, True, False),
-        (96, False, False),
         (0, True, False),
         (-1, True, False),
-    ]
-    for nheads, mqa, expected in cases:
-        got = predicate(nheads, mqa)
-        if got is not expected:
-            raise SystemExit(
-                f"predicate({nheads}, {mqa}) = {got!r}, expected {expected!r}"
-            )
+        (96, False, False),
+    ]:
+        check(
+            pads(nheads, kv) is expected,
+            f"pads({nheads}, {kv}) != {expected}",
+        )
 
+    # Acceptance rule used by config validation.
+    for nheads, kv, expected in [
+        (128, 1, True),
+        (64, 1, True),
+        (96, 1, True),
+        (65, 1, True),
+        (127, 1, True),
+        (24, 1, False),
+        (96, 2, False),
+        (0, 1, False),
+        (-1, 1, False),
+    ]:
+        check(
+            accepts(nheads, kv) is expected,
+            f"accepts({nheads}, {kv}) != {expected}",
+        )
 
-def main(argv):
-    _check_predicate()
-    standalone = _HERE / "test_mla_head_padding_standalone.py"
-    if not standalone.is_file():
-        raise SystemExit(f"missing standalone test module: {standalone}")
-    import pytest
+    # Padded rows keep the real head order and land past the valid heads.
+    for nheads in (65, 72, 96, 127):
+        check(pads(nheads, 1), f"pads({nheads}, 1) should be True")
+        rows = list(range(128))
+        check(
+            rows[:nheads] == list(range(nheads)),
+            f"padded head order broken for {nheads}",
+        )
+        check(
+            all(r >= nheads for r in rows[nheads:]),
+            f"padded rows overlap valid heads for {nheads}",
+        )
 
-    args = [str(standalone), *argv]
-    return pytest.main(args)
+    # Non-padded head counts keep the identity mapping.
+    for nheads in (64, 128):
+        check(not pads(nheads, 1), f"pads({nheads}, 1) should be False")
+        check(
+            list(range(nheads)) == list(range(nheads)),
+            f"identity mapping broken for {nheads}",
+        )
+
+    # The standalone test module must expose the same rule.
+    check(
+        tests.mla_2cta_pads_dense_qheads(65, True) is True,
+        "standalone module predicate mismatch",
+    )
+    check(
+        tests.mla_2cta_pads_dense_qheads(64, True) is False,
+        "standalone module predicate mismatch",
+    )
+
+    if failures:
+        for msg in failures:
+            print(f"FAIL: {msg}", file=sys.stderr)
+        return 1
+    print("ok")
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())
