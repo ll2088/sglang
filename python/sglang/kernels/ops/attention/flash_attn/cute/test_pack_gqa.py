@@ -32,9 +32,17 @@ def _requires_sglang():
     The probe must not import sglang: importing the package pulls in the full
     dependency chain (torch, quack, ...) and is exactly what the CPU-only
     tests avoid. Use importlib.util.find_spec instead.
+
+    A CPU-only runner may have a partial sglang install whose dependency tree
+    cannot be imported; treat that as "not installed" so the CUDA-dependent
+    tests skip instead of failing at import time.
     """
     if importlib.util.find_spec("sglang") is None:
         return pytest.mark.skip(reason="pack_gqa needs the sglang package")
+    try:
+        import sglang  # noqa: F401
+    except Exception:
+        return pytest.mark.skip(reason="pack_gqa needs an importable sglang package")
     return pytest.mark.skipif(False, reason="")
 
 
