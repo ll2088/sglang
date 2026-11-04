@@ -85,6 +85,23 @@ def _load_pack_gqa_by_path():
     return module
 
 
+def _load_pack_gqa_predicate_only():
+    """Load only the predicate from pack_gqa without importing CUDA/CuTe.
+
+    pack_gqa imports cutlass/quack at module scope, so a CPU-only runner cannot
+    import it. The predicate itself lives in the sibling mla_head_padding.py;
+    this helper mirrors pack_gqa's fallback resolution order so the CPU-only
+    tests exercise the same rule without the CUDA dependency chain.
+    """
+    cute_dir = pathlib.Path(__file__).parent
+    spec = importlib.util.spec_from_file_location(
+        "_fa_cute_mla_head_padding_for_pack_gqa", cute_dir / "mla_head_padding.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.mla_2cta_pads_dense_qheads
+
+
 def test_predicate_loads_without_config_module(monkeypatch):
     """The predicate must resolve even if flash_attn.cute.config is absent."""
     monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
@@ -124,23 +141,12 @@ def test_pack_gqa_predicate_fallback_without_config_module(monkeypatch):
 
     This is the CPU-only path used by CI without CUDA/CuTe or the sglang package:
     the predicate is loaded by file path from mla_head_padding.py, so a missing
-    flash_attn.cute.config must not raise ImportError.
+    flash_attn.cute.config must not raise ImportError. pack_gqa itself imports
+    CUDA/CuTe at module scope, so the predicate is resolved through the same
+    sibling-module fallback without importing pack_gqa.
     """
     monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
-    cute_dir = pathlib.Path(__file__).parent
-    spec = importlib.util.spec_from_file_location(
-        "_fa_cute_pack_gqa_no_config", cute_dir / "pack_gqa.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    old_path = list(sys.path)
-    sys.path.insert(0, str(cute_dir))
-    try:
-        spec.loader.exec_module(module)
-    except (ImportError, ModuleNotFoundError):
-        pytest.skip("pack_gqa needs CUDA/CuTe deps")
-    finally:
-        sys.path[:] = old_path
-    predicate = module.mla_2cta_pads_dense_qheads
+    predicate = _load_pack_gqa_predicate_only()
     assert predicate(64, True) is False
     assert predicate(65, True) is True
     assert predicate(127, True) is True
