@@ -1,14 +1,11 @@
-"""Usability check for the dense 2CTA MLA Q-head padding predicate.
+"""CPU-only usability check for the dense 2CTA MLA Q-head padding rule.
 
-Loads ``mla_head_padding.py`` by file path so the check does not import the
-sglang package (and therefore does not pull in torch/quack/CUDA deps). This
-mirrors the public query form used by callers::
+Verifies that the predicate can be resolved and queried without importing
+the sglang package or CUDA/CuTe, mirroring the public query used by the
+kernel and config validation. Intended for minimal CI jobs.
 
-    from ...pack_gqa import mla_2cta_pads_dense_qheads as f
-
-Usage::
-
-    python python/sglang/kernels/ops/attention/flash_attn/cute/check_mla_head_padding_usability.py
+Usage:
+    python check_mla_head_padding_usability.py
 """
 
 import importlib.util
@@ -16,18 +13,21 @@ import pathlib
 import sys
 
 
-def _load_predicate():
+def _load_predicate_module():
     path = pathlib.Path(__file__).with_name("mla_head_padding.py")
     spec = importlib.util.spec_from_file_location(
         "_fa_cute_mla_head_padding_usability", path
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.mla_2cta_pads_dense_qheads
+    return module
 
 
 def main() -> int:
-    f = _load_predicate()
+    # Make the sglang package unimportable so the sibling-module path is used.
+    sys.modules["sglang"] = None
+    module = _load_predicate_module()
+    f = module.mla_2cta_pads_dense_qheads
     assert f(64, True) is False
     assert f(65, True) is True
     assert f(127, True) is True

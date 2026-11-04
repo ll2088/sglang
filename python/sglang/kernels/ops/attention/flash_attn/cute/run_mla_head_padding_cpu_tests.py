@@ -1,13 +1,12 @@
-"""CPU-only runner for the dense 2CTA MLA Q-head padding predicate.
+"""CPU-only runner for the dense 2CTA MLA Q-head padding rule.
 
-This script deliberately imports nothing beyond the standard library and the
-sibling ``mla_head_padding.py`` (loaded by file path), so it can run on a
-CPU-only runner without CUDA/CuTe, torch, quack or the sglang package. It is
-intended for CI jobs that cannot install the full sglang dependency tree.
+Runs without CUDA/CuTe, torch, quack or the sglang package: it loads the
+sibling ``mla_head_padding.py`` by file path and checks the predicate
+boundaries plus the head-order contract. Intended for minimal CI jobs where
+installing the full sglang dependency tree is not possible.
 
-Usage::
-
-    python python/sglang/kernels/ops/attention/flash_attn/cute/run_mla_head_padding_cpu_tests.py
+Usage:
+    python run_mla_head_padding_cpu_tests.py
 """
 
 import importlib.util
@@ -36,59 +35,78 @@ def main() -> int:
     accepts = module.mla_2cta_accepts_dense_qheads
 
     # Boundary head counts for MQA (single KV head).
-    _check(pads(64, 1) is False, "64 heads must not pad")
-    _check(pads(65, 1) is True, "65 heads must pad")
-    _check(pads(96, 1) is True, "96 heads must pad")
-    _check(pads(127, 1) is True, "127 heads must pad")
-    _check(pads(128, 1) is False, "128 heads must not pad")
+    for nheads, expected in (
+        (64, False),
+        (65, True),
+        (96, True),
+        (127, True),
+        (128, False),
+        (24, False),
+        (0, False),
+        (-1, False),
+        (129, False),
+    ):
+        _check(
+            pads(nheads, 1) is expected,
+            f"pads({nheads}, 1) != {expected}",
+        )
 
-    # Too few heads to pad: still rejected.
-    _check(pads(24, 1) is False, "24 heads must not pad")
-    _check(pads(0, 1) is False, "0 heads must not pad")
-    _check(pads(-1, 1) is False, "-1 heads must not pad")
-    _check(pads(129, 1) is False, "129 heads must not pad")
-
-    # Non-MQA (more than one KV head) never pads.
-    _check(pads(96, 2) is False, "96 heads with 2 KV heads must not pad")
-    _check(pads(65, 2) is False, "65 heads with 2 KV heads must not pad")
-    _check(pads(96, 0) is False, "96 heads with 0 KV heads must not pad")
+    # Non-MQA never pads.
+    for nheads in (65, 96, 127):
+        _check(pads(nheads, 2) is False, f"pads({nheads}, 2) should be False")
 
     # Boolean MQA flag form used by the usability check.
-    _check(pads(64, True) is False, "64 heads with MQA flag must not pad")
-    _check(pads(65, True) is True, "65 heads with MQA flag must pad")
-    _check(pads(96, True) is True, "96 heads with MQA flag must pad")
-    _check(pads(127, True) is True, "127 heads with MQA flag must pad")
-    _check(pads(128, True) is False, "128 heads with MQA flag must not pad")
-    _check(pads(0, True) is False, "0 heads with MQA flag must not pad")
-    _check(pads(-1, True) is False, "-1 heads with MQA flag must not pad")
-    _check(pads(96, False) is False, "96 heads without MQA flag must not pad")
+    for nheads, expected in (
+        (64, False),
+        (65, True),
+        (96, True),
+        (127, True),
+        (128, False),
+        (0, False),
+        (-1, False),
+    ):
+        _check(
+            pads(nheads, True) is expected,
+            f"pads({nheads}, True) != {expected}",
+        )
+    _check(pads(96, False) is False, "pads(96, False) should be False")
 
     # Acceptance rule: dividing heads accepted as-is, 65-127 MQA padded.
-    _check(accepts(128, 1) is True, "128 heads must be accepted")
-    _check(accepts(64, 1) is True, "64 heads must be accepted")
-    _check(accepts(96, 1) is True, "96 heads must be accepted")
-    _check(accepts(65, 1) is True, "65 heads must be accepted")
-    _check(accepts(127, 1) is True, "127 heads must be accepted")
-    _check(accepts(24, 1) is False, "24 heads must be rejected")
-    _check(accepts(96, 2) is False, "96 heads with 2 KV heads must be rejected")
-    _check(accepts(0, 1) is False, "0 heads must be rejected")
-    _check(accepts(-1, 1) is False, "-1 heads must be rejected")
-    _check(accepts(129, 1) is False, "129 heads must be rejected")
+    for nheads, heads_kv, expected in (
+        (128, 1, True),
+        (64, 1, True),
+        (96, 1, True),
+        (65, 1, True),
+        (127, 1, True),
+        (24, 1, False),
+        (96, 2, False),
+        (0, 1, False),
+        (-1, 1, False),
+        (129, 1, False),
+    ):
+        _check(
+            accepts(nheads, heads_kv) is expected,
+            f"accepts({nheads}, {heads_kv}) != {expected}",
+        )
 
     # Padded rows keep the real head order and land past the valid heads.
+    tile = 128
     for nheads in (65, 72, 96, 127):
-        _check(pads(nheads, 1), f"{nheads} heads must pad")
-        rows = list(range(128))
-        _check(rows[:nheads] == list(range(nheads)), "valid rows must be identity")
+        _check(pads(nheads, 1), f"pads({nheads}, 1) should be True")
+        rows = list(range(tile))
+        _check(rows[:nheads] == list(range(nheads)), "valid head order changed")
         _check(
             all(r >= nheads for r in rows[nheads:]),
-            "padded rows must land past the valid heads",
+            "padded rows overlap valid heads",
         )
 
     # 64 and 128 heads are not padded; the mapping is the identity.
     for nheads in (64, 128):
-        _check(not pads(nheads, 1), f"{nheads} heads must not pad")
-        _check(list(range(nheads)) == list(range(nheads)), "identity mapping")
+        _check(not pads(nheads, 1), f"pads({nheads}, 1) should be False")
+        _check(
+            list(range(nheads)) == list(range(nheads)),
+            "identity mapping changed",
+        )
 
     print("ok")
     return 0
