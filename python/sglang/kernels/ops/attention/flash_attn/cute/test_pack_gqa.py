@@ -26,6 +26,12 @@ def _requires_cute():
     )
 
 
+# CPU-only tests in this module must not import CUDA/CuTe or the sglang
+# package. They are marked so a minimal CI job can select them with
+# ``-m cpu_only`` without collecting the CUDA-dependent cases.
+cpu_only = pytest.mark.cpu_only
+
+
 def _requires_sglang():
     """Skip tests that import the sglang package when it is not installed.
 
@@ -107,6 +113,7 @@ def _load_pack_gqa_predicate_only():
     return module.mla_2cta_pads_dense_qheads
 
 
+@cpu_only
 def test_predicate_loads_without_config_module(monkeypatch):
     """The predicate must resolve even if flash_attn.cute.config is absent."""
     monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
@@ -115,6 +122,7 @@ def test_predicate_loads_without_config_module(monkeypatch):
     assert predicate(64, 1) is False
 
 
+@cpu_only
 def test_standalone_cpu_only_module_is_collectable():
     """The CPU-only standalone module must load without sglang/CUDA deps."""
     module = _load_standalone_tests()
@@ -122,6 +130,7 @@ def test_standalone_cpu_only_module_is_collectable():
     assert module.mla_2cta_pads_dense_qheads(64, True) is False
 
 
+@cpu_only
 def test_accepts_dense_qheads_without_config_module(monkeypatch):
     """The acceptance rule resolves without a config module and matches the design."""
     monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
@@ -141,6 +150,7 @@ def test_accepts_dense_qheads_without_config_module(monkeypatch):
     assert accepts(-1, 1) is False
 
 
+@cpu_only
 def test_pack_gqa_predicate_fallback_without_config_module(monkeypatch):
     """pack_gqa must resolve the predicate via its sibling module when config is absent.
 
@@ -161,6 +171,7 @@ def test_pack_gqa_predicate_fallback_without_config_module(monkeypatch):
     assert predicate(-1, True) is False
 
 
+@cpu_only
 def test_predicate_loads_without_sglang_or_cuda_deps(monkeypatch):
     """The predicate must load with sglang/cutlass/torch/quack blocked."""
     for name in list(sys.modules):
@@ -189,6 +200,7 @@ def _predicate():
     return _load_predicate()
 
 
+@cpu_only
 def test_predicate_loads_without_cuda_deps():
     """The pure-Python predicate must be collectable on a CPU-only runner."""
     predicate = _predicate()
@@ -310,10 +322,12 @@ def test_pack_gqa_fallback_import_in_subprocess():
         (96, False, False),
     ],
 )
+@cpu_only
 def test_mla_2cta_pads_dense_qheads(nheads_per_kv, num_heads_kv, expected):
     assert _predicate()(nheads_per_kv, num_heads_kv) is expected
 
 
+@cpu_only
 def test_mla_2cta_pads_dense_qheads_accepts_boolean_mqa_flag():
     # The usability check queries the predicate with a boolean MQA flag.
     predicate = _predicate()
@@ -326,6 +340,7 @@ def test_mla_2cta_pads_dense_qheads_accepts_boolean_mqa_flag():
     assert predicate(-1, True) is False
 
 
+@cpu_only
 @pytest.mark.parametrize("nheads", [65, 72, 96, 127])
 def test_padded_heads_keep_identity_order(nheads):
     """Padded rows keep the real head order and land past the valid heads."""
@@ -336,6 +351,7 @@ def test_padded_heads_keep_identity_order(nheads):
     assert all(r >= nheads for r in rows[nheads:])
 
 
+@cpu_only
 @pytest.mark.parametrize("nheads", [64, 128])
 def test_non_padded_heads_keep_identity_order(nheads):
     """64 and 128 heads are not padded; the mapping is the identity."""
