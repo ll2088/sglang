@@ -11,6 +11,11 @@ from quack import layout_utils
 import sglang.kernels.ops.attention.flash_attn.cute.utils as utils
 
 
+def mla_2cta_pads_dense_qheads(nheads_per_kv: int, num_heads_kv: int) -> bool:
+    """Whether dense 2CTA MLA pads Q heads to its 128-row tile: MQA with 65 to 127 heads."""
+    return num_heads_kv == 1 and 64 < nheads_per_kv < 128
+
+
 def pack_gqa_layout(T, qhead_per_kvhead, nheads_kv, head_idx):
     """Reshape a tensor to fold qhead_per_kvhead into the seqlen dimension (mode 0).
 
