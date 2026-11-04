@@ -40,6 +40,14 @@ def test_predicate_does_not_import_sglang():
     assert "sglang" not in sys.modules
 
 
+def test_predicate_resolves_without_config_module(monkeypatch):
+    """The predicate must load even when a separate config module is absent."""
+    monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
+    predicate = _load_predicate()
+    assert predicate(96, 1) is True
+    assert predicate(64, 1) is False
+
+
 def test_predicate_does_not_import_cutlass():
     """The predicate must stay importable without CUDA/CuTe dependencies."""
     import sys

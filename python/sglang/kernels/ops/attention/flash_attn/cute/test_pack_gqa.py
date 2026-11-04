@@ -35,6 +35,14 @@ def _load_predicate():
     return module.mla_2cta_pads_dense_qheads
 
 
+def test_predicate_loads_without_config_module(monkeypatch):
+    """The predicate must resolve even if flash_attn.cute.config is absent."""
+    monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
+    predicate = _load_predicate()
+    assert predicate(96, 1) is True
+    assert predicate(64, 1) is False
+
+
 mla_2cta_pads_dense_qheads = _load_predicate()
 
 # The predicate boundary tests live in test_mla_head_padding_standalone.py so

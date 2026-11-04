@@ -1,5 +1,5 @@
 # Copyright (c) 2025, Tri Dao.
-"""CPU-only tests for the dense 2CTA MLA Q-head padding rule.
+"""Minimal CPU-only tests for the dense 2CTA MLA Q-head padding rule.
 
 This file imports nothing from the sglang package and needs no CUDA/CuTe
 dependencies, so it can run in a minimal CI job with only pytest installed:
@@ -12,6 +12,7 @@ boundaries plus the identity head-order contract used by the 2CTA tile.
 
 import importlib.util
 import pathlib
+import sys
 
 import pytest
 
@@ -71,3 +72,21 @@ def test_padded_heads_keep_identity_order(nheads):
 def test_non_padded_heads_keep_identity_order(nheads):
     assert not mla_2cta_pads_dense_qheads(nheads, 1)
     assert list(range(nheads)) == list(range(nheads))
+
+
+def test_predicate_resolves_without_config_module(monkeypatch):
+    """The predicate must load even when a separate config module is absent."""
+    monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
+    predicate = _load_predicate()
+    assert predicate(96, 1) is True
+    assert predicate(64, 1) is False
+
+
+def test_predicate_does_not_import_sglang():
+    """Loading the predicate must not pull in the sglang package."""
+    for name in list(sys.modules):
+        if name == "sglang" or name.startswith("sglang."):
+            del sys.modules[name]
+
+    _load_predicate()
+    assert "sglang" not in sys.modules
