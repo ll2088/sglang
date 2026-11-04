@@ -2,8 +2,8 @@
 """CPU-only tests for the dense 2CTA MLA Q-head padding rule.
 
 This file deliberately imports nothing from the sglang package and needs no
-CUDA/CuTe, torch, or quack dependencies, so it can run in a minimal CI job
-with only pytest installed:
+CUDA/CuTe/torch dependencies, so it can run in a minimal CI job with only
+pytest installed:
 
     python -m pytest -q python/sglang/kernels/ops/attention/flash_attn/cute/test_mla_head_padding_cpu.py
 
@@ -101,6 +101,7 @@ def test_predicate_boundaries(nheads_per_kv, num_heads_kv, expected):
 
 @pytest.mark.parametrize("nheads", [65, 72, 96, 127])
 def test_padded_heads_keep_identity_order(nheads):
+    """Padded rows keep the real head order and land past the valid heads."""
     tile = 128
     assert mla_2cta_pads_dense_qheads(nheads, 1)
     rows = list(range(tile))
@@ -110,5 +111,6 @@ def test_padded_heads_keep_identity_order(nheads):
 
 @pytest.mark.parametrize("nheads", [64, 128])
 def test_non_padded_heads_keep_identity_order(nheads):
+    """64 and 128 heads are not padded; the mapping is the identity."""
     assert not mla_2cta_pads_dense_qheads(nheads, 1)
     assert list(range(nheads)) == list(range(nheads))
