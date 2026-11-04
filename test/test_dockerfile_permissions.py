@@ -6,6 +6,10 @@ from pathlib import Path
 # permission/documentation checks can run without installing sglang or pytest.
 # Run directly with `python3 test/test_dockerfile_permissions.py`; pytest is
 # optional and only used when the file is collected by a pytest run.
+#
+# Keep this file free of any `import sglang` / `import pytest` at module scope:
+# CI runs it with a minimal environment (python3 only) and pytest collection
+# must not pull in the full sglang dependency tree.
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,6 +27,10 @@ READMES = [
 ]
 
 WORLD_WRITABLE = re.compile(r"chmod\s+(-R\s+)?777")
+# World-writable grants that specifically target the runtime workspace.
+WORKSPACE_WORLD_WRITABLE = re.compile(
+    r"chmod\s+(-R\s+)?(a\+w|ugo\+w|o\+w|777)\s+[^\n]*/workspace"
+)
 MIN_PERMISSION = re.compile(r"chmod\s+-R\s+go-w")
 CHOWN = re.compile(r"chown\s+-R\s+\S+")
 
@@ -52,6 +60,9 @@ def _check_no_world_writable_permissions(dockerfile: Path) -> None:
     assert not WORLD_WRITABLE.search(content), (
         f"{dockerfile} must not grant world-writable permissions"
     )
+    assert not WORKSPACE_WORLD_WRITABLE.search(content), (
+        f"{dockerfile} must not make /workspace world-writable"
+    )
 
 
 def _check_minimal_permission_statements(dockerfile: Path) -> None:
@@ -74,6 +85,13 @@ def _check_readme_non_root_cache_guidance(readme: Path) -> None:
         f"missing keyword groups: {missing}"
     )
     assert "```bash" in content, f"{readme} should include an executable command block"
+    # The guidance must be a structured section, not a stray sentence.
+    assert re.search(r"^#{2,4}\s+.*(non-root|非默认用户)", content, re.MULTILINE), (
+        f"{readme} should have a dedicated non-root section heading"
+    )
+    assert "TORCH_EXTENSIONS_DIR" in content, (
+        f"{readme} should mention TORCH_EXTENSIONS_DIR in the non-root guidance"
+    )
 
 
 def _run_checks() -> int:
