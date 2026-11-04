@@ -543,6 +543,28 @@ class TestReplaceFunctionExceptionSafety(CustomTestCase):
             self.assertEqual(target.kernel(), "patched")
         self.assertIs(target.kernel, original)
 
+    def test_stacked_fake_quant_does_not_leak_patch_on_kernel_error(self):
+        """A failing stacked kernel must not leave the patch installed."""
+        from sglang.kernels.ops.quantization import fp4_fake_quant
+
+        class Target:
+            def kernel(self):
+                return "original"
+
+        target = Target()
+        original = target.kernel
+
+        def failing_kernel(*args, **kwargs):
+            raise RuntimeError("kernel boom")
+
+        with self.assertRaises(RuntimeError):
+            with fp4_fake_quant.replace_function(
+                target, "kernel", failing_kernel
+            ):
+                target.kernel()
+        self.assertIs(target.kernel, original)
+        self.assertEqual(target.kernel(), "original")
+
 
 if __name__ == "__main__":
     unittest.main()
