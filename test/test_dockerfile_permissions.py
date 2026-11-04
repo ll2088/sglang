@@ -1,51 +1,47 @@
 #!/usr/bin/env python3
-"""Thin shim so the Dockerfile permission checks can be run from the
-repository root without importing sglang or any third-party package.
+"""Standalone + pytest entry point for the stdlib-only Dockerfile checks.
 
-This file exists because CI invokes:
+This file is intentionally import-free of sglang and pytest at module scope so
+CI can run it with a bare ``python3`` interpreter:
+
     python3 test/test_dockerfile_permissions.py
     python3 -m pytest -q test/test_dockerfile_permissions.py
 
-Both forms must work with a bare python3 interpreter. The real check logic
-lives in ``test/dockerfile_permissions/checks.py`` and is stdlib-only.
+The actual assertions live in ``test/dockerfile_permissions/checks.py`` so the
+same logic is shared with ``test/dockerfile_permissions/run.py`` and the pytest
+wrapper in ``test/dockerfile_permissions/test_dockerfile_permissions.py``.
 """
 
+import importlib.util
 import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_CHECKS_DIR = os.path.join(_HERE, "dockerfile_permissions")
-if _CHECKS_DIR not in sys.path:
-    sys.path.insert(0, _CHECKS_DIR)
+_CHECKS_PATH = os.path.join(_HERE, "dockerfile_permissions", "checks.py")
 
-from checks import ALL_CHECKS  # noqa: E402  (path set up above)
+if not os.path.isfile(_CHECKS_PATH):
+    raise ImportError(
+        "test/dockerfile_permissions/checks.py is missing; the Dockerfile "
+        "permission checks must remain stdlib-only"
+    )
+
+_spec = importlib.util.spec_from_file_location("dockerfile_permissions_checks", _CHECKS_PATH)
+_checks = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_checks)
+
+# Re-export the checks as test_* functions for pytest collection.
+test_no_world_writable_permissions = _checks.check_no_world_writable_permissions
+test_minimal_permission_statements = _checks.check_minimal_permission_statements
+test_devcontainer_workspace_not_world_writable = _checks.check_devcontainer_workspace_not_world_writable
+test_readme_non_root_cache_guidance = _checks.check_readme_non_root_cache_guidance
+test_readme_keyword_hit_threshold = _checks.check_readme_keyword_hit_threshold
 
 
 def test_all_checks_pass():
     """Run every check so a single pytest invocation covers the full suite."""
-    for check in ALL_CHECKS:
-        check()
-
-
-def main() -> int:
-    failures = []
-    for check in ALL_CHECKS:
-        name = getattr(check, "__name__", repr(check))
-        try:
-            check()
-        except AssertionError as exc:
-            failures.append((name, str(exc)))
-        except Exception as exc:  # noqa: BLE001 - report any check error
-            failures.append((name, f"{type(exc).__name__}: {exc}"))
-
-    if failures:
-        for name, message in failures:
-            print(f"FAIL {name}: {message}", file=sys.stderr)
-        return 1
-
-    print(f"OK: {len(ALL_CHECKS)} Dockerfile permission checks passed")
-    return 0
+    _checks.run_all()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _checks.run_all()
+    print("dockerfile permission checks passed")

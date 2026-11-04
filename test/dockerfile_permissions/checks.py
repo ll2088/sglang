@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Stdlib-only checks for Dockerfile permission hardening and README guidance.
 
-This module must not import sglang or any third-party package so it can run
-under a bare ``python3`` interpreter in CI without installing the project
-dependencies. It is imported by both ``run.py`` (standalone) and
-``test_dockerfile_permissions.py`` (pytest wrapper).
+These checks intentionally import nothing outside the Python standard library so
+CI can run them with a bare ``python3`` interpreter, without installing sglang or
+any third-party package. They are shared by:
+
+* ``test/test_dockerfile_permissions.py`` (standalone runner + pytest entry)
+* ``test/dockerfile_permissions/run.py`` (standalone runner)
+* ``test/dockerfile_permissions/test_dockerfile_permissions.py`` (pytest wrapper)
+
+Do not add third-party imports here; doing so reintroduces the full sglang
+dependency install that these checks are designed to avoid.
 """
 
 import os
@@ -27,14 +33,27 @@ READMES = [
 
 # Matches `chmod 777`, `chmod -R 777`, `chmod -R 0777`, `chmod a+rwx`, etc.
 WORLD_WRITABLE_RE = re.compile(
-    r"chmod\s+(?:-R\s+)?(?:0?777|a\+rwx|ugo\+rwx|o\+w)\b"
+    r"chmod\s+(?:-[A-Za-z]+\s+)*(?:0?777|a\+rwx|ugo\+rwx)\b"
 )
 
-# Matches a chown that targets a non-root user (e.g. `chown -R vllm /workspace`).
-CHOWN_RE = re.compile(r"chown\s+(?:-R\s+)?(?!root\b)[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?\s+/")
+# Matches a chown that targets a non-root runtime user (e.g. `chown -R vllm`,
+# `chown -R devuser:devuser`, `chown -R root:root`).
+CHOWN_RE = re.compile(r"chown\s+(?:-[A-Za-z]+\s+)*[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?\s+/")
 
-# Matches `chmod -R go-w` (or `chmod go-w`) hardening statements.
-GO_W_RE = re.compile(r"chmod\s+(?:-R\s+)?go-w\b")
+# Matches `chmod -R go-w` (optionally with other flags) on an absolute path.
+GO_W_RE = re.compile(r"chmod\s+(?:-[A-Za-z]+\s+)*go-w\s+/")
+
+README_KEYWORDS = [
+    "cache",
+    "chown",
+    "chmod",
+    "go-w",
+    "non-root",
+    "TORCH_EXTENSIONS_DIR",
+    "SGLANG_CACHE_DIR",
+    "CCACHE_DIR",
+    "PIP_CACHE_DIR",
+]
 
 
 def _read(rel_path):
@@ -43,77 +62,72 @@ def _read(rel_path):
 
 
 def check_no_world_writable_permissions():
-    """No Dockerfile may grant world-writable permissions."""
+    """No affected Dockerfile may grant world-writable permissions."""
     offenders = []
-    for rel in DOCKERFILES:
-        text = _read(rel)
-        for lineno, line in enumerate(text.splitlines(), 1):
+    for rel_path in DOCKERFILES:
+        text = _read(rel_path)
+        for lineno, line in enumerate(text.splitlines(), start=1):
             if WORLD_WRITABLE_RE.search(line):
-                offenders.append(f"{rel}:{lineno}: {line.strip()}")
-    assert not offenders, "world-writable chmod found:\n" + "\n".join(offenders)
+                offenders.append(f"{rel_path}:{lineno}: {line.strip()}")
+    assert not offenders, (
+        "world-writable chmod found in Dockerfiles; use chown <runtime-user> "
+        "+ chmod go-w instead:\n" + "\n".join(offenders)
+    )
 
 
 def check_minimal_permission_statements():
-    """Each Dockerfile must chown to a runtime user and apply chmod go-w."""
+    """Each affected Dockerfile must chown a runtime user and chmod go-w."""
     missing = []
-    for rel in DOCKERFILES:
-        text = _read(rel)
+    for rel_path in DOCKERFILES:
+        text = _read(rel_path)
         if not CHOWN_RE.search(text):
-            missing.append(f"{rel}: missing chown to runtime user")
+            missing.append(f"{rel_path}: missing chown <runtime-user> ...")
         if not GO_W_RE.search(text):
-            missing.append(f"{rel}: missing chmod go-w")
-    assert not missing, "missing minimal-permission statements:\n" + "\n".join(missing)
+            missing.append(f"{rel_path}: missing chmod ... go-w ...")
+    assert not missing, (
+        "Dockerfiles must use minimal permissions (chown runtime user + chmod go-w):\n"
+        + "\n".join(missing)
+    )
 
 
 def check_devcontainer_workspace_not_world_writable():
-    """.devcontainer must not make /sgl-workspace world-writable."""
+    """The devcontainer workspace must not be world-writable."""
     text = _read(".devcontainer/Dockerfile")
-    for lineno, line in enumerate(text.splitlines(), 1):
-        if "/sgl-workspace" in line and WORLD_WRITABLE_RE.search(line):
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if WORLD_WRITABLE_RE.search(line):
             raise AssertionError(
-                f".devcontainer/Dockerfile:{lineno}: world-writable workspace: {line.strip()}"
+                f".devcontainer/Dockerfile:{lineno}: world-writable chmod: {line.strip()}"
             )
 
 
 def check_readme_non_root_cache_guidance():
-    """Each README must document a writable cache dir for non-root users."""
+    """Each README must document a writable cache dir for non-root runs."""
     missing = []
-    for rel in READMES:
-        text = _read(rel)
+    for rel_path in READMES:
+        text = _read(rel_path)
         lowered = text.lower()
-        has_section = (
-            "non-root" in lowered
-            or "non-default user" in lowered
-            or "非默认用户" in text
-        )
-        has_cache = "cache" in lowered or "缓存" in text
-        has_command = "docker run" in text or "TORCH_EXTENSIONS_DIR" in text
-        if not (has_section and has_cache and has_command):
-            missing.append(
-                f"{rel}: needs non-root cache guidance with an executable command"
-            )
-    assert not missing, "missing README guidance:\n" + "\n".join(missing)
+        if "non-root" not in lowered and "non-root user" not in lowered:
+            missing.append(f"{rel_path}: missing non-root user guidance")
+        if "cache" not in lowered:
+            missing.append(f"{rel_path}: missing cache directory guidance")
+        if "docker run" not in text:
+            missing.append(f"{rel_path}: missing executable docker run example")
+    assert not missing, (
+        "READMEs must document a writable cache directory for non-root runs:\n"
+        + "\n".join(missing)
+    )
 
 
-def check_readme_keyword_hit_threshold():
-    """READMEs must mention at least 6 relevant keywords in total."""
-    keywords = [
-        "cache",
-        "缓存",
-        "chown",
-        "chmod",
-        "go-w",
-        "非默认用户",
-        "non-root",
-    ]
+def check_readme_keyword_hit_threshold(min_hits=6):
+    """The READMEs must collectively mention enough permission/cache keywords."""
     hits = 0
-    for rel in READMES:
-        text = _read(rel)
-        lowered = text.lower()
-        for kw in keywords:
-            if kw.lower() in lowered:
-                hits += 1
-    assert hits >= 6, f"README keyword hits {hits} < 6"
+    for rel_path in READMES:
+        text = _read(rel_path)
+        for keyword in README_KEYWORDS:
+            hits += text.count(keyword)
+    assert hits >= min_hits, (
+        f"README permission/cache keyword hits = {hits}, expected >= {min_hits}"
+    )
 
 
 ALL_CHECKS = [
@@ -123,3 +137,13 @@ ALL_CHECKS = [
     check_readme_non_root_cache_guidance,
     check_readme_keyword_hit_threshold,
 ]
+
+
+def run_all():
+    for check in ALL_CHECKS:
+        check()
+
+
+if __name__ == "__main__":
+    run_all()
+    print("dockerfile permission checks passed")

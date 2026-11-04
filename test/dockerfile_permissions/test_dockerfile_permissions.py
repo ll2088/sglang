@@ -29,12 +29,25 @@ try:
         check_readme_non_root_cache_guidance as test_readme_non_root_cache_guidance,
     )
 except ImportError:  # pragma: no cover - only hit if checks.py is missing
-    # Re-raise with a clear message so CI logs point at the real problem
-    # instead of a generic collection error.
-    raise ImportError(
-        "test/dockerfile_permissions/checks.py is missing or not importable; "
-        "the Dockerfile permission checks must remain stdlib-only"
-    )
+    # Fall back to the sibling checks.py by absolute path so pytest's import
+    # mode or the caller's CWD cannot break collection. This keeps the checks
+    # stdlib-only and avoids importing the repository-root sglang package.
+    import importlib.util as _importlib_util
+
+    _checks_path = os.path.join(_HERE, "checks.py")
+    if not os.path.isfile(_checks_path):
+        raise ImportError(
+            "test/dockerfile_permissions/checks.py is missing or not importable; "
+            "the Dockerfile permission checks must remain stdlib-only"
+        )
+    _spec = _importlib_util.spec_from_file_location("dockerfile_permissions_checks", _checks_path)
+    _checks = _importlib_util.module_from_spec(_spec)
+    _spec.loader.exec_module(_checks)
+    test_devcontainer_workspace_not_world_writable = _checks.check_devcontainer_workspace_not_world_writable
+    test_minimal_permission_statements = _checks.check_minimal_permission_statements
+    test_no_world_writable_permissions = _checks.check_no_world_writable_permissions
+    test_readme_keyword_hit_threshold = _checks.check_readme_keyword_hit_threshold
+    test_readme_non_root_cache_guidance = _checks.check_readme_non_root_cache_guidance
 
 
 def test_all_checks_pass():
