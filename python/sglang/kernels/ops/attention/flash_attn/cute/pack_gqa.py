@@ -15,12 +15,19 @@ try:
         mla_2cta_pads_dense_qheads,
     )
 except ImportError:  # pragma: no cover - standalone predicate tests
-    # Fall back to a sibling-module import so the predicate resolves when the
-    # sglang package is not installed and only this directory is on PYTHONPATH.
-    try:
-        from mla_head_padding import mla_2cta_pads_dense_qheads
-    except ImportError:
-        from .mla_head_padding import mla_2cta_pads_dense_qheads
+    # Fall back to loading the sibling module by file path so the predicate
+    # resolves when the sglang package is not installed and only this directory
+    # is on PYTHONPATH (or when the module is loaded by path in tests).
+    import importlib.util as _importlib_util
+    import pathlib as _pathlib
+
+    _predicate_path = _pathlib.Path(__file__).with_name("mla_head_padding.py")
+    _predicate_spec = _importlib_util.spec_from_file_location(
+        "_fa_cute_mla_head_padding", _predicate_path
+    )
+    _predicate_module = _importlib_util.module_from_spec(_predicate_spec)
+    _predicate_spec.loader.exec_module(_predicate_module)
+    mla_2cta_pads_dense_qheads = _predicate_module.mla_2cta_pads_dense_qheads
 
 __all__ = [
     "mla_2cta_pads_dense_qheads",

@@ -35,6 +35,23 @@ def _load_predicate():
     return module.mla_2cta_pads_dense_qheads
 
 
+def _load_pack_gqa_by_path():
+    """Load pack_gqa by file path, exercising the sibling-module fallback.
+
+    Returns None when CUDA/CuTe deps are unavailable so the caller can skip.
+    """
+    cute_dir = pathlib.Path(__file__).parent
+    spec = importlib.util.spec_from_file_location(
+        "_fa_cute_pack_gqa_by_path", cute_dir / "pack_gqa.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except (ImportError, ModuleNotFoundError):
+        return None
+    return module
+
+
 def test_predicate_loads_without_config_module(monkeypatch):
     """The predicate must resolve even if flash_attn.cute.config is absent."""
     monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
@@ -76,14 +93,9 @@ def test_pack_gqa_imports_without_sglang_package(monkeypatch):
             monkeypatch.delitem(sys.modules, name, raising=False)
     monkeypatch.delitem(sys.modules, "pack_gqa", raising=False)
     monkeypatch.delitem(sys.modules, "mla_head_padding", raising=False)
-    spec = importlib.util.spec_from_file_location(
-        "pack_gqa", cute_dir / "pack_gqa.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(module)
-    except (ImportError, ModuleNotFoundError) as exc:  # pragma: no cover - CUDA deps absent in CI
-        pytest.skip(f"pack_gqa needs CUDA/CuTe deps: {exc}")
+    module = _load_pack_gqa_by_path()
+    if module is None:  # pragma: no cover - CUDA deps absent in CI
+        pytest.skip("pack_gqa needs CUDA/CuTe deps")
     predicate = module.mla_2cta_pads_dense_qheads
     assert predicate(64, True) is False
     assert predicate(65, True) is True

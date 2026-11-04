@@ -13,6 +13,7 @@ boundaries plus the identity head-order contract used by the 2CTA tile.
 
 import importlib.util
 import pathlib
+import sys
 
 import pytest
 
@@ -29,9 +30,6 @@ def _load_predicate():
 
 def test_predicate_does_not_import_sglang():
     """Loading the predicate must not pull in the sglang package."""
-    import sys
-
-    # Drop any cached sglang modules so the assertion reflects this load only.
     for name in list(sys.modules):
         if name == "sglang" or name.startswith("sglang."):
             del sys.modules[name]
@@ -50,8 +48,6 @@ def test_predicate_resolves_without_config_module(monkeypatch):
 
 def test_predicate_does_not_import_cutlass():
     """The predicate must stay importable without CUDA/CuTe dependencies."""
-    import sys
-
     for name in list(sys.modules):
         if name == "cutlass" or name.startswith("cutlass."):
             del sys.modules[name]
@@ -62,8 +58,6 @@ def test_predicate_does_not_import_cutlass():
 
 def test_predicate_does_not_import_third_party():
     """The predicate must not require torch, quack, or other third-party deps."""
-    import sys
-
     for name in list(sys.modules):
         if name in ("torch", "quack") or name.startswith(("torch.", "quack.")):
             del sys.modules[name]
