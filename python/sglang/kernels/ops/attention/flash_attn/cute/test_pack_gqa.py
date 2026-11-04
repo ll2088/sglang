@@ -43,9 +43,11 @@ def _requires_sglang():
     cannot be imported; treat that as "not installed" so the CUDA-dependent
     tests skip instead of failing at import time. The probe never imports the
     package itself, so a broken dependency tree cannot fail collection.
+
+    The CUDA-dependent tests below load pack_gqa by file path and only need
+    its own directory on sys.path, so they do not require the sglang package
+    to be importable. They are gated on CUDA/CuTe deps alone.
     """
-    if importlib.util.find_spec("sglang") is None:
-        return pytest.mark.skip(reason="pack_gqa needs the sglang package")
     return pytest.mark.skipif(False, reason="")
 
 
