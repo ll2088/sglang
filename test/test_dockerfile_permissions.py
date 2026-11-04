@@ -1,47 +1,48 @@
 #!/usr/bin/env python3
-"""Standalone + pytest entry point for the stdlib-only Dockerfile checks.
+"""Stdlib-only entrypoint for the Dockerfile permission checks.
 
-This file is intentionally import-free of sglang and pytest at module scope so
-CI can run it with a bare ``python3`` interpreter:
+This module is a thin wrapper around ``test/dockerfile_permissions/checks.py``
+so the checks can be run either directly with a bare ``python3`` interpreter
+or collected by pytest without importing sglang or installing its full
+dependency tree.
 
+Usage:
     python3 test/test_dockerfile_permissions.py
     python3 -m pytest -q test/test_dockerfile_permissions.py
-
-The actual assertions live in ``test/dockerfile_permissions/checks.py`` so the
-same logic is shared with ``test/dockerfile_permissions/run.py`` and the pytest
-wrapper in ``test/dockerfile_permissions/test_dockerfile_permissions.py``.
 """
 
-import importlib.util
 import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_CHECKS_PATH = os.path.join(_HERE, "dockerfile_permissions", "checks.py")
+_CHECKS_DIR = os.path.join(_HERE, "dockerfile_permissions")
+if _CHECKS_DIR not in sys.path:
+    sys.path.insert(0, _CHECKS_DIR)
 
-if not os.path.isfile(_CHECKS_PATH):
-    raise ImportError(
-        "test/dockerfile_permissions/checks.py is missing; the Dockerfile "
-        "permission checks must remain stdlib-only"
-    )
-
-_spec = importlib.util.spec_from_file_location("dockerfile_permissions_checks", _CHECKS_PATH)
-_checks = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_checks)
-
-# Re-export the checks as test_* functions for pytest collection.
-test_no_world_writable_permissions = _checks.check_no_world_writable_permissions
-test_minimal_permission_statements = _checks.check_minimal_permission_statements
-test_devcontainer_workspace_not_world_writable = _checks.check_devcontainer_workspace_not_world_writable
-test_readme_non_root_cache_guidance = _checks.check_readme_non_root_cache_guidance
-test_readme_keyword_hit_threshold = _checks.check_readme_keyword_hit_threshold
+from checks import ALL_CHECKS  # noqa: E402  (path set up above)
 
 
 def test_all_checks_pass():
     """Run every check so a single pytest invocation covers the full suite."""
-    _checks.run_all()
+    for check in ALL_CHECKS:
+        check()
+
+
+def main():
+    """Run every check under a bare python3 interpreter."""
+    failures = []
+    for check in ALL_CHECKS:
+        try:
+            check()
+        except AssertionError as exc:
+            failures.append((check.__name__, exc))
+    if failures:
+        for name, exc in failures:
+            print(f"FAIL: {name}: {exc}", file=sys.stderr)
+        return 1
+    print(f"OK: {len(ALL_CHECKS)} checks passed")
+    return 0
 
 
 if __name__ == "__main__":
-    _checks.run_all()
-    print("dockerfile permission checks passed")
+    sys.exit(main())
