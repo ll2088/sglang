@@ -10,14 +10,10 @@ from quack import layout_utils
 
 import sglang.kernels.ops.attention.flash_attn.cute.utils as utils
 
+# The padding rule lives in a pure-Python sibling module so it can be imported
+# (and unit-tested) without CUDA/CuTe or the sglang package. Load it by file
+# path first; fall back to the package import when the file is unavailable.
 try:
-    from sglang.kernels.ops.attention.flash_attn.cute.mla_head_padding import (
-        mla_2cta_pads_dense_qheads,
-    )
-except ImportError:  # pragma: no cover - standalone predicate tests
-    # Fall back to loading the sibling module by file path so the predicate
-    # resolves when the sglang package is not installed and only this directory
-    # is on PYTHONPATH (or when the module is loaded by path in tests).
     import importlib.util as _importlib_util
     import pathlib as _pathlib
 
@@ -28,6 +24,10 @@ except ImportError:  # pragma: no cover - standalone predicate tests
     _predicate_module = _importlib_util.module_from_spec(_predicate_spec)
     _predicate_spec.loader.exec_module(_predicate_module)
     mla_2cta_pads_dense_qheads = _predicate_module.mla_2cta_pads_dense_qheads
+except (ImportError, FileNotFoundError, AttributeError):  # pragma: no cover
+    from sglang.kernels.ops.attention.flash_attn.cute.mla_head_padding import (
+        mla_2cta_pads_dense_qheads,
+    )
 
 __all__ = [
     "mla_2cta_pads_dense_qheads",
