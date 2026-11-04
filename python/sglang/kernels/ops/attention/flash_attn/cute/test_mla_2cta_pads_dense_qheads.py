@@ -115,3 +115,30 @@ def test_predicate_resolves_without_config_module(monkeypatch):
     predicate = _load_predicate()
     assert predicate(96, 1) is True
     assert predicate(64, 1) is False
+
+
+def test_predicate_resolves_without_sglang_package(monkeypatch):
+    """The predicate must load with only its own directory on sys.path.
+
+    CI runs the pure-Python tests without installing sglang; this guards the
+    fallback import path used by pack_gqa in that environment.
+    """
+    cute_dir = pathlib.Path(__file__).parent
+    monkeypatch.syspath_prepend(str(cute_dir))
+    for name in list(sys.modules):
+        if name == "sglang" or name.startswith("sglang."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.delitem(sys.modules, "mla_head_padding", raising=False)
+    spec = importlib.util.spec_from_file_location(
+        "mla_head_padding", cute_dir / "mla_head_padding.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    predicate = module.mla_2cta_pads_dense_qheads
+    assert predicate(64, True) is False
+    assert predicate(65, True) is True
+    assert predicate(127, True) is True
+    assert predicate(128, True) is False
+    assert predicate(96, False) is False
+    assert predicate(0, True) is False
+    assert predicate(-1, True) is False

@@ -15,7 +15,12 @@ try:
         mla_2cta_pads_dense_qheads,
     )
 except ImportError:  # pragma: no cover - standalone predicate tests
-    from mla_head_padding import mla_2cta_pads_dense_qheads
+    # Fall back to a sibling-module import so the predicate resolves when the
+    # sglang package is not installed and only this directory is on PYTHONPATH.
+    try:
+        from mla_head_padding import mla_2cta_pads_dense_qheads
+    except ImportError:
+        from .mla_head_padding import mla_2cta_pads_dense_qheads
 
 __all__ = [
     "mla_2cta_pads_dense_qheads",

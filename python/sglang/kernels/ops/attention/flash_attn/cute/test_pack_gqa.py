@@ -1,5 +1,6 @@
 import importlib.util
 import pathlib
+import sys
 
 import pytest
 
@@ -14,6 +15,38 @@ def _load_predicate():
 
 
 mla_2cta_pads_dense_qheads = _load_predicate()
+
+
+def test_pack_gqa_imports_without_sglang_package(monkeypatch):
+    """pack_gqa must resolve the predicate with only its own dir on sys.path.
+
+    This mirrors the CI smoke path: no sglang install, no CUDA deps, just
+    PYTHONPATH pointing at the cute directory.
+    """
+    cute_dir = pathlib.Path(__file__).parent
+    monkeypatch.syspath_prepend(str(cute_dir))
+    # Drop any cached sglang modules so the fallback import path is exercised.
+    for name in list(sys.modules):
+        if name == "sglang" or name.startswith("sglang."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.delitem(sys.modules, "pack_gqa", raising=False)
+    monkeypatch.delitem(sys.modules, "mla_head_padding", raising=False)
+    spec = importlib.util.spec_from_file_location(
+        "pack_gqa", cute_dir / "pack_gqa.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except ImportError as exc:  # pragma: no cover - CUDA deps absent in CI
+        pytest.skip(f"pack_gqa needs CUDA/CuTe deps: {exc}")
+    predicate = module.mla_2cta_pads_dense_qheads
+    assert predicate(64, True) is False
+    assert predicate(65, True) is True
+    assert predicate(127, True) is True
+    assert predicate(128, True) is False
+    assert predicate(96, False) is False
+    assert predicate(0, True) is False
+    assert predicate(-1, True) is False
 
 
 @pytest.mark.parametrize(
