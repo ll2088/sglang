@@ -58,6 +58,10 @@ def _load_pack_gqa_by_path():
         spec.loader.exec_module(module)
     except (ImportError, ModuleNotFoundError):
         return None
+    except Exception:
+        # pack_gqa imports CUDA/CuTe at module scope; any failure there means
+        # the CUDA path is unavailable, not that the predicate is broken.
+        return None
     return module
 
 
