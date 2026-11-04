@@ -73,6 +73,33 @@ def test_predicate_loads_without_config_module(monkeypatch):
     assert predicate(64, 1) is False
 
 
+def test_pack_gqa_predicate_fallback_without_config_module(monkeypatch):
+    """pack_gqa must resolve the predicate via its sibling module when config is absent.
+
+    This is the CPU-only path used by CI without CUDA/CuTe or the sglang package:
+    the predicate is loaded by file path from mla_head_padding.py, so a missing
+    flash_attn.cute.config must not raise ImportError.
+    """
+    monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
+    cute_dir = pathlib.Path(__file__).parent
+    spec = importlib.util.spec_from_file_location(
+        "_fa_cute_pack_gqa_no_config", cute_dir / "pack_gqa.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except (ImportError, ModuleNotFoundError):
+        pytest.skip("pack_gqa needs CUDA/CuTe deps")
+    predicate = module.mla_2cta_pads_dense_qheads
+    assert predicate(64, True) is False
+    assert predicate(65, True) is True
+    assert predicate(127, True) is True
+    assert predicate(128, True) is False
+    assert predicate(96, False) is False
+    assert predicate(0, True) is False
+    assert predicate(-1, True) is False
+
+
 def test_predicate_loads_without_sglang_or_cuda_deps(monkeypatch):
     """The predicate must load with sglang/cutlass/torch/quack blocked."""
     for name in list(sys.modules):
