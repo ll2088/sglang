@@ -15,8 +15,8 @@ import pytest
 
 def _load_predicate():
     """Load the predicate without importing the sglang package (no CUDA deps)."""
-    path = pathlib.Path(__file__).with_name("pack_gqa.py")
-    spec = importlib.util.spec_from_file_location("fa_cute_pack_gqa", path)
+    path = pathlib.Path(__file__).with_name("mla_head_padding.py")
+    spec = importlib.util.spec_from_file_location("fa_cute_mla_head_padding", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.mla_2cta_pads_dense_qheads
@@ -83,8 +83,8 @@ def test_non_padded_heads_keep_identity_order(nheads):
 def test_predicate_resolves_without_config_module(monkeypatch):
     """The predicate must be importable even if a separate config module is absent.
 
-    The rule lives in pack_gqa, so importing it must not require
-    ``flash_attn.cute.config`` to exist.
+    The rule lives in mla_head_padding (re-exported by pack_gqa), so importing it
+    must not require ``flash_attn.cute.config`` to exist.
     """
     monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
     predicate = _load_predicate()

@@ -6,8 +6,8 @@ import pytest
 
 def _load_predicate():
     """Load the predicate without importing the sglang package (no CUDA deps)."""
-    path = pathlib.Path(__file__).with_name("pack_gqa.py")
-    spec = importlib.util.spec_from_file_location("fa_cute_pack_gqa", path)
+    path = pathlib.Path(__file__).with_name("mla_head_padding.py")
+    spec = importlib.util.spec_from_file_location("fa_cute_mla_head_padding", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.mla_2cta_pads_dense_qheads
