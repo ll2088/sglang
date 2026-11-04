@@ -73,6 +73,25 @@ def test_predicate_loads_without_config_module(monkeypatch):
     assert predicate(64, 1) is False
 
 
+def test_accepts_dense_qheads_without_config_module(monkeypatch):
+    """The acceptance rule resolves without a config module and matches the design."""
+    monkeypatch.setitem(sys.modules, "flash_attn.cute.config", None)
+    path = pathlib.Path(__file__).with_name("mla_head_padding.py")
+    spec = importlib.util.spec_from_file_location("fa_cute_mla_head_padding", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    accepts = module.mla_2cta_accepts_dense_qheads
+    assert accepts(128, 1) is True
+    assert accepts(64, 1) is True
+    assert accepts(96, 1) is True
+    assert accepts(65, 1) is True
+    assert accepts(127, 1) is True
+    assert accepts(24, 1) is False
+    assert accepts(96, 2) is False
+    assert accepts(0, 1) is False
+    assert accepts(-1, 1) is False
+
+
 def test_pack_gqa_predicate_fallback_without_config_module(monkeypatch):
     """pack_gqa must resolve the predicate via its sibling module when config is absent.
 

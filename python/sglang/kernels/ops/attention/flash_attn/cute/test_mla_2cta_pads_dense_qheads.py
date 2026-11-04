@@ -15,13 +15,18 @@ import textwrap
 import pytest
 
 
-def _load_predicate():
-    """Load the predicate without importing the sglang package (no CUDA deps)."""
+def _load_predicate_module():
+    """Load the pure-Python rule module without importing the sglang package."""
     path = pathlib.Path(__file__).with_name("mla_head_padding.py")
     spec = importlib.util.spec_from_file_location("fa_cute_mla_head_padding", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.mla_2cta_pads_dense_qheads
+    return module
+
+
+def _load_predicate():
+    """Load the predicate without importing the sglang package (no CUDA deps)."""
+    return _load_predicate_module().mla_2cta_pads_dense_qheads
 
 
 mla_2cta_pads_dense_qheads = _load_predicate()
@@ -117,6 +122,21 @@ def test_predicate_resolves_without_config_module(monkeypatch):
     predicate = _load_predicate()
     assert predicate(96, 1) is True
     assert predicate(64, 1) is False
+
+
+def test_accepts_dense_qheads_matches_padding_rule():
+    """The acceptance rule is divisibility or the 65-127 MQA padding window."""
+    module = _load_predicate_module()
+    accepts = module.mla_2cta_accepts_dense_qheads
+    assert accepts(128, 1) is True
+    assert accepts(64, 1) is True
+    assert accepts(96, 1) is True
+    assert accepts(65, 1) is True
+    assert accepts(127, 1) is True
+    assert accepts(24, 1) is False
+    assert accepts(96, 2) is False
+    assert accepts(0, 1) is False
+    assert accepts(-1, 1) is False
 
 
 def test_predicate_resolves_without_config_module_boundaries(monkeypatch):

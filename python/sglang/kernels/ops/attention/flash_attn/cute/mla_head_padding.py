@@ -19,3 +19,15 @@ def mla_2cta_pads_dense_qheads(nheads_per_kv: int, num_heads_kv) -> bool:
     keep raising because padding would waste over half of each tile's MMA rows.
     """
     return bool(num_heads_kv) and num_heads_kv == 1 and 64 < nheads_per_kv < 128
+
+
+def mla_2cta_accepts_dense_qheads(nheads_per_kv: int, num_heads_kv) -> bool:
+    """Whether dense 2CTA MLA accepts this Q-head count without re-routing.
+
+    The 128-row cluster tile requires the head count to divide 128, except for
+    MQA with 65 to 127 heads, which the kernel pads in-kernel. This predicate is
+    the single rule used by both the kernel constructor and config validation.
+    """
+    return 128 % nheads_per_kv == 0 or mla_2cta_pads_dense_qheads(
+        nheads_per_kv, num_heads_kv
+    )
