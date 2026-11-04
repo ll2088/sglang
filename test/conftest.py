@@ -5,36 +5,14 @@
 #
 # Do not add repository-wide fixtures or imports here; put them in a dedicated
 # conftest.py closer to the tests that need them.
-
-# The Dockerfile permission checks are stdlib-only and must not import
-# sglang or mutate sys.path during collection. Mutating sys.path here
-# previously risked pulling in the repository root package and triggering a
-# full sglang dependency install in CI setup. Keep this file import-free so
-# `pytest -c test/pytest.ini test/test_dockerfile_permissions.py` runs under a
-# bare python3 interpreter.
 #
-# Explicitly drop the repository root from sys.path so a stray `import sglang`
-# in a collected module cannot resolve to the in-tree package and start a
-# dependency install. This is a no-op when the root is not on sys.path.
-import sys as _sys
-
-_REPO_ROOT = str(__file__.rsplit("/", 2)[0]) if "/" in __file__ else ""
-if _REPO_ROOT and _REPO_ROOT in _sys.path:
-    _sys.path.remove(_REPO_ROOT)
-
-# Block accidental resolution of the in-tree sglang package during collection.
-# The permission checks are stdlib-only; if any collected module tries to import
-# sglang, fail fast instead of triggering a full dependency install.
+# The checks in test_dockerfile_permissions.py are stdlib-only and never import
+# sglang. This conftest deliberately does not touch sys.path or sys.modules:
+# mutating them during collection is fragile (it depends on how pytest was
+# invoked and on the caller's CWD) and cannot prevent a CI setup step from
+# running `pip install -e python` before pytest starts. Keeping this file
+# import-free means collection works under a bare python3 interpreter and
+# cannot itself trigger a dependency install.
 #
-# A None entry in sys.modules makes `import sglang` raise ImportError instead of
-# resolving to the in-tree package. This must be set before pytest imports any
-# collected module, which is why it lives in conftest.py at the test root.
-if "sglang" not in _sys.modules:
-    _sys.modules["sglang"] = None
-
-# Also drop any already-imported sglang submodules so a partially initialized
-# package cannot be reused during collection.
-for _name in [m for m in _sys.modules if m == "sglang" or m.startswith("sglang.")]:
-    if _sys.modules[_name] is not None:
-        del _sys.modules[_name]
-_sys.modules["sglang"] = None
+# CI must invoke the checks with `-c test/pytest.ini` (or run the standalone
+# runner) so the repository-root pytest configuration is not picked up.
