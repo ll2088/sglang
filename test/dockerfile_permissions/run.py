@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Standalone runner for the stdlib-only Dockerfile permission checks.
 
-Usage::
-
+Usage:
     python3 test/dockerfile_permissions/run.py
 
-This entry point never imports sglang or pytest, so CI can run it with a bare
-``python3`` interpreter.
+This entry point requires only the Python standard library, so CI can run it
+without installing sglang or pytest.
 """
 
 import os
