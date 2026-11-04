@@ -25,5 +25,16 @@ if _REPO_ROOT and _REPO_ROOT in _sys.path:
 # Block accidental resolution of the in-tree sglang package during collection.
 # The permission checks are stdlib-only; if any collected module tries to import
 # sglang, fail fast instead of triggering a full dependency install.
+#
+# A None entry in sys.modules makes `import sglang` raise ImportError instead of
+# resolving to the in-tree package. This must be set before pytest imports any
+# collected module, which is why it lives in conftest.py at the test root.
 if "sglang" not in _sys.modules:
     _sys.modules["sglang"] = None
+
+# Also drop any already-imported sglang submodules so a partially initialized
+# package cannot be reused during collection.
+for _name in [m for m in _sys.modules if m == "sglang" or m.startswith("sglang.")]:
+    if _sys.modules[_name] is not None:
+        del _sys.modules[_name]
+_sys.modules["sglang"] = None
