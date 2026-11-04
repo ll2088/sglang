@@ -99,7 +99,9 @@ __global__ void per_token_quant_fp8_cta_kernel(
     output_s[token_id] = scale_smem;
   }
   __syncthreads();
-  const float scale_inv = 1.0f / scale_smem;
+  // A zero scale only comes with all-zero data, which must quantize to zero:
+  // 0 * inf is NaN, and the saturating cvt, unlike a clamp, keeps NaN.
+  const float scale_inv = scale_smem == 0.0f ? 0.0f : 1.0f / scale_smem;
 
   for (uint32_t i = threadIdx.x; i < num_vecs; i += blockDim.x) {
     input_vec_t input_vec;

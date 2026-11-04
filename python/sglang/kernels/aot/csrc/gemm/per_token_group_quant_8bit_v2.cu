@@ -6,6 +6,17 @@
 
 #include "utils.h"
 
+// FP8 quant kernels convert two values per saturating `cvt`, see
+// per_token_group_quant_8bit_kernel. The instruction exists from sm_89;
+// lower the minimum arch once validated there.
+#define SGL_FP8_CVT_X2_MIN_ARCH 1000
+#if !defined(USE_ROCM) && defined(__CUDA_ARCH__) && \
+    __CUDA_ARCH__ >= SGL_FP8_CVT_X2_MIN_ARCH
+  #define SGL_FP8_CVT_X2 1
+#else
+  #define SGL_FP8_CVT_X2 0
+#endif
+
 template <int THREADS_PER_SUBWARP>
 __device__ __forceinline__ float GroupReduceMax(float val, const int tid) {
   unsigned mask = 0xffffffff;
@@ -382,10 +393,15 @@ __global__ void per_token_group_quant_8bit_kernel(
             float2 inputx2 = {static_cast<float>(input_primary_vec[j]), static_cast<float>(input_primary_vec[j + 1])};
             float2 outputx2 = fmul2_rn(inputx2, y_scale_repeated);
 
+#if SGL_FP8_CVT_X2
+            // The saturating cvt replaces the explicit clamp; NaN stays NaN.
+            output_buf_ptr[j / 2] = __nv_cvt_float2_to_fp8x2(outputx2, __NV_SATFINITE, __NV_E4M3);
+#else
             outputx2.x = fminf(fmaxf(outputx2.x, dst_dtype_info::MIN), dst_dtype_info::MAX);
             outputx2.y = fminf(fmaxf(outputx2.y, dst_dtype_info::MIN), dst_dtype_info::MAX);
 
             output_buf_ptr[j / 2] = __nv_cvt_float2_to_fp8x2(outputx2, __NV_SATFINITE, __NV_E4M3);
+#endif
           }
         } else {
           const auto output_buf_ptr = reinterpret_cast<DST_DTYPE*>(&output_buf);

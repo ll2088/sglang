@@ -179,5 +179,68 @@ def test_per_token_group_quant_with_column_major(
         raise
 
 
+@pytest.mark.parametrize("num_tokens, hidden_dim, group_size", [(1, 128, 128), (4, 384, 128), (127, 1664, 128)])
+@pytest.mark.parametrize("dst_dtype", [fp8_type_, torch.int8])
+def test_per_token_group_quant_pair_cvt_consistency(num_tokens, hidden_dim, group_size, dst_dtype):
+    """Pair cvt (sm_100+) must match the element-wise fallback bit for bit."""
+    x, _ = create_per_token_group_quant_test_data(
+        num_tokens=num_tokens, hidden_dim=hidden_dim, num_ranks=None, flags=_ROW_MAJOR
+    )
+    x_q, x_s = sglang_per_token_group_quant_8bit(
+        x=x, masked_m=None, group_size=group_size, eps=1e-10, dst_dtype=dst_dtype, **_ROW_MAJOR
+    )
+    x_q_ref, x_s_ref = triton_per_token_group_quant_8bit(
+        x=x, masked_m=None, group_size=group_size, eps=1e-10, dst_dtype=dst_dtype, **_ROW_MAJOR
+    )
+    assert_all_close_or_tiny_diff(x_q_ref, x_q)
+    torch.testing.assert_close(x_s_ref.contiguous(), x_s.contiguous(), rtol=1e-3, atol=1e-5)
+
+
+@pytest.mark.parametrize("dst_dtype", [fp8_type_, torch.int8])
+def test_per_token_group_quant_saturation_boundary(dst_dtype):
+    """Out-of-range, NaN/Inf and signed-zero inputs must saturate without UB."""
+    x = torch.tensor(
+        [1e30, -1e30, float("inf"), float("-inf"), float("nan"), 0.0, -0.0] * 32,
+        dtype=torch.float32,
+        device="cuda",
+    ).reshape(1, -1)
+    x_q, x_s = sglang_per_token_group_quant_8bit(
+        x=x, masked_m=None, group_size=128, eps=1e-10, dst_dtype=dst_dtype, **_ROW_MAJOR
+    )
+    assert torch.isfinite(x_s).all()
+    if dst_dtype == fp8_type_:
+        assert torch.isfinite(x_q.float()).all()
+
+
+def test_per_token_group_quant_zero_scale_safe_reciprocal():
+    """An all-zero group has a zero scale and must quantize to zero, not NaN."""
+    x = torch.zeros(4, 256, dtype=torch.bfloat16, device="cuda")
+    x_q, x_s = sglang_per_token_group_quant_8bit(
+        x=x, masked_m=None, group_size=128, eps=1e-10, dst_dtype=fp8_type_, **_ROW_MAJOR
+    )
+    assert torch.count_nonzero(x_q.view(torch.uint8)) == 0
+    assert torch.count_nonzero(x_q.float() * x_s.repeat_interleave(128, dim=-1)) == 0
+
+
+def test_merge_attn_states_fp8_end_to_end():
+    """merge_attn_states output must match the pre-change reference."""
+    from sglang.srt.layers.attention.merge_attn_states import merge_state_v2
+
+    torch.manual_seed(0)
+    num_tokens, num_heads, head_size = 8, 4, 128
+    v_a = torch.randn(num_tokens, num_heads, head_size, dtype=torch.bfloat16, device="cuda")
+    v_b = torch.randn(num_tokens, num_heads, head_size, dtype=torch.bfloat16, device="cuda")
+    s_a = torch.randn(num_tokens, num_heads, dtype=torch.float32, device="cuda")
+    s_b = torch.randn(num_tokens, num_heads, dtype=torch.float32, device="cuda")
+    v_merged = torch.empty_like(v_a)
+    s_merged = torch.empty_like(s_a)
+    merge_state_v2(v_a, s_a, v_b, s_b, v_merged, s_merged)
+
+    p = torch.softmax(s_a, dim=-1)
+    q = torch.softmax(s_b, dim=-1)
+    ref = (v_a.float() * p.unsqueeze(-1) + v_b.float() * q.unsqueeze(-1)) / (p + q).unsqueeze(-1)
+    torch.testing.assert_close(v_merged.float(), ref, rtol=1e-2, atol=1e-2)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__]))
