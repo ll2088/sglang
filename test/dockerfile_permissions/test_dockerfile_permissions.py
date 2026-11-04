@@ -34,6 +34,16 @@ from checks import (  # noqa: E402  (re-exported for pytest collection)
 )
 
 
+def test_checks_module_is_stdlib_only():
+    """The checks module must not import sglang or pytest."""
+    import checks
+
+    with open(checks.__file__, "r", encoding="utf-8") as handle:
+        source = handle.read()
+    assert "import sglang" not in source
+    assert "import pytest" not in source
+
+
 def test_checks_pass():
     """All stdlib-only checks must pass on the current tree."""
     from checks import CHECKS
