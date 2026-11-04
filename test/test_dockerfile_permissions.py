@@ -14,19 +14,25 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE / "dockerfile_permissions"))
 
-from test_dockerfile_permissions import (  # noqa: E402,F401
+from checks import (  # noqa: E402,F401
+    CHECKS,
     DOCKERFILES,
     HARDENED_DOCKERFILES,
     READMES,
     REPO_ROOT,
-    _readme_keyword_hit_count,
-    _readme_keyword_hits_per_file,
-    _run_standalone,
+    missing_paths,
+    readme_keyword_hit_count,
+    readme_keyword_hits_per_file,
     test_devcontainer_workspace_not_world_writable,
     test_minimal_permission_statements,
     test_no_world_writable_permissions,
     test_readme_non_root_cache_guidance,
 )
+
+# Backwards-compatible aliases for callers that used the old private names.
+_readme_keyword_hit_count = readme_keyword_hit_count
+_readme_keyword_hits_per_file = readme_keyword_hits_per_file
+_missing_paths = missing_paths
 
 DOCKERFILES = [
     REPO_ROOT / "docker" / "Dockerfile",
@@ -131,12 +137,7 @@ def _check_readme_non_root_cache_guidance(readme: Path) -> None:
 
 def _run_checks() -> int:
     failures = 0
-    for check in (
-        test_no_world_writable_permissions,
-        test_minimal_permission_statements,
-        test_readme_non_root_cache_guidance,
-        test_devcontainer_workspace_not_world_writable,
-    ):
+    for check in CHECKS:
         try:
             check()
         except AssertionError as exc:
@@ -145,42 +146,6 @@ def _run_checks() -> int:
         else:
             print(f"PASS {check.__name__}")
     return 1 if failures else 0
-
-
-def _missing_paths() -> list[Path]:
-    paths = [*DOCKERFILES, *READMES]
-    return [path for path in paths if not path.is_file()]
-
-
-def test_no_world_writable_permissions() -> None:
-    for dockerfile in DOCKERFILES:
-        _check_no_world_writable_permissions(dockerfile)
-
-
-def test_minimal_permission_statements() -> None:
-    for dockerfile in HARDENED_DOCKERFILES:
-        _check_minimal_permission_statements(dockerfile)
-
-
-def test_readme_non_root_cache_guidance() -> None:
-    for readme in READMES:
-        _check_readme_non_root_cache_guidance(readme)
-
-
-def test_devcontainer_workspace_not_world_writable() -> None:
-    """The devcontainer image must not leave /sgl-workspace world-writable."""
-    devcontainer = REPO_ROOT / ".devcontainer" / "Dockerfile"
-    content = _read(devcontainer)
-    assert not WORLD_WRITABLE.search(content), (
-        f"{devcontainer} must not grant world-writable permissions"
-    )
-    assert not WORKSPACE_WORLD_WRITABLE.search(content), (
-        f"{devcontainer} must not make /sgl-workspace world-writable"
-    )
-    assert CHOWN.search(content), f"{devcontainer} should chown the runtime directory"
-    assert MIN_PERMISSION.search(content), (
-        f"{devcontainer} should remove group/other write access with chmod -R go-w"
-    )
 
 
 def main() -> int:
@@ -409,13 +374,7 @@ def _run_standalone() -> int:
         return 1
 
     failures = 0
-    checks = (
-        test_no_world_writable_permissions,
-        test_minimal_permission_statements,
-        test_readme_non_root_cache_guidance,
-        test_devcontainer_workspace_not_world_writable,
-    )
-    for check in checks:
+    for check in CHECKS:
         try:
             check()
         except AssertionError as exc:
