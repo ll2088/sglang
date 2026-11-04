@@ -788,6 +788,11 @@ COPY --from=framework_final /opt/sglang/bin/pip* /opt/sglang/bin/
 # Copy SGLang workspace
 COPY --from=framework_final /sgl-workspace /sgl-workspace
 
+# The runtime image runs as root by default; when run as a non-root user, the
+# workspace must not be world-writable because it is loaded into the serving
+# process. Keep root ownership and remove group/other write access.
+RUN chown -R root:root /sgl-workspace && chmod -R go-w /sgl-workspace
+
 # Copy sgl-model-gateway binary
 COPY --from=framework_final /opt/sglang/bin/sgl-model-gateway /opt/sglang/bin/sgl-model-gateway
 

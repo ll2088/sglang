@@ -138,6 +138,20 @@ The tool generates:
 
 Use this to identify large kernels and potential template instantiation bloat.
 
+## Running as a non-root user
+
+The build image keeps `/sgl-kernel` owned by root and non-writable for group and others. If you run the container as a non-root user, point the build and cache directories at a writable location:
+
+```bash
+mkdir -p /tmp/sgl-kernel-cache
+docker run --user $(id -u) -v "$PWD/cache:/cache" \
+  -e CCACHE_DIR=/cache/ccache \
+  -e PIP_CACHE_DIR=/cache/pip \
+  <your usual docker run options> <image>
+```
+
+Without a writable cache directory, ccache and pip may fail to write their caches.
+
 ## FAQ
 - Q: Segmentation fault with CUDA 12.6
 - A: Update ptxas to 12.8, reference: [segment fault error](https://github.com/Dao-AILab/flash-attention/issues/1453)

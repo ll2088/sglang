@@ -33,3 +33,18 @@ curl -X POST http://localhost:8000/v2/models/character_generation/generate \
 }'
 
 ```
+
+## Running as a non-root user
+
+The image installs SGLang under `/opt/sglang`, which is owned by root and not writable by group or others. To run the container as a non-root user, mount a writable cache directory and point the relevant environment variables at it:
+
+```bash
+mkdir -p ext_cache
+docker run -ti --gpus=all --network=host --user $(id -u) \
+  -v "$PWD/ext_cache:/ext_cache" \
+  -e TORCH_EXTENSIONS_DIR=/ext_cache \
+  -e SGLANG_CACHE_DIR=/ext_cache \
+  -v ./models:/mnt/models sglang-triton
+```
+
+Without this, JIT-compiled kernels and torch extension builds may fail because the default cache locations are not writable.

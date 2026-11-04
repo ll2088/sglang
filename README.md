@@ -91,6 +91,21 @@ pip install -e "python"
 
 In an activated virtual environment, you can use `uv pip install --prerelease=allow -e "python"` instead. See the [development guide](https://docs.sglang.io/docs/developer_guide/development_guide_using_docker) for container setup and testing.
 
+### Running the container as a non-root user
+
+The runtime image keeps `/sgl-workspace` owned by root and non-writable for group and others (`chmod -R go-w`), because the code and precompiled kernels there are loaded into the serving process. If you run the image as a different user, point the JIT/cache directories at a directory that user can write, for example a mounted volume:
+
+```bash
+mkdir -p ext_cache
+chown -R $(id -u) ext_cache
+docker run --user $(id -u) -v "$PWD/ext_cache:/ext_cache" \
+  -e TORCH_EXTENSIONS_DIR=/ext_cache \
+  -e SGLANG_CACHE_DIR=/ext_cache \
+  <your usual docker run options> lmsysorg/sglang:latest
+```
+
+Without a writable cache directory, JIT-compiled kernels and torch extension builds may fail or fall back to slower paths.
+
 ### Contribute
 
 1. Fork the repository and create a branch for your changes. For larger changes, discuss your proposal in a [GitHub issue](https://github.com/sgl-project/sglang/issues) or on [Slack](https://slack.sglang.io/).
