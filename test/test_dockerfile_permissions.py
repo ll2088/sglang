@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Stdlib-only entrypoint for the Dockerfile permission/documentation checks.
+"""Entry point for the stdlib-only Dockerfile permission checks.
 
-This file exists so CI can run the checks with a bare ``python3`` interpreter
-without installing sglang or any third-party dependency. It delegates to the
-canonical implementation in ``test/dockerfile_permissions/checks.py`` and
-supports both direct execution and pytest collection.
+Runs the checks directly when executed as a script, and exposes them as
+``test_*`` functions for pytest. This module must not import sglang or any
+third-party package so CI can run it with a bare ``python3`` interpreter.
 
 Usage:
     python3 test/test_dockerfile_permissions.py
@@ -55,17 +54,19 @@ def test_all_checks_pass():
 
 
 def main():
-    failures = []
+    failures = 0
     for check in ALL_CHECKS:
         try:
             check()
         except AssertionError as exc:
-            failures.append((check.__name__, str(exc)))
+            failures += 1
+            print(f"FAIL {check.__name__}: {exc}", file=sys.stderr)
+        else:
+            print(f"PASS {check.__name__}")
     if failures:
-        for name, message in failures:
-            print(f"FAIL: {name}: {message}", file=sys.stderr)
+        print(f"{failures} check(s) failed", file=sys.stderr)
         return 1
-    print(f"OK: {len(ALL_CHECKS)} checks passed")
+    print("all checks passed")
     return 0
 
 
