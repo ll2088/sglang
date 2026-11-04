@@ -90,6 +90,8 @@ def _load_predicate():
 def _load_standalone_tests():
     """Load the CPU-only standalone test module by file path."""
     path = pathlib.Path(__file__).with_name("test_mla_head_padding_standalone.py")
+    if not path.exists():
+        pytest.skip("test_mla_head_padding_standalone.py is not present")
     spec = importlib.util.spec_from_file_location(
         "_fa_cute_mla_head_padding_standalone", path
     )
