@@ -1,8 +1,13 @@
-"""Tests for stream error detection in multimodal benchmark clients.
+"""Tests for stream error detection in the multimodal benchmark client.
 
-A stream that delivers output and then a server ``error`` envelope must be
+A stream that delivers tokens and then a server ``error`` event must be
 reported as failed, while a clean stream must still be reported as
-successful. These tests do not need a GPU or a running server.
+successful. The helpers under test live in
+``sglang.multimodal_gen.benchmarks.bench_serving``.
+
+This file is the single canonical copy of these tests. It is loaded by path
+so it does not require the ``sglang`` package to be installed, and it lives
+next to the module it exercises to avoid duplicate pytest module names.
 """
 
 import importlib.util
@@ -12,128 +17,172 @@ from pathlib import Path
 
 import pytest
 
-_BENCH_DIR = Path(__file__).resolve().parent
+
+_BENCH_SERVING_PATH = Path(__file__).resolve().with_name("bench_serving.py")
 
 
-def _load_module(name: str, filename: str):
-    """Load a benchmark module by path without importing the sglang package.
-
-    Importing ``sglang.multimodal_gen.benchmarks`` pulls in the full runtime
-    dependency set, which is unnecessary for these pure-Python helpers and
-    makes the tests fail in minimal environments. Loading the file directly
-    keeps the tests focused on the stream classification logic.
-    """
-    module_name = f"_stream_error_test_{name}"
-    if module_name in sys.modules:
-        return sys.modules[module_name]
+def _load_bench_serving():
+    """Load bench_serving.py by path so the test needs no installed package."""
     spec = importlib.util.spec_from_file_location(
-        module_name, _BENCH_DIR / filename
+        "multimodal_bench_serving", _BENCH_SERVING_PATH
     )
-    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
 
-_bench_serving = _load_module("bench_serving", "bench_serving.py")
-_request_manifest = _load_module("request_manifest", "request_manifest.py")
-
-_classify_stream_payload = _bench_serving._classify_stream_payload
-_extract_stream_error = _bench_serving._extract_stream_error
-load_request_manifest = _request_manifest.load_request_manifest
-
-STREAM_ERROR_MESSAGE = "internal server error during generation"
+bench_serving = _load_bench_serving()
 
 
-def _error_payload(message: str = STREAM_ERROR_MESSAGE) -> dict:
-    return {
-        "error": {
-            "message": message,
-            "type": "InternalServerError",
-            "param": None,
-            "code": 500,
+class _FakeOutput:
+    """Minimal stand-in for RequestFuncOutput used by the finalizer."""
+
+    def __init__(self):
+        self.success = False
+        self.error = ""
+
+
+_STREAM_ERROR_MESSAGE = "internal server error during generation"
+
+
+def _sse(payload) -> bytes:
+    return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+def _token_chunk(text: str) -> bytes:
+    return _sse({"choices": [{"text": text}]})
+
+
+def _error_chunk(message: str = _STREAM_ERROR_MESSAGE) -> bytes:
+    return _sse(
+        {
+            "error": {
+                "message": message,
+                "type": "InternalServerError",
+                "param": None,
+                "code": 500,
+            }
         }
-    }
-
-
-def test_extract_stream_error_returns_json_for_object() -> None:
-    payload = _error_payload()
-    error = _extract_stream_error(payload)
-    assert error is not None
-    assert STREAM_ERROR_MESSAGE in error
-    assert json.loads(error) == payload["error"]
-
-
-def test_extract_stream_error_returns_string_as_is() -> None:
-    assert _extract_stream_error({"error": STREAM_ERROR_MESSAGE}) == (
-        STREAM_ERROR_MESSAGE
     )
 
 
-def test_extract_stream_error_ignores_clean_payload() -> None:
-    assert _extract_stream_error({"choices": [{"text": "a"}]}) is None
-    assert _extract_stream_error(None) is None
+def test_error_event_after_tokens_is_detected():
+    """Tokens followed by an error envelope must surface the server error."""
+    chunk = _token_chunk("a") + _token_chunk("b") + _error_chunk()
+    assert bench_serving._stream_error_from_chunk(chunk) is not None
+    assert _STREAM_ERROR_MESSAGE in bench_serving._stream_error_from_chunk(chunk)
 
 
-def test_error_after_tokens_is_not_success() -> None:
-    """Tokens followed by an error envelope must be classified as failed."""
-    token_payload = {"choices": [{"text": "a"}]}
-    has_output, stream_error = _classify_stream_payload(token_payload)
+def test_error_event_marks_stream_failed():
+    """A stream that streamed tokens then failed must not be successful."""
+    output = _FakeOutput()
+    stream_error = bench_serving._stream_error_from_chunk(
+        _token_chunk("a") + _token_chunk("b") + _error_chunk()
+    )
+    bench_serving._finalize_stream_output(output, stream_error, True)
+    assert not output.success
+    assert _STREAM_ERROR_MESSAGE in output.error
+
+
+def test_error_takes_precedence_over_no_chunk_symptom():
+    """The server error wins over the missing-TTFT symptom message."""
+    output = _FakeOutput()
+    stream_error = bench_serving._stream_error_from_chunk(_error_chunk())
+    bench_serving._finalize_stream_output(output, stream_error, False)
+    assert not output.success
+    assert _STREAM_ERROR_MESSAGE in output.error
+    assert "Never received a valid chunk" not in output.error
+
+
+def test_clean_stream_is_successful():
+    """A clean token stream must still be reported as successful."""
+    output = _FakeOutput()
+    chunk = _token_chunk("a") + _token_chunk("b") + b"data: [DONE]\n\n"
+    stream_error = bench_serving._stream_error_from_chunk(chunk)
+    assert stream_error is None
+    bench_serving._finalize_stream_output(output, stream_error, True)
+    assert output.success
+    assert output.error == ""
+
+
+def test_no_chunk_stream_is_failed():
+    """A stream with no valid chunk and no error is still failed."""
+    output = _FakeOutput()
+    bench_serving._finalize_stream_output(output, None, False)
+    assert not output.success
+    assert "Never received a valid chunk" in output.error
+
+
+def test_classify_stream_payload_error_wins():
+    """An error envelope wins over output carried by the same payload."""
+    has_output, stream_error = bench_serving._classify_stream_payload(
+        {"choices": [{"text": "a"}], "error": {"message": "boom"}}
+    )
+    assert not has_output
+    assert stream_error is not None
+    assert "boom" in stream_error
+
+
+def test_classify_stream_payload_clean_output():
+    """A payload with choices and no error is classified as output."""
+    has_output, stream_error = bench_serving._classify_stream_payload(
+        {"choices": [{"text": "a"}]}
+    )
     assert has_output
     assert stream_error is None
 
-    has_output, stream_error = _classify_stream_payload(_error_payload())
-    assert not has_output
-    assert stream_error is not None
-    assert STREAM_ERROR_MESSAGE in stream_error
 
-    # The benchmark rule: an error envelope wins over tokens.
-    success = stream_error is None and has_output
-    assert not success
-
-
-def test_clean_stream_is_successful() -> None:
-    """Guard against over-eager error detection on a clean stream."""
-    payloads = [
-        {"choices": [{"text": "a"}]},
-        {"choices": [{"text": "b"}]},
-        {"data": [{"b64_json": "..."}]},
-    ]
-    saw_output = False
-    stream_error = None
-    for payload in payloads:
-        has_output, error = _classify_stream_payload(payload)
-        saw_output = saw_output or has_output
-        stream_error = stream_error or error
-
-    assert saw_output
-    assert stream_error is None
-    assert stream_error is None and saw_output
-
-
-def test_manifest_rejects_stream_error(tmp_path) -> None:
-    manifest = tmp_path / "manifest.jsonl"
-    manifest.write_text(
-        json.dumps(
-            {
-                "prompt": "a cat",
-                "error": {"message": STREAM_ERROR_MESSAGE, "code": 500},
-            }
-        )
-        + "\n",
-        encoding="utf-8",
+def test_iter_stream_payloads_skips_done_and_non_json():
+    """The [DONE] sentinel and non-JSON lines are skipped."""
+    chunk = (
+        b"event: message\n"
+        + _token_chunk("a")
+        + b": comment\n"
+        + b"data: [DONE]\n\n"
     )
-    with pytest.raises(ValueError, match="stream error"):
-        load_request_manifest(manifest)
+    payloads = list(bench_serving._iter_stream_payloads(chunk))
+    assert payloads == [{"choices": [{"text": "a"}]}]
 
 
-def test_manifest_accepts_null_error(tmp_path) -> None:
-    manifest = tmp_path / "manifest.jsonl"
-    manifest.write_text(
-        json.dumps({"prompt": "a cat", "error": None}) + "\n",
-        encoding="utf-8",
+def test_extract_stream_error_string_and_object():
+    """Both string and object error envelopes are normalized to a string."""
+    assert bench_serving._extract_stream_error({"error": "boom"}) == "boom"
+    as_object = bench_serving._extract_stream_error({"error": {"message": "boom"}})
+    assert as_object is not None
+    assert "boom" in as_object
+    assert bench_serving._extract_stream_error({"choices": []}) is None
+    assert bench_serving._extract_stream_error("not-a-dict") is None
+
+
+def test_error_stream_not_counted_in_metrics():
+    """A failed stream must not contribute to completed counts or throughput."""
+    ok = _FakeOutput()
+    bench_serving._finalize_stream_output(ok, None, True)
+    ok.latency = 1.0
+    ok.output_count = 1
+    ok.peak_memory_mb = 0.0
+
+    failed = _FakeOutput()
+    stream_error = bench_serving._stream_error_from_chunk(
+        _token_chunk("a") + _error_chunk()
     )
-    loaded = load_request_manifest(manifest)
-    assert len(loaded.requests) == 1
-    assert loaded.requests[0].prompt == "a cat"
+    bench_serving._finalize_stream_output(failed, stream_error, True)
+    failed.latency = 0.5
+    failed.output_count = 1
+    failed.peak_memory_mb = 0.0
+
+    class _Args:
+        num_outputs_per_prompt = 1
+
+    metrics = bench_serving.calculate_metrics(
+        [ok, failed],
+        total_duration=2.0,
+        requests_list=[None, None],
+        args=_Args(),
+        slo_enabled=False,
+    )
+    assert metrics["completed_requests"] == 1
+    assert metrics["failed_requests"] == 1
+    assert metrics["completed_outputs"] == 1
+    assert metrics["output_throughput_ops"] == pytest.approx(0.5)
