@@ -256,6 +256,88 @@ def _finalize_stream_output(
         output.error = "Never received a valid chunk to calculate TTFT."
 
 
+def _stream_error_from_chunk(chunk_bytes: bytes) -> Optional[str]:
+    """Return the first server error object carried by one SSE chunk.
+
+    The server may batch several ``data:`` events into a single chunk, so the
+    chunk is split and each payload is inspected. An ``error`` envelope wins
+    over any output carried by the same chunk: the server's error is the root
+    cause, while a partial result is only a symptom.
+    """
+    for payload in _iter_stream_payloads(chunk_bytes):
+        stream_error = _extract_stream_error(payload)
+        if stream_error is not None:
+            return stream_error
+    return None
+
+
+def _iter_stream_payloads(chunk_bytes: bytes):
+    """Yield decoded JSON payloads from one SSE chunk.
+
+    The server may batch several ``data:`` events into a single chunk, so a
+    chunk is split on newlines and each ``data:`` line is decoded on its own.
+    Non-JSON payloads (for example the ``[DONE]`` sentinel) are skipped.
+    """
+    for line in chunk_bytes.splitlines():
+        line = line.strip()
+        if not line.startswith(b"data:"):
+            continue
+        data = line[len(b"data:") :].strip()
+        if not data or data == b"[DONE]":
+            continue
+        try:
+            yield json.loads(data)
+        except json.JSONDecodeError:
+            continue
+
+
+def _classify_stream_payload(payload: Any) -> tuple[bool, Optional[str]]:
+    """Classify one streamed payload as (has_output, stream_error).
+
+    An ``error`` envelope wins over any output carried by the same payload:
+    the server's error is the root cause, while a partial result is only a
+    symptom. This mirrors the benchmark client rule that a stream which
+    delivered tokens and then failed must not be counted as successful.
+    """
+    stream_error = _extract_stream_error(payload)
+    if stream_error is not None:
+        return False, stream_error
+    if not isinstance(payload, dict):
+        return False, None
+    has_output = bool(
+        payload.get("choices")
+        or payload.get("data")
+        or payload.get("file_paths")
+        or payload.get("urls")
+        or payload.get("file_path")
+        or payload.get("url")
+        or payload.get("num_outputs")
+    )
+    return has_output, None
+
+
+def _finalize_stream_output(
+    output: RequestFuncOutput,
+    stream_error: Optional[str],
+    first_chunk_received: bool,
+) -> None:
+    """Apply the stream outcome to ``output``.
+
+    A server error event takes precedence over the "no valid chunk" symptom:
+    the error is the root cause, and a request that streamed tokens before
+    failing must not be counted as successful. Partial output is kept for
+    detailed saving.
+    """
+    if stream_error is not None:
+        output.success = False
+        output.error = stream_error
+    elif first_chunk_received:
+        output.success = True
+    else:
+        output.success = False
+        output.error = "Never received a valid chunk to calculate TTFT."
+
+
 async def async_request_image_sglang(
     input: RequestFuncInput,
     session: aiohttp.ClientSession,
