@@ -120,6 +120,12 @@ def load_request_manifest(path: str | Path) -> LoadedRequestManifest:
                     f"Manifest line {line_number}: each line must be a JSON object"
                 )
 
+            if record.get("error") is not None:
+                raise ValueError(
+                    f"Manifest line {line_number}: stream error: "
+                    f"{record['error']}"
+                )
+
             unknown_fields = set(record) - _ALLOWED_FIELDS
             if unknown_fields:
                 raise ValueError(

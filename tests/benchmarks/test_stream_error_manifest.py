@@ -50,6 +50,26 @@ def test_manifest_rejects_stream_error(manifest_module, tmp_path):
         manifest_module.load_request_manifest(path)
 
 
+def test_manifest_rejects_string_stream_error(manifest_module, tmp_path):
+    path = _write_manifest(
+        tmp_path,
+        [
+            {
+                "prompt": "hello",
+                "error": "internal server error during generation",
+            }
+        ],
+    )
+    with pytest.raises(ValueError, match="stream error"):
+        manifest_module.load_request_manifest(path)
+
+
+def test_manifest_accepts_null_error(manifest_module, tmp_path):
+    path = _write_manifest(tmp_path, [{"prompt": "hello", "error": None}])
+    loaded = manifest_module.load_request_manifest(path)
+    assert len(loaded.requests) == 1
+
+
 def test_manifest_accepts_clean_request(manifest_module, tmp_path):
     path = _write_manifest(tmp_path, [{"prompt": "hello"}])
     loaded = manifest_module.load_request_manifest(path)
