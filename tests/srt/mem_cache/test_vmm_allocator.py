@@ -27,6 +27,9 @@ requires_cuda = pytest.mark.skipif(
 
 
 def _require_vmm():
+    # VMM needs a CUDA/HIP driver exposing the cuMem*/hipMem* API. Hosts
+    # without a GPU, or with a driver that lacks the symbols, skip instead
+    # of failing so the suite stays meaningful on CPU-only CI runners.
     reason = vmm_unavailable_reason()
     if reason is not None:
         pytest.skip(f"VMM unavailable: {reason}")
