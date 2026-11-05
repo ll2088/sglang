@@ -62,6 +62,9 @@ def generate_summary(base_dir: Path) -> str:
             print(f"Warning: Failed to parse {result_path}: {e}", file=sys.stderr)
             lines.append(f"| {label} | ❌ Failed | - | - | - | - |")
             continue
+        if getattr(result, "error", None):
+            lines.append(f"| {label} | ❌ Failed | - | - | - | - |")
+            continue
 
         lines.append(
             f"| {label} | ✅ Success | "

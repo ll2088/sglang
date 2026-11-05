@@ -22,6 +22,8 @@ class BenchmarkResult:
         """Parse benchmark results from JSON file."""
         with path.open() as f:
             data = json.load(f)
+        if data.get("error") is not None:
+            raise ValueError(f"Benchmark stream error: {data['error']}")
         stats = data.get("aggregated_metrics", {}).get("stats", {})
         return cls(
             ttft_mean=float(stats.get("ttft", {}).get("mean", float("inf"))),

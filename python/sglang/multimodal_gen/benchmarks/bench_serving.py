@@ -156,6 +156,18 @@ def _populate_slo_ms_from_warmups(
     return updated
 
 
+def _extract_stream_error(payload: Any) -> Optional[str]:
+    """Return the server error object from a streamed chunk, if present."""
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if error is None:
+        return None
+    if isinstance(error, str):
+        return error
+    return json.dumps(error)
+
+
 async def async_request_image_sglang(
     input: RequestFuncInput,
     session: aiohttp.ClientSession,
@@ -201,8 +213,13 @@ async def async_request_image_sglang(
                 if response.status == 200:
                     resp_json = await response.json()
                     output.response_body = resp_json
-                    output.success = True
-                    output.output_count = _get_response_output_count(resp_json)
+                    stream_error = _extract_stream_error(resp_json)
+                    if stream_error is not None:
+                        output.error = stream_error
+                        output.success = False
+                    else:
+                        output.success = True
+                        output.output_count = _get_response_output_count(resp_json)
                     if "peak_memory_mb" in resp_json:
                         output.peak_memory_mb = resp_json["peak_memory_mb"]
                 else:
@@ -233,8 +250,13 @@ async def async_request_image_sglang(
                 if response.status == 200:
                     resp_json = await response.json()
                     output.response_body = resp_json
-                    output.success = True
-                    output.output_count = _get_response_output_count(resp_json)
+                    stream_error = _extract_stream_error(resp_json)
+                    if stream_error is not None:
+                        output.error = stream_error
+                        output.success = False
+                    else:
+                        output.success = True
+                        output.output_count = _get_response_output_count(resp_json)
                     if "peak_memory_mb" in resp_json:
                         output.peak_memory_mb = resp_json["peak_memory_mb"]
                 else:
@@ -382,9 +404,14 @@ async def async_request_video_sglang(
                     status_data = await response.json()
                     status = status_data.get("status")
                     if status == "completed":
-                        output.success = True
+                        stream_error = _extract_stream_error(status_data)
+                        if stream_error is not None:
+                            output.success = False
+                            output.error = stream_error
+                        else:
+                            output.success = True
+                            output.output_count = _get_response_output_count(status_data)
                         output.response_body = status_data
-                        output.output_count = _get_response_output_count(status_data)
                         if "peak_memory_mb" in status_data:
                             output.peak_memory_mb = status_data["peak_memory_mb"]
                         break

@@ -144,6 +144,12 @@ def load_request_manifest(path: str | Path) -> LoadedRequestManifest:
                 )
             request_ids.add(request_id)
 
+            if "error" in record:
+                raise ValueError(
+                    f"Manifest line {line_number}: request contains a stream error: "
+                    f"{record['error']}"
+                )
+
             sampling_params = record.get("sampling_params", {})
             if not isinstance(sampling_params, dict):
                 raise ValueError(

@@ -322,6 +322,16 @@ def generate_batch(
             results = [item for item in results if item is not None]
             if not results:
                 raise RuntimeError("Engine returned no generation result")
+            stream_error = next(
+                (
+                    getattr(item, "error", None)
+                    for item in results
+                    if getattr(item, "error", None)
+                ),
+                None,
+            )
+            if stream_error is not None:
+                raise RuntimeError(f"Generation stream error: {stream_error}")
 
             output_paths = [
                 str(item.output_file_path)
