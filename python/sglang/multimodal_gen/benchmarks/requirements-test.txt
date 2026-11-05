@@ -1,0 +1,11 @@
+# CPU-only dependencies for the multimodal benchmark stream-error tests.
+#
+# These tests exercise pure-Python SSE parsing helpers and must not pull in
+# the full GPU dependency tree (torch, quack-kernels, ...) on a CPU runner.
+# Install with:
+#   python -m pip install -r python/sglang/multimodal_gen/benchmarks/requirements-test.txt
+#   python -m pytest -q python/sglang/multimodal_gen/benchmarks/test_stream_error_event.py
+
+aiohttp>=3.9
+numpy>=1.24
+pytest>=7.0
