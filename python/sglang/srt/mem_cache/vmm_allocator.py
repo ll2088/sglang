@@ -322,6 +322,18 @@ class VmmBuffer:
         self._handles.append((handle.value, va, self.granularity))
         self._mapped_granules.add(granule_index)
 
+    def _unmap_granule(self, granule_index: int) -> None:
+        """Unmap and release the physical chunk backing one granule."""
+        for i, (handle, va, size) in enumerate(self._handles):
+            if va == self.base_ptr + granule_index * self.granularity:
+                try:
+                    self._lib.cuMemUnmap(va, size)
+                finally:
+                    self._lib.cuMemRelease(handle)
+                del self._handles[i]
+                self._mapped_granules.discard(granule_index)
+                return
+
     # -- public API -------------------------------------------------------
 
     @property
@@ -337,7 +349,9 @@ class VmmBuffer:
 
         Returns the number of bytes actually committed (a multiple of the
         granularity). Committing fewer bytes than already committed is a no-op,
-        which makes repeated calls idempotent.
+        which makes repeated calls idempotent. On a mapping failure the pages
+        mapped by this call are unmapped again before the error propagates, so
+        the buffer stays in its previous consistent state.
         """
         if self._freed:
             raise RuntimeError("VmmBuffer has been freed")
@@ -352,9 +366,18 @@ class VmmBuffer:
         # keeps repeated calls idempotent and monotonic.
         if target <= len(self._mapped_granules):
             return self.committed_bytes
-        for granule_index in range(target):
-            if granule_index not in self._mapped_granules:
-                self._map_granule(granule_index)
+        newly_mapped: list[int] = []
+        try:
+            for granule_index in range(target):
+                if granule_index not in self._mapped_granules:
+                    self._map_granule(granule_index)
+                    newly_mapped.append(granule_index)
+        except Exception:
+            # Roll back this call's mappings so a failed commit leaves the
+            # buffer exactly as it was; callers can then fall back safely.
+            for granule_index in reversed(newly_mapped):
+                self._unmap_granule(granule_index)
+            raise
         return self.committed_bytes
 
     def as_tensor(self, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:

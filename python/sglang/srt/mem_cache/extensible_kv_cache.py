@@ -117,6 +117,10 @@ class ExtensibleKVCachePlan:
         self.buffer.commit(num_blocks * self.bytes_per_block)
         return self.buffer.committed_bytes // self.bytes_per_block
 
+    def committed_num_blocks(self) -> int:
+        """Number of blocks whose physical pages are currently mapped."""
+        return self.buffer.committed_bytes // self.bytes_per_block
+
     def free(self) -> None:
         self.buffer.free()
 
@@ -160,9 +164,32 @@ def commit_extensible_kv_cache(
     """Measure free memory (if not supplied) and commit the final block count.
 
     Returns the number of committed blocks. Raises ``VmmUnavailableError`` on
-    mapping failure so the caller can fall back.
+    mapping failure so the caller can fall back. Repeated calls are idempotent
+    and monotonic: a later call never commits fewer blocks than an earlier one.
     """
     if free_bytes is None:
         free_bytes, _ = torch.cuda.mem_get_info(plan.buffer.device_index)
     num_blocks = plan.final_num_blocks(free_bytes)
     return plan.commit(num_blocks)
+
+
+def all_ranks_support_extensible_kv_cache(
+    local_supported: bool,
+    group=None,
+) -> bool:
+    """Return True only when every rank in ``group`` supports the VMM path.
+
+    The feature switch must be globally consistent: if one rank falls back to
+    the estimate-based path while another reserves VMM memory, the block count
+    all-reduce would mismatch and deadlock. ``group`` is any object exposing
+    ``all_reduce`` on a tensor; when it is None the local answer is returned.
+    """
+    if group is None:
+        return local_supported
+    flag = torch.tensor(
+        [1 if local_supported else 0],
+        dtype=torch.int32,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    )
+    group.all_reduce(flag, op=torch.distributed.ReduceOp.MIN)
+    return bool(flag.item())
