@@ -8,6 +8,7 @@ failed even if tokens arrived first, and a clean stream must stay successful.
 import importlib.util
 import json
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -22,8 +23,53 @@ _BENCH_DIR = (
 )
 
 
+def _install_import_stubs() -> None:
+    """Stub heavy runtime imports so benchmark modules load without a GPU stack.
+
+    ``bench_serving`` imports the multimodal runtime and test utilities at
+    module scope. Those pull in torch/CUDA and are irrelevant to the pure
+    stream-classification helpers under test, so provide inert stand-ins when
+    the real packages are unavailable. Real packages, when installed, win.
+    """
+    stubs = {
+        "aiohttp": {"ClientSession": object, "FormData": object},
+        "numpy": {"median": lambda values: 0.0},
+        "requests": {"get": lambda *a, **k: None},
+        "tqdm": {"asyncio": types.SimpleNamespace(tqdm=object), "tqdm": object},
+        "sglang.multimodal_gen.benchmarks.datasets": {
+            "RandomDataset": object,
+            "RequestFuncInput": object,
+            "RequestFuncOutput": object,
+            "VBenchDataset": object,
+        },
+        "sglang.multimodal_gen.runtime.utils.logging_utils": {
+            "configure_logger": lambda *a, **k: None,
+            "init_logger": lambda *a, **k: types.SimpleNamespace(
+                info=lambda *a, **k: None,
+                warning=lambda *a, **k: None,
+                error=lambda *a, **k: None,
+                debug=lambda *a, **k: None,
+            ),
+        },
+        "sglang.multimodal_gen.test.test_utils": {
+            "print_divider": lambda *a, **k: None,
+            "print_value_formatted": lambda *a, **k: None,
+        },
+        "sglang.srt.utils.network": {"NetworkAddress": object},
+    }
+    for module_name, attributes in stubs.items():
+        try:
+            importlib.import_module(module_name)
+        except Exception:
+            module = types.ModuleType(module_name)
+            for attribute, value in attributes.items():
+                setattr(module, attribute, value)
+            sys.modules[module_name] = module
+
+
 def _load_module(name: str, filename: str):
     """Load a benchmark module by path without importing the sglang package."""
+    _install_import_stubs()
     module_path = _BENCH_DIR / filename
     spec = importlib.util.spec_from_file_location(name, module_path)
     module = importlib.util.module_from_spec(spec)
