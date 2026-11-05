@@ -48,3 +48,32 @@ def test_benchmark_result_accepts_normal_payload(tmp_path) -> None:
     result = BenchmarkResult.from_json(path)
     assert result.ttft_mean == pytest.approx(0.1)
     assert result.output_throughput_mean == pytest.approx(20.0)
+
+
+def test_benchmark_result_rejects_string_stream_error(tmp_path) -> None:
+    path = _write(
+        tmp_path / "result.json",
+        {"error": STREAM_ERROR_MESSAGE, "aggregated_metrics": {"stats": {}}},
+    )
+    with pytest.raises(ValueError, match="stream error"):
+        BenchmarkResult.from_json(path)
+
+
+def test_benchmark_result_accepts_null_error(tmp_path) -> None:
+    path = _write(
+        tmp_path / "result.json",
+        {
+            "error": None,
+            "aggregated_metrics": {
+                "stats": {
+                    "ttft": {"mean": 0.2},
+                    "e2e_latency": {"mean": 2.0},
+                    "input_throughput": {"mean": 5.0},
+                    "output_throughput": {"mean": 7.0},
+                }
+            },
+        },
+    )
+    result = BenchmarkResult.from_json(path)
+    assert result.ttft_mean == pytest.approx(0.2)
+    assert result.output_throughput_mean == pytest.approx(7.0)

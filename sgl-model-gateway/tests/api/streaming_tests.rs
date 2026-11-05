@@ -244,4 +244,43 @@ mod tests {
         );
         assert!(error_event.get("choices").is_none());
     }
+
+    #[test]
+    fn test_sse_error_event_after_tokens_marks_stream_failed() {
+        // Mirrors the benchmark client rule: a stream that delivered tokens and
+        // then an error envelope must be classified as failed, not successful.
+        let parse_sse_chunk = |chunk: &[u8]| -> Vec<String> {
+            let text = String::from_utf8_lossy(chunk);
+            text.lines()
+                .filter(|line| line.starts_with("data: "))
+                .map(|line| line[6..].to_string())
+                .collect()
+        };
+
+        let sse_data = b"data: {\"choices\":[{\"text\":\"a\"}]}\n\n\
+                        data: {\"choices\":[{\"text\":\"b\"}]}\n\n\
+                        data: {\"error\":{\"message\":\"boom\",\"code\":500}}\n\n\
+                        data: [DONE]\n\n";
+        let events = parse_sse_chunk(sse_data);
+
+        let mut saw_token = false;
+        let mut stream_error: Option<String> = None;
+        for event in &events {
+            if event == "[DONE]" {
+                continue;
+            }
+            let json: serde_json::Value = serde_json::from_str(event).unwrap();
+            if let Some(error) = json.get("error") {
+                stream_error = Some(error.to_string());
+            } else if json.get("choices").is_some() {
+                saw_token = true;
+            }
+        }
+
+        assert!(saw_token, "tokens must have been observed before the error");
+        assert!(
+            stream_error.is_some(),
+            "error envelope must be surfaced to the caller"
+        );
+    }
 }
