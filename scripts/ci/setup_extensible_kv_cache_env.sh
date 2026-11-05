@@ -1,61 +1,70 @@
 #!/usr/bin/env bash
-# Prepare a Python 3.12 environment for the extensible KV cache checks.
+# Copyright 2025 SGLang Team
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# The CI runner may default to a newer interpreter (e.g. 3.14), which makes
-# pip resolve cp314 wheels and breaks the pinned 3.12 validation commands.
-# This script creates a fresh venv with an explicit 3.12 interpreter, asserts
-# the version, and installs the project with that interpreter only.
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+# Prepare a Python 3.12 virtualenv for the extensible KV cache checks.
+#
+# The CI runner's system Python may be newer (e.g. 3.14), which makes pip
+# resolve cp314 wheels for packages that only publish cp312 wheels. This
+# script pins the interpreter, asserts the version, and installs the project
+# into a local .venv so every later command uses the same interpreter.
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VENV_DIR="${ROOT_DIR}/.venv"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "${REPO_ROOT}"
 
-log() { printf '[setup-extensible-kv-cache] %s\n' "$*" >&2; }
+PYTHON_BIN="${PYTHON_BIN:-python3.12}"
 
-find_python312() {
-  for candidate in python3.12 python3 python; do
-    if command -v "${candidate}" >/dev/null 2>&1; then
-      if "${candidate}" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' 2>/dev/null; then
-        command -v "${candidate}"
-        return 0
-      fi
-    fi
-  done
-  return 1
-}
-
-if ! PYTHON312="$(find_python312)"; then
-  log "error: no Python 3.12 interpreter found on PATH"
-  log "PATH=${PATH}"
-  for candidate in python3.14 python3.13 python3.12 python3 python; do
-    if command -v "${candidate}" >/dev/null 2>&1; then
-      log "  ${candidate} -> $("${candidate}" -V 2>&1 || true)"
-    fi
-  done
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  echo "error: ${PYTHON_BIN} not found on PATH" >&2
+  echo "available pythons:" >&2
+  command -v python3 || true
+  python3 -V || true
   exit 1
 fi
 
-log "using interpreter: ${PYTHON312}"
-"${PYTHON312}" -V
+# Assert the interpreter before creating the venv so a wrong PYTHON_BIN fails
+# fast with a clear message instead of resolving cp314 wheels later.
+"${PYTHON_BIN}" - <<'PY'
+import sys
+if sys.version_info[:2] != (3, 12):
+    raise SystemExit(
+        f"expected Python 3.12, got {sys.version.split()[0]} at {sys.executable}"
+    )
+print(f"using {sys.executable} ({sys.version.split()[0]})")
+PY
 
-# Recreate the venv so a stale cp314 environment is never reused.
-if [ -d "${VENV_DIR}" ]; then
-  log "removing stale venv at ${VENV_DIR}"
-  rm -rf "${VENV_DIR}"
+if [ ! -d .venv ]; then
+  "${PYTHON_BIN}" -m venv .venv
 fi
 
-"${PYTHON312}" -m venv "${VENV_DIR}"
 # shellcheck disable=SC1091
-. "${VENV_DIR}/bin/activate"
+. .venv/bin/activate
 
-log "which python: $(command -v python)"
-python -V
-python -m pip -V
-
-python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+python - <<'PY'
+import sys
+if sys.version_info[:2] != (3, 12):
+    raise SystemExit(
+        f"venv interpreter is {sys.version.split()[0]} at {sys.executable}"
+    )
+print(f"venv python: {sys.executable} ({sys.version.split()[0]})")
+PY
 
 python -m pip install --upgrade pip
-# Install with the venv interpreter so wheels match cp312.
-python -m pip install -e "${ROOT_DIR}/python"
+# Only resolve wheels built for this interpreter; a missing cp312 wheel is a
+# hard error rather than a silent source build against the wrong ABI.
+python -m pip install --only-binary=:all: -e python
 
-log "environment ready"
+python -V
+python -m pip -V
+which python

@@ -14,46 +14,27 @@
 import argparse
 import dataclasses
 
-from sglang.srt.arg_groups.arg_utils import A, Arg, add_cli_args_from_dataclass
+from sglang.srt.arg_groups.arg_utils import A, add_cli_args_from_dataclass
 
 
 @dataclasses.dataclass
-class _ExtensibleArgs:
+class _Args:
     enable_extensible_kv_cache: A[
-        bool, Arg(help="Enable the VMM-backed extensible KV cache.")
-    ] = False
-    disable_extensible_kv_cache: A[
-        bool, Arg(help="Force the estimate-based KV cache path.")
+        bool, "Enable the VMM-backed extensible KV cache path."
     ] = False
 
 
 def _parse(argv):
     parser = argparse.ArgumentParser()
-    add_cli_args_from_dataclass(parser, _ExtensibleArgs)
+    add_cli_args_from_dataclass(parser, _Args)
     return parser.parse_args(argv)
 
 
-def test_defaults_are_off():
+def test_default_is_disabled():
     args = _parse([])
     assert args.enable_extensible_kv_cache is False
-    assert args.disable_extensible_kv_cache is False
 
 
-def test_enable_flag():
+def test_explicit_enable():
     args = _parse(["--enable-extensible-kv-cache"])
     assert args.enable_extensible_kv_cache is True
-    assert args.disable_extensible_kv_cache is False
-
-
-def test_disable_flag_forces_fallback():
-    args = _parse(["--disable-extensible-kv-cache"])
-    assert args.disable_extensible_kv_cache is True
-    assert args.enable_extensible_kv_cache is False
-
-
-def test_both_flags_parse():
-    args = _parse(
-        ["--enable-extensible-kv-cache", "--disable-extensible-kv-cache"]
-    )
-    assert args.enable_extensible_kv_cache is True
-    assert args.disable_extensible_kv_cache is True
