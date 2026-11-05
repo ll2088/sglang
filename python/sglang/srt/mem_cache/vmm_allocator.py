@@ -271,7 +271,12 @@ class VmmBuffer:
         return self.committed_bytes
 
     def as_tensor(self, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
-        """Return a tensor viewing the reservation without taking ownership."""
+        """Return a tensor viewing the reservation without taking ownership.
+
+        The view is built over the stable ``base_ptr`` of the reservation, so
+        it stays valid as more granules are committed. The returned tensor does
+        not own the memory; :meth:`free` must be called explicitly.
+        """
         if self._freed:
             raise RuntimeError("VmmBuffer has been freed")
         numel = 1
@@ -282,12 +287,13 @@ class VmmBuffer:
             raise ValueError(
                 f"tensor needs {nbytes} bytes but only {self.reserved_size} reserved"
             )
-        storage = torch.UntypedStorage.from_buffer(
-            (ctypes.c_ubyte * self.reserved_size).from_address(self.base_ptr),
-            "native",
-        )
-        return torch.tensor([], dtype=dtype).set_(
-            storage, 0, tuple(shape)
+        # ``from_blob`` wraps an existing device pointer without copying and
+        # without taking ownership, which is exactly the reservation contract.
+        return torch.from_blob(
+            self.base_ptr,
+            dtype=dtype,
+            shape=tuple(shape),
+            device=torch.device("cuda", self._device_index),
         )
 
     def free(self) -> None:

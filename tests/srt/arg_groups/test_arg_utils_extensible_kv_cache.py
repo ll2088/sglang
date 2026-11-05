@@ -11,19 +11,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from sglang.srt.arg_groups.arg_utils import _env_flag_default
+import argparse
+import dataclasses
+
+from sglang.srt.arg_groups.arg_utils import A, Arg, add_cli_args_from_dataclass
 
 
-def test_env_flag_default_off(monkeypatch):
-    monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
-    assert _env_flag_default("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE") is False
+@dataclasses.dataclass
+class _ExtensibleKVCacheArgs:
+    enable_extensible_kv_cache: A[
+        bool,
+        Arg(
+            help="Enable the VMM-backed two-phase KV cache sizing path.",
+            aliases=["--enable-extensible-kv-cache"],
+        ),
+    ] = False
 
 
-def test_env_flag_default_on(monkeypatch):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
-    assert _env_flag_default("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE") is True
+def _parse(argv):
+    parser = argparse.ArgumentParser()
+    add_cli_args_from_dataclass(parser, _ExtensibleKVCacheArgs)
+    return parser.parse_args(argv)
 
 
-def test_env_flag_default_explicit_off(monkeypatch):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "0")
-    assert _env_flag_default("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE") is False
+def test_extensible_kv_cache_defaults_to_disabled():
+    args = _parse([])
+    assert args.enable_extensible_kv_cache is False
+
+
+def test_extensible_kv_cache_can_be_enabled():
+    args = _parse(["--enable-extensible-kv-cache"])
+    assert args.enable_extensible_kv_cache is True
+
+
+def test_extensible_kv_cache_alias_matches_field_name():
+    args = _parse(["--enable-extensible-kv-cache"])
+    assert args.enable_extensible_kv_cache is True
