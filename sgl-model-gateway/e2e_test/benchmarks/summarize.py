@@ -59,6 +59,8 @@ def generate_summary(base_dir: Path) -> str:
         try:
             result = BenchmarkResult.from_json(result_path)
         except Exception as e:
+            # Includes streams that ended in a server error event: they must
+            # not be counted as successful in the summary.
             print(f"Warning: Failed to parse {result_path}: {e}", file=sys.stderr)
             lines.append(f"| {label} | ❌ Failed | - | - | - | - |")
             continue

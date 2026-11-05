@@ -19,7 +19,11 @@ class BenchmarkResult:
 
     @classmethod
     def from_json(cls, path: Path) -> "BenchmarkResult":
-        """Parse benchmark results from JSON file."""
+        """Parse benchmark results from JSON file.
+
+        A stream that ends in a server error event must not be reported as a
+        successful benchmark run, even if partial metrics were aggregated.
+        """
         with path.open() as f:
             data = json.load(f)
         if data.get("error") is not None:

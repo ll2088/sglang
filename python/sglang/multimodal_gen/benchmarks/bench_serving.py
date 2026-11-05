@@ -157,7 +157,13 @@ def _populate_slo_ms_from_warmups(
 
 
 def _extract_stream_error(payload: Any) -> Optional[str]:
-    """Return the server error object from a streamed chunk, if present."""
+    """Return the server error object from a streamed chunk, if present.
+
+    A generation that fails after the response has started cannot change the
+    HTTP 200 already sent, so the server reports the failure as an ``error``
+    envelope inside the stream. Counting such a request as successful hides
+    the failure and feeds truncated output into the aggregates.
+    """
     if not isinstance(payload, dict):
         return None
     error = payload.get("error")

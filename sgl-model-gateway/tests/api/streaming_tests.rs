@@ -287,4 +287,41 @@ mod tests {
         let success = stream_error.is_none() && saw_token;
         assert!(!success, "stream ending in an error event must be failed");
     }
+
+    #[test]
+    fn test_sse_stream_without_error_is_successful() {
+        // Guard against over-eager error detection: a clean token stream must
+        // still be classified as successful.
+        let parse_sse_chunk = |chunk: &[u8]| -> Vec<String> {
+            let text = String::from_utf8_lossy(chunk);
+            text.lines()
+                .filter(|line| line.starts_with("data: "))
+                .map(|line| line[6..].to_string())
+                .collect()
+        };
+
+        let sse_data = b"data: {\"choices\":[{\"text\":\"a\"}]}\n\n\
+                        data: {\"choices\":[{\"text\":\"b\"}]}\n\n\
+                        data: [DONE]\n\n";
+        let events = parse_sse_chunk(sse_data);
+
+        let mut saw_token = false;
+        let mut stream_error: Option<String> = None;
+        for event in &events {
+            if event == "[DONE]" {
+                continue;
+            }
+            let json: serde_json::Value = serde_json::from_str(event).unwrap();
+            if let Some(error) = json.get("error") {
+                stream_error = Some(error.to_string());
+            } else if json.get("choices").is_some() {
+                saw_token = true;
+            }
+        }
+
+        assert!(saw_token, "tokens must have been observed");
+        assert!(stream_error.is_none(), "no error envelope expected");
+        let success = stream_error.is_none() && saw_token;
+        assert!(success, "clean stream must be reported as successful");
+    }
 }

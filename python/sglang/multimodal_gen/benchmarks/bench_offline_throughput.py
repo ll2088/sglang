@@ -322,6 +322,9 @@ def generate_batch(
             results = [item for item in results if item is not None]
             if not results:
                 raise RuntimeError("Engine returned no generation result")
+            # A generation that fails after producing output reports the
+            # failure on the result object instead of raising. Treat it as a
+            # failed request so partial output never counts as success.
             stream_error = next(
                 (
                     getattr(item, "error", None)
