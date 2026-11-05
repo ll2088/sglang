@@ -282,5 +282,9 @@ mod tests {
             stream_error.is_some(),
             "error envelope must be surfaced to the caller"
         );
+
+        // The benchmark client rule: an error envelope wins over tokens.
+        let success = stream_error.is_none() && saw_token;
+        assert!(!success, "stream ending in an error event must be failed");
     }
 }

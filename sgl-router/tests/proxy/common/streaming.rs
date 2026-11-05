@@ -82,4 +82,34 @@ mod tests {
             "error envelope must not carry choices"
         );
     }
+
+    /// A stream that delivered tokens and then an error envelope must be
+    /// classified as failed, mirroring the benchmark client rule.
+    #[test]
+    fn parse_sse_data_error_event_marks_stream_failed() {
+        let raw = b"data: {\"choices\":[{\"text\":\"a\"}]}\n\n\
+                    data: {\"choices\":[{\"text\":\"b\"}]}\n\n\
+                    data: {\"error\":{\"message\":\"boom\",\"code\":500}}\n\n\
+                    data: [DONE]\n\n";
+        let events = parse_sse_data(raw);
+
+        let mut saw_token = false;
+        let mut stream_error: Option<String> = None;
+        for event in &events {
+            if event == "[DONE]" {
+                continue;
+            }
+            let json: serde_json::Value = serde_json::from_str(event).unwrap();
+            if let Some(error) = json.get("error") {
+                stream_error = Some(error.to_string());
+            } else if json.get("choices").is_some() {
+                saw_token = true;
+            }
+        }
+
+        assert!(saw_token, "tokens must have been observed before the error");
+        assert!(stream_error.is_some(), "error envelope must be surfaced");
+        let success = stream_error.is_none() && saw_token;
+        assert!(!success, "stream ending in an error event must be failed");
+    }
 }

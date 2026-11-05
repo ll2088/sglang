@@ -120,3 +120,80 @@ def test_extract_stream_error_ignores_usage_only_chunk() -> None:
 def test_response_output_count_ignores_error_payload() -> None:
     # An error envelope carries no outputs, so it must not be counted.
     assert _get_response_output_count(_error_payload()) == 0
+
+
+def _classify_stream(events: list[str]) -> tuple[bool, str | None]:
+    """Mirror of the benchmark client rule for a streamed SSE event list.
+
+    Returns ``(success, error)``. A stream that delivered tokens and then an
+    error envelope must be reported as failed, with the server error kept.
+    """
+    saw_token = False
+    stream_error: str | None = None
+    for event in events:
+        if event == "[DONE]":
+            continue
+        payload = json.loads(event)
+        error = _extract_stream_error(payload)
+        if error is not None:
+            stream_error = error
+        elif payload.get("choices"):
+            saw_token = True
+    if stream_error is not None:
+        return False, stream_error
+    return saw_token, None
+
+
+def test_stream_with_tokens_then_error_is_failed() -> None:
+    events = [
+        json.dumps({"choices": [{"text": "a"}]}),
+        json.dumps({"choices": [{"text": "b"}]}),
+        json.dumps(_error_payload()),
+        "[DONE]",
+    ]
+    success, error = _classify_stream(events)
+    assert not success
+    assert error is not None
+    assert STREAM_ERROR_MESSAGE in error
+
+
+def test_stream_without_error_is_successful() -> None:
+    events = [
+        json.dumps({"choices": [{"text": "a"}]}),
+        json.dumps({"choices": [{"text": "b"}]}),
+        json.dumps({"usage": {"completion_tokens": 2}}),
+        "[DONE]",
+    ]
+    success, error = _classify_stream(events)
+    assert success
+    assert error is None
+
+
+def test_stream_without_tokens_is_failed() -> None:
+    events = [json.dumps({"usage": {"completion_tokens": 0}}), "[DONE]"]
+    success, error = _classify_stream(events)
+    assert not success
+    assert error is None
+
+
+def test_offline_generation_error_is_failed() -> None:
+    """bench_offline_throughput treats a result carrying ``error`` as failed."""
+
+    class _Result:
+        def __init__(self, error):
+            self.error = error
+            self.output_file_path = None
+
+    results = [_Result(None), _Result(STREAM_ERROR_MESSAGE)]
+    stream_error = next(
+        (getattr(item, "error", None) for item in results if getattr(item, "error", None)),
+        None,
+    )
+    assert stream_error is not None
+    assert STREAM_ERROR_MESSAGE in stream_error
+
+
+def test_summarize_skips_error_results() -> None:
+    """A benchmark result carrying an error must not be counted as success."""
+    data = {"error": _error_payload()["error"], "aggregated_metrics": {"stats": {}}}
+    assert data.get("error") is not None
