@@ -75,3 +75,25 @@ def test_manifest_accepts_clean_request(manifest_module, tmp_path):
     loaded = manifest_module.load_request_manifest(path)
     assert len(loaded.requests) == 1
     assert loaded.requests[0].prompt == "hello"
+
+
+def test_manifest_rejects_error_after_valid_line(manifest_module, tmp_path):
+    path = _write_manifest(
+        tmp_path,
+        [
+            {"prompt": "hello"},
+            {"prompt": "world", "error": {"message": "boom", "code": 500}},
+        ],
+    )
+    with pytest.raises(ValueError, match="stream error"):
+        manifest_module.load_request_manifest(path)
+
+
+def test_manifest_error_message_is_readable(manifest_module, tmp_path):
+    path = _write_manifest(
+        tmp_path,
+        [{"prompt": "hello", "error": {"message": "boom", "code": 500}}],
+    )
+    with pytest.raises(ValueError) as excinfo:
+        manifest_module.load_request_manifest(path)
+    assert "boom" in str(excinfo.value)

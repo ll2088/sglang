@@ -300,6 +300,11 @@ def _first_result_error(results: List[Any]) -> Optional[str]:
     return None
 
 
+def _result_has_output(item: Any) -> bool:
+    """Return whether one generation result carries usable output."""
+    return getattr(item, "output_file_path", None) is not None
+
+
 def generate_batch(
     engine: DiffGenerator,
     bench_args: BenchArgs,
@@ -347,10 +352,7 @@ def generate_batch(
                 raise RuntimeError(output.error)
             # A result that carries no error but also no output is not a
             # successful generation; keep it out of the success aggregates.
-            if not any(
-                getattr(item, "output_file_path", None) is not None
-                for item in results
-            ):
+            if not any(_result_has_output(item) for item in results):
                 raise RuntimeError("Generation produced no output")
 
             output_paths = [

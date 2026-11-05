@@ -26,6 +26,8 @@ class BenchmarkResult:
         """
         with path.open() as f:
             data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError(f"Benchmark result is not a JSON object: {path}")
         if data.get("error") is not None:
             raise ValueError(f"Benchmark stream error: {data['error']}")
         aggregated = data.get("aggregated_metrics", {})

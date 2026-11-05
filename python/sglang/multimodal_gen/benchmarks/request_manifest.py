@@ -73,7 +73,10 @@ def _format_stream_error(error: Any) -> str:
     """Render a server error object for a readable manifest failure message."""
     if isinstance(error, str):
         return error
-    return json.dumps(error)
+    try:
+        return json.dumps(error)
+    except (TypeError, ValueError):
+        return str(error)
 
 
 def _resolve_image_paths(value: Any, base_dir: Path, line_number: int) -> Any:

@@ -141,6 +141,35 @@ mod tests {
         assert!(!success, "stream ending in an error event must be failed");
     }
 
+    /// An error envelope that arrives after tokens must fail the stream even
+    /// when the error payload is a bare string rather than an object.
+    #[test]
+    fn parse_sse_data_string_error_marks_stream_failed() {
+        let raw = b"data: {\"choices\":[{\"text\":\"a\"}]}\n\n\
+                    data: {\"error\":\"boom\"}\n\n\
+                    data: [DONE]\n\n";
+        let events = parse_sse_data(raw);
+
+        let mut saw_token = false;
+        let mut stream_error: Option<String> = None;
+        for event in &events {
+            if event == "[DONE]" {
+                continue;
+            }
+            let json: serde_json::Value = serde_json::from_str(event).unwrap();
+            if let Some(error) = json.get("error") {
+                stream_error = Some(error.to_string());
+            } else if json.get("choices").is_some() {
+                saw_token = true;
+            }
+        }
+
+        assert!(saw_token, "tokens must have been observed before the error");
+        assert!(stream_error.is_some(), "error envelope must be surfaced");
+        let success = stream_error.is_none() && saw_token;
+        assert!(!success, "stream ending in an error event must be failed");
+    }
+
     /// A clean token stream must still be classified as successful, so the
     /// error detection does not turn normal streams into failures.
     #[test]

@@ -174,6 +174,21 @@ def _extract_stream_error(payload: Any) -> Optional[str]:
     return json.dumps(error)
 
 
+def _extract_stream_error_from_text(text: str) -> Optional[str]:
+    """Return the first server error object carried by an SSE text body.
+
+    The server may batch several ``data:`` events into one chunk, so the body
+    is split and each payload is inspected. An ``error`` envelope wins over
+    any output carried by the same body: the server's error is the root cause,
+    while a partial result is only a symptom.
+    """
+    for payload in _iter_stream_payloads(text.encode("utf-8")):
+        stream_error = _extract_stream_error(payload)
+        if stream_error is not None:
+            return stream_error
+    return None
+
+
 def _iter_stream_payloads(chunk_bytes: bytes):
     """Yield decoded JSON payloads from one SSE chunk.
 
@@ -493,6 +508,10 @@ async def async_request_video_sglang(
                     status = status_data.get("status")
                     if status == "completed":
                         stream_error = _extract_stream_error(status_data)
+                        if stream_error is None:
+                            stream_error = _extract_stream_error_from_text(
+                                json.dumps(status_data)
+                            )
                         if stream_error is not None:
                             output.success = False
                             output.error = stream_error
