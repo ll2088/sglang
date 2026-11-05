@@ -12,7 +12,10 @@ import importlib.util
 import json
 from pathlib import Path
 
-import pytest
+try:
+    import pytest
+except ImportError:  # pragma: no cover - lightweight CI without pytest
+    pytest = None
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BENCHMARKS_DIR = (
@@ -29,6 +32,12 @@ def _load_module(name: str, path: Path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _require_pytest():
+    if pytest is None:
+        raise RuntimeError("pytest is required to run these tests")
+    return pytest
 
 
 def _sse(payload: dict) -> bytes:
@@ -74,24 +83,32 @@ def _classify_stream(chunks: list[bytes]) -> tuple[bool, str | None]:
     return success, stream_error
 
 
-@pytest.mark.parametrize("endpoint", ["completions", "chat", "audio"])
-def test_error_event_stream_is_not_reported_as_success(endpoint: str) -> None:
-    chunks = [_token_chunk("a"), _token_chunk("b"), _error_chunk(), b"data: [DONE]\n\n"]
-    success, stream_error = _classify_stream(chunks)
-    assert not success
-    assert stream_error is not None
-    assert "internal server error during generation" in stream_error
+def test_error_event_stream_is_not_reported_as_success() -> None:
+    _require_pytest()
+    for endpoint in ("completions", "chat", "audio"):
+        chunks = [
+            _token_chunk("a"),
+            _token_chunk("b"),
+            _error_chunk(),
+            b"data: [DONE]\n\n",
+        ]
+        success, stream_error = _classify_stream(chunks)
+        assert not success, endpoint
+        assert stream_error is not None, endpoint
+        assert "internal server error during generation" in stream_error, endpoint
 
 
-@pytest.mark.parametrize("endpoint", ["completions", "chat", "audio"])
-def test_clean_stream_is_reported_as_success(endpoint: str) -> None:
-    chunks = [_token_chunk("a"), _token_chunk("b"), b"data: [DONE]\n\n"]
-    success, stream_error = _classify_stream(chunks)
-    assert success
-    assert stream_error is None
+def test_clean_stream_is_reported_as_success() -> None:
+    _require_pytest()
+    for endpoint in ("completions", "chat", "audio"):
+        chunks = [_token_chunk("a"), _token_chunk("b"), b"data: [DONE]\n\n"]
+        success, stream_error = _classify_stream(chunks)
+        assert success, endpoint
+        assert stream_error is None, endpoint
 
 
 def test_error_event_without_tokens_is_failed() -> None:
+    _require_pytest()
     chunks = [_error_chunk(), b"data: [DONE]\n\n"]
     success, stream_error = _classify_stream(chunks)
     assert not success
@@ -99,6 +116,7 @@ def test_error_event_without_tokens_is_failed() -> None:
 
 
 def test_manifest_rejects_stream_error(tmp_path: Path) -> None:
+    _require_pytest()
     module = _load_module("_bench_request_manifest", _MANIFEST_PATH)
     manifest = tmp_path / "manifest.jsonl"
     manifest.write_text(
@@ -116,6 +134,7 @@ def test_manifest_rejects_stream_error(tmp_path: Path) -> None:
 
 
 def test_manifest_accepts_clean_request(tmp_path: Path) -> None:
+    _require_pytest()
     module = _load_module("_bench_request_manifest", _MANIFEST_PATH)
     manifest = tmp_path / "manifest.jsonl"
     manifest.write_text(
@@ -128,6 +147,7 @@ def test_manifest_accepts_clean_request(tmp_path: Path) -> None:
 
 
 def test_benchmark_result_rejects_stream_error(tmp_path: Path) -> None:
+    _require_pytest()
     module = _load_module("_bench_results", _RESULTS_PATH)
     result_path = tmp_path / "result.json"
     result_path.write_text(
@@ -144,6 +164,7 @@ def test_benchmark_result_rejects_stream_error(tmp_path: Path) -> None:
 
 
 def test_benchmark_result_accepts_clean_run(tmp_path: Path) -> None:
+    _require_pytest()
     module = _load_module("_bench_results", _RESULTS_PATH)
     result_path = tmp_path / "result.json"
     result_path.write_text(
