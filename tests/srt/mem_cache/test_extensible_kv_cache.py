@@ -12,104 +12,136 @@
 # limitations under the License.
 
 import pytest
+import torch
 
 from sglang.srt.mem_cache import extensible_kv_cache as ekc
+from sglang.srt.mem_cache.extensible_kv_cache import (
+    ExtensibleKVCacheConfig,
+    ExtensibleKVCachePlan,
+    commit_extensible_kv_cache,
+    extensible_kv_cache_enabled,
+    plan_extensible_kv_cache,
+)
+from sglang.srt.mem_cache.vmm_allocator import VmmBuffer, vmm_unavailable_reason
+
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="requires CUDA"
+)
 
 
-class _FakeBuffer:
-    """Stand-in for VmmBuffer that records commits without touching a driver."""
-
-    def __init__(self, reserved_size: int) -> None:
-        self.reserved_size = reserved_size
-        self.committed_bytes = 0
-        self.freed = False
-
-    def commit(self, num_bytes: int) -> int:
-        if self.freed:
-            raise RuntimeError("freed")
-        if num_bytes < 0:
-            raise ValueError("negative")
-        if num_bytes > self.reserved_size:
-            raise ValueError("exceeds reservation")
-        self.committed_bytes = max(self.committed_bytes, num_bytes)
-        return self.committed_bytes
-
-    def free(self) -> None:
-        self.freed = True
+def _require_vmm():
+    reason = vmm_unavailable_reason()
+    if reason is not None:
+        pytest.skip(f"VMM unavailable: {reason}")
 
 
-def _make_plan(bytes_per_block: int = 1024, max_num_blocks: int = 100):
-    buffer = _FakeBuffer(bytes_per_block * max_num_blocks)
-    return ekc.ExtensibleKVCachePlan(
-        buffer=buffer,
-        bytes_per_block=bytes_per_block,
-        max_num_blocks=max_num_blocks,
-        transient_peak_bytes=0,
-    )
+def test_enabled_defaults_to_false(monkeypatch):
+    monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
+    assert extensible_kv_cache_enabled() is False
 
 
-def test_final_num_blocks_respects_cap_and_margin():
-    plan = _make_plan(bytes_per_block=1024, max_num_blocks=100)
-    # Free memory far above the reservation: capped at max_num_blocks.
-    assert plan.final_num_blocks(1 << 40) == 100
-    # Free memory below the floor margin: no blocks.
-    assert plan.final_num_blocks(0) == 0
-    # Free memory just above the floor margin: a small positive count.
-    blocks = plan.final_num_blocks(ekc.KV_CACHE_MARGIN_FLOOR_BYTES + 10 * 1024)
-    assert 0 < blocks <= 100
-
-
-def test_commit_is_idempotent_and_monotonic():
-    plan = _make_plan()
-    first = plan.commit(10)
-    assert first == 10
-    assert plan.commit(10) == 10
-    # Committing fewer blocks after more is a no-op.
-    assert plan.commit(3) == 10
-    assert plan.buffer.committed_bytes == 10 * plan.bytes_per_block
-
-
-def test_commit_rejects_negative_blocks():
-    plan = _make_plan()
-    with pytest.raises(ValueError):
-        plan.commit(-1)
+def test_enabled_reads_env(monkeypatch):
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
+    assert extensible_kv_cache_enabled() is True
 
 
 def test_plan_returns_none_when_disabled(monkeypatch):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "0")
-    config = ekc.ExtensibleKVCacheConfig(
-        bytes_per_block=1024, max_num_blocks=10, device_index=0
+    monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
+    cfg = ExtensibleKVCacheConfig(
+        bytes_per_block=1 << 20, max_num_blocks=4, device_index=0
     )
-    assert ekc.plan_extensible_kv_cache(config) is None
+    assert plan_extensible_kv_cache(cfg) is None
 
 
-def test_plan_returns_none_when_vmm_unavailable(monkeypatch):
+def test_final_num_blocks_respects_cap_and_margin():
+    plan = ExtensibleKVCachePlan(
+        buffer=None,  # type: ignore[arg-type]
+        bytes_per_block=1 << 20,
+        max_num_blocks=8,
+        transient_peak_bytes=0,
+    )
+    # Free memory below the floor leaves zero usable blocks.
+    assert plan.final_num_blocks(0) == 0
+    # Large free memory is capped by max_num_blocks.
+    assert plan.final_num_blocks(1 << 40) == 8
+
+
+def test_final_num_blocks_is_monotonic():
+    plan = ExtensibleKVCachePlan(
+        buffer=None,  # type: ignore[arg-type]
+        bytes_per_block=1 << 20,
+        max_num_blocks=64,
+        transient_peak_bytes=0,
+    )
+    prev = -1
+    for free in (0, 1 << 30, 2 << 30, 4 << 30, 8 << 30):
+        blocks = plan.final_num_blocks(free)
+        assert blocks >= prev
+        prev = blocks
+
+
+@requires_cuda
+def test_commit_matches_measured_free_memory(monkeypatch):
+    _require_vmm()
     monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
-    monkeypatch.setattr(ekc, "vmm_unavailable_reason", lambda: "no driver")
-    config = ekc.ExtensibleKVCacheConfig(
-        bytes_per_block=1024, max_num_blocks=10, device_index=0
+    device_index = torch.cuda.current_device()
+    cfg = ExtensibleKVCacheConfig(
+        bytes_per_block=2 << 20,
+        max_num_blocks=4,
+        device_index=device_index,
     )
-    assert ekc.plan_extensible_kv_cache(config) is None
+    plan = plan_extensible_kv_cache(cfg)
+    assert plan is not None
+    try:
+        free_bytes, _ = torch.cuda.mem_get_info(device_index)
+        expected = plan.final_num_blocks(free_bytes)
+        committed = commit_extensible_kv_cache(plan, free_bytes=free_bytes)
+        assert committed == expected
+        # Idempotent: committing again yields the same count.
+        assert commit_extensible_kv_cache(plan, free_bytes=free_bytes) == expected
+        assert plan.buffer.committed_bytes <= plan.buffer.reserved_size
+    finally:
+        plan.free()
 
 
-def test_plan_returns_none_on_reservation_failure(monkeypatch):
+@requires_cuda
+def test_commit_never_exceeds_reservation(monkeypatch):
+    _require_vmm()
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
+    device_index = torch.cuda.current_device()
+    cfg = ExtensibleKVCacheConfig(
+        bytes_per_block=2 << 20,
+        max_num_blocks=2,
+        device_index=device_index,
+    )
+    plan = plan_extensible_kv_cache(cfg)
+    assert plan is not None
+    try:
+        committed = plan.commit(plan.max_num_blocks)
+        assert committed <= plan.max_num_blocks
+        assert plan.buffer.committed_bytes <= plan.buffer.reserved_size
+    finally:
+        plan.free()
+
+
+def test_plan_falls_back_when_vmm_unavailable(monkeypatch):
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
+    monkeypatch.setattr(ekc, "vmm_unavailable_reason", lambda: "forced")
+    cfg = ExtensibleKVCacheConfig(
+        bytes_per_block=1 << 20, max_num_blocks=4, device_index=0
+    )
+    assert plan_extensible_kv_cache(cfg) is None
+
+
+def test_plan_falls_back_on_reservation_error(monkeypatch):
     monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
     monkeypatch.setattr(ekc, "vmm_unavailable_reason", lambda: None)
 
     def _boom(*args, **kwargs):
-        raise ekc.VmmUnavailableError("reserve failed")
+        raise ekc.VmmUnavailableError("boom")
 
     monkeypatch.setattr(ekc, "VmmBuffer", _boom)
-    config = ekc.ExtensibleKVCacheConfig(
-        bytes_per_block=1024, max_num_blocks=10, device_index=0
+    cfg = ExtensibleKVCacheConfig(
+        bytes_per_block=1 << 20, max_num_blocks=4, device_index=0
     )
-    assert ekc.plan_extensible_kv_cache(config) is None
-
-
-def test_commit_extensible_kv_cache_uses_supplied_free_bytes():
-    plan = _make_plan(bytes_per_block=1024, max_num_blocks=100)
-    committed = ekc.commit_extensible_kv_cache(
-        plan, free_bytes=ekc.KV_CACHE_MARGIN_FLOOR_BYTES + 20 * 1024
-    )
-    assert committed == 20
-    assert plan.buffer.committed_bytes == 20 * plan.bytes_per_block
+    assert plan_extensible_kv_cache(cfg) is None

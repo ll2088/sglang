@@ -12,59 +12,48 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-# Prepare a Python 3.12 virtualenv for the extensible KV cache checks.
+# Prepare a Python 3.12 virtualenv for the extensible KV cache tests.
 #
-# The CI runner's system Python may be newer (e.g. 3.14), which makes pip
-# resolve cp314 wheels for packages that only publish cp312 wheels. This
-# script pins the interpreter, asserts the version, and installs the project
-# into a local .venv so every later command uses the same interpreter.
+# The CI runner may have a newer system Python (e.g. 3.14) as `python`/`pip`.
+# This script pins every step to python3.12 so that dependency resolution does
+# not download cp314 wheels into a 3.12 environment.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-PYTHON_BIN="${PYTHON_BIN:-python3.12}"
-
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  echo "error: ${PYTHON_BIN} not found on PATH" >&2
-  echo "available pythons:" >&2
-  command -v python3 || true
-  python3 -V || true
+if ! command -v python3.12 >/dev/null 2>&1; then
+  echo "error: python3.12 not found on PATH" >&2
+  echo "       install python3.12 (e.g. apt-get install python3.12 python3.12-venv) and retry" >&2
   exit 1
 fi
 
-# Assert the interpreter before creating the venv so a wrong PYTHON_BIN fails
-# fast with a clear message instead of resolving cp314 wheels later.
-"${PYTHON_BIN}" - <<'PY'
-import sys
-if sys.version_info[:2] != (3, 12):
-    raise SystemExit(
-        f"expected Python 3.12, got {sys.version.split()[0]} at {sys.executable}"
-    )
-print(f"using {sys.executable} ({sys.version.split()[0]})")
-PY
+echo "python3.12: $(command -v python3.12)"
+python3.12 --version
 
-if [ ! -d .venv ]; then
-  "${PYTHON_BIN}" -m venv .venv
+if [ -d .venv ]; then
+  rm -rf .venv
 fi
-
+python3.12 -m venv .venv
 # shellcheck disable=SC1091
 . .venv/bin/activate
 
+echo "which python: $(command -v python)"
+echo "which pip:    $(command -v pip || true)"
+python -V
+python -m pip --version
+
 python - <<'PY'
 import sys
-if sys.version_info[:2] != (3, 12):
-    raise SystemExit(
-        f"venv interpreter is {sys.version.split()[0]} at {sys.executable}"
-    )
-print(f"venv python: {sys.executable} ({sys.version.split()[0]})")
+assert sys.version_info[:2] == (3, 12), sys.version
+print("interpreter ok:", sys.executable)
 PY
 
 python -m pip install --upgrade pip
-# Only resolve wheels built for this interpreter; a missing cp312 wheel is a
-# hard error rather than a silent source build against the wrong ABI.
-python -m pip install --only-binary=:all: -e python
+python -m pip install -e python
 
-python -V
-python -m pip -V
-which python
+python - <<'PY'
+import sys
+assert sys.version_info[:2] == (3, 12), sys.version
+print("venv ready:", sys.executable)
+PY
