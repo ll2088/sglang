@@ -169,3 +169,61 @@ def test_summarize_counts_clean_result_as_success(tmp_path):
     summary = module.generate_summary(tmp_path)
     assert "✅ Success" in summary
     assert "❌ Failed" not in summary
+
+
+def test_result_with_error_after_partial_metrics_is_rejected(tmp_path):
+    """A stream that delivered tokens then failed must not count as success.
+
+    The server reports a mid-stream failure as an ``error`` envelope after
+    partial metrics were already aggregated. The error is the root cause and
+    must win over the partial output, which is only a symptom.
+    """
+    path = _write_result(
+        tmp_path,
+        {
+            "aggregated_metrics": {
+                "stats": {
+                    "ttft": {"mean": 0.1},
+                    "e2e_latency": {"mean": 1.0},
+                    "input_throughput": {"mean": 10.0},
+                    "output_throughput": {"mean": 20.0},
+                }
+            },
+            "error": {"message": "internal server error during generation"},
+        },
+    )
+    with pytest.raises(ValueError, match="Benchmark stream error"):
+        BenchmarkResult.from_json(path)
+
+
+def test_summarize_excludes_error_after_partial_metrics(tmp_path):
+    """A result with partial metrics and a stream error is not successful."""
+    summarize_path = Path(__file__).with_name("summarize.py")
+    spec = importlib.util.spec_from_file_location(
+        "bench_summarize_partial_error", summarize_path
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    folder = tmp_path / "benchmark_partial_error"
+    folder.mkdir()
+    (folder / "result.json").write_text(
+        json.dumps(
+            {
+                "aggregated_metrics": {
+                    "stats": {
+                        "ttft": {"mean": 0.1},
+                        "e2e_latency": {"mean": 1.0},
+                        "input_throughput": {"mean": 10.0},
+                        "output_throughput": {"mean": 20.0},
+                    }
+                },
+                "error": "internal server error during generation",
+            }
+        )
+    )
+
+    summary = module.generate_summary(tmp_path)
+    assert "❌ Failed" in summary
+    assert "✅ Success" not in summary
