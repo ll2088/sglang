@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# Thin wrapper kept for callers that reference the repository-root path.
-# The real setup lives in scripts/ci/setup_extensible_kv_cache_env.sh so
-# there is a single source of truth.
+# Thin wrapper around scripts/ci/setup_extensible_kv_cache_env.sh.
+# exec keeps the exit code and avoids path ambiguity between the two copies.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$REPO_ROOT/scripts/ci/setup_extensible_kv_cache_env.sh" "$@"
+SCRIPT="${REPO_ROOT}/scripts/ci/setup_extensible_kv_cache_env.sh"
+
+if [ ! -f "${SCRIPT}" ]; then
+    printf 'ERROR: %s not found\n' "${SCRIPT}" >&2
+    exit 1
+fi
+
+exec bash "${SCRIPT}" "$@"
