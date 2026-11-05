@@ -22,7 +22,7 @@ class _ExtensibleKVCacheArgs:
     enable_extensible_kv_cache: A[
         bool,
         Arg(
-            help="Enable the VMM-backed extensible KV cache path.",
+            help="Enable VMM-backed two-phase KV cache sizing.",
             aliases=["--enable-extensible-kv-cache"],
         ),
     ] = False
@@ -59,7 +59,6 @@ def test_disable_flag_parses():
     assert args.disable_extensible_kv_cache is True
 
 
-def test_both_flags_parse_independently():
-    args = _parse(["--enable-extensible-kv-cache", "--disable-extensible-kv-cache"])
+def test_field_name_form_parses():
+    args = _parse(["--enable_extensible_kv_cache"])
     assert args.enable_extensible_kv_cache is True
-    assert args.disable_extensible_kv_cache is True
