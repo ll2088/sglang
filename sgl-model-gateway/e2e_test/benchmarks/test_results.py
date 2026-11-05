@@ -139,3 +139,33 @@ def test_summarize_excludes_stream_error_from_success(tmp_path):
     summary = module.generate_summary(tmp_path)
     assert "❌ Failed" in summary
     assert "✅ Success" not in summary
+
+
+def test_summarize_counts_clean_result_as_success(tmp_path):
+    """A clean result must still be reported as successful."""
+    summarize_path = Path(__file__).with_name("summarize.py")
+    spec = importlib.util.spec_from_file_location("bench_summarize_clean", summarize_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    folder = tmp_path / "benchmark_clean"
+    folder.mkdir()
+    (folder / "result.json").write_text(
+        json.dumps(
+            {
+                "aggregated_metrics": {
+                    "stats": {
+                        "ttft": {"mean": 0.1},
+                        "e2e_latency": {"mean": 1.0},
+                        "input_throughput": {"mean": 10.0},
+                        "output_throughput": {"mean": 20.0},
+                    }
+                }
+            }
+        )
+    )
+
+    summary = module.generate_summary(tmp_path)
+    assert "✅ Success" in summary
+    assert "❌ Failed" not in summary
