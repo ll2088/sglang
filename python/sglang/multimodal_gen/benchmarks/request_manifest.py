@@ -151,21 +151,17 @@ def load_request_manifest(path: str | Path) -> LoadedRequestManifest:
                 )
             sampling_params = dict(sampling_params)
 
-            stream_error = record.get("error")
-            if stream_error is not None:
-                if not isinstance(stream_error, str):
-                    stream_error = json.dumps(stream_error)
+            for field_name, field_value in (
+                ("request", record.get("error")),
+                ("sampling_params", sampling_params.get("error")),
+            ):
+                if field_value is None:
+                    continue
+                if not isinstance(field_value, str):
+                    field_value = json.dumps(field_value)
                 raise ValueError(
-                    f"Manifest line {line_number}: request contains a stream error: "
-                    f"{stream_error}"
-                )
-            sampling_params_error = sampling_params.get("error")
-            if sampling_params_error is not None:
-                if not isinstance(sampling_params_error, str):
-                    sampling_params_error = json.dumps(sampling_params_error)
-                raise ValueError(
-                    f"Manifest line {line_number}: sampling_params contains a stream "
-                    f"error: {sampling_params_error}"
+                    f"Manifest line {line_number}: {field_name} contains a stream "
+                    f"error: {field_value}"
                 )
             reserved_fields = set(sampling_params) & _RESERVED_SAMPLING_FIELDS
             if reserved_fields:

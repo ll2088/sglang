@@ -127,7 +127,7 @@ def test_manifest_rejects_top_level_error(tmp_path: Path):
     manifest.write_text(
         json.dumps({"prompt": "hi", "error": _error_payload()}) + "\n"
     )
-    with pytest.raises(ValueError, match="stream error"):
+    with pytest.raises(ValueError, match="request contains a stream error"):
         request_manifest.load_request_manifest(manifest)
 
 
@@ -139,7 +139,7 @@ def test_manifest_rejects_sampling_params_error(tmp_path: Path):
         )
         + "\n"
     )
-    with pytest.raises(ValueError, match="stream error"):
+    with pytest.raises(ValueError, match="sampling_params contains a stream error"):
         request_manifest.load_request_manifest(manifest)
 
 
