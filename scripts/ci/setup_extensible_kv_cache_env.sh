@@ -1,72 +1,61 @@
 #!/usr/bin/env bash
-# Prepare the environment used by the extensible KV cache verification jobs.
+# Prepare a Python 3.12 environment for the extensible KV cache checks.
 #
-# The verification commands require Python 3.12. CI images may ship a newer
-# interpreter (e.g. 3.14), and pip would then resolve cp314 wheels, which is
-# not what the tests are validated against. This script therefore:
-#   1. fails fast on any error and prints diagnostics,
-#   2. locates a Python 3.12 interpreter explicitly,
-#   3. creates/uses a venv from that interpreter,
-#   4. installs dependencies with that venv's pip only.
+# The CI runner may default to a newer interpreter (e.g. 3.14), which makes
+# pip resolve cp314 wheels and breaks the pinned 3.12 validation commands.
+# This script creates a fresh venv with an explicit 3.12 interpreter, asserts
+# the version, and installs the project with that interpreter only.
 set -euo pipefail
 
-log() { printf '[setup_extensible_kv_cache_env] %s\n' "$*" >&2; }
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+VENV_DIR="${ROOT_DIR}/.venv"
 
-on_error() {
-  local exit_code=$?
-  log "environment setup failed with exit code ${exit_code}"
-  log "python candidates on PATH:"
-  command -v python3.12 || true
-  command -v python3 || true
-  python3 --version || true
-  exit "${exit_code}"
-}
-trap on_error ERR
+log() { printf '[setup-extensible-kv-cache] %s\n' "$*" >&2; }
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "${REPO_ROOT}"
-
-# 1. Locate Python 3.12 explicitly. Do not fall back to whatever `python3`
-#    happens to be: a 3.14 interpreter silently changes wheel selection.
-PYTHON_BIN="${PYTHON_BIN:-}"
-if [[ -z "${PYTHON_BIN}" ]]; then
-  for candidate in python3.12 python3; do
+find_python312() {
+  for candidate in python3.12 python3 python; do
     if command -v "${candidate}" >/dev/null 2>&1; then
       if "${candidate}" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' 2>/dev/null; then
-        PYTHON_BIN="$(command -v "${candidate}")"
-        break
+        command -v "${candidate}"
+        return 0
       fi
     fi
   done
-fi
+  return 1
+}
 
-if [[ -z "${PYTHON_BIN}" ]]; then
-  log "no Python 3.12 interpreter found; install one (e.g. actions/setup-python with 3.12) or set PYTHON_BIN"
+if ! PYTHON312="$(find_python312)"; then
+  log "error: no Python 3.12 interpreter found on PATH"
+  log "PATH=${PATH}"
+  for candidate in python3.14 python3.13 python3.12 python3 python; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      log "  ${candidate} -> $("${candidate}" -V 2>&1 || true)"
+    fi
+  done
   exit 1
 fi
 
-log "using interpreter: ${PYTHON_BIN}"
-"${PYTHON_BIN}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+log "using interpreter: ${PYTHON312}"
+"${PYTHON312}" -V
 
-# 2. Create or reuse a venv from that interpreter.
-VENV_DIR="${VENV_DIR:-.venv}"
-if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
-  log "creating venv at ${VENV_DIR}"
-  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+# Recreate the venv so a stale cp314 environment is never reused.
+if [ -d "${VENV_DIR}" ]; then
+  log "removing stale venv at ${VENV_DIR}"
+  rm -rf "${VENV_DIR}"
 fi
 
-VENV_PYTHON="${VENV_DIR}/bin/python"
-"${VENV_PYTHON}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
-log "venv interpreter: $("${VENV_PYTHON}" -c 'import sys; print(sys.executable, sys.version.split()[0])')"
+"${PYTHON312}" -m venv "${VENV_DIR}"
+# shellcheck disable=SC1091
+. "${VENV_DIR}/bin/activate"
 
-# 3. Install with the venv's pip only, so wheel tags match Python 3.12.
-"${VENV_PYTHON}" -m pip install --upgrade pip
+log "which python: $(command -v python)"
+python -V
+python -m pip -V
 
-# Prefer wheels to avoid long source builds in CI; fall back to source only
-# when a wheel is genuinely unavailable for this platform.
-if ! "${VENV_PYTHON}" -m pip install --only-binary=:all: -e '.[dev]'; then
-  log "binary-only install failed; retrying allowing source builds"
-  "${VENV_PYTHON}" -m pip install -e '.[dev]'
-fi
+python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+
+python -m pip install --upgrade pip
+# Install with the venv interpreter so wheels match cp312.
+python -m pip install -e "${ROOT_DIR}/python"
 
 log "environment ready"

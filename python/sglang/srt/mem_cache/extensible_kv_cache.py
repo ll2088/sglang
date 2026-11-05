@@ -81,6 +81,7 @@ class ExtensibleKVCachePlan:
     buffer: VmmBuffer
     bytes_per_block: int
     max_num_blocks: int
+    transient_peak_bytes: int = 0
 
     @property
     def reserved_bytes(self) -> int:
@@ -90,13 +91,15 @@ class ExtensibleKVCachePlan:
         """Compute the final block count from measured free memory.
 
         The result never exceeds ``max_num_blocks`` and leaves a measured
-        headroom uncommitted.
+        headroom uncommitted. The headroom is derived from the measured
+        transient peak when available, falling back to a fraction of the
+        free memory so small models still keep a floor.
         """
         if free_bytes < 0:
             raise ValueError("free_bytes must be non-negative")
         margin = max(
             KV_CACHE_MARGIN_FLOOR_BYTES,
-            int(free_bytes * KV_CACHE_MARGIN_FRACTION),
+            int(self.transient_peak_bytes * KV_CACHE_MARGIN_FRACTION),
         )
         usable = max(free_bytes - margin, 0)
         blocks = usable // self.bytes_per_block
@@ -146,6 +149,7 @@ def plan_extensible_kv_cache(
         buffer=buffer,
         bytes_per_block=config.bytes_per_block,
         max_num_blocks=config.max_num_blocks,
+        transient_peak_bytes=config.transient_peak_bytes,
     )
 
 

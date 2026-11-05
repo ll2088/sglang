@@ -191,6 +191,12 @@ def vmm_unavailable_reason() -> Optional[str]:
         return "SGLANG_DISABLE_VMM=1"
     if not torch.cuda.is_available():
         return "CUDA is not available"
+    # The driver API is only meaningful once a CUDA context exists; probing
+    # before initialization would report a false negative on some hosts.
+    try:
+        torch.cuda.current_device()
+    except Exception as exc:  # pragma: no cover - driver dependent
+        return f"CUDA context unavailable: {exc}"
     try:
         lib = _load_driver()
     except VmmUnavailableError as exc:
@@ -337,6 +343,10 @@ class VmmBuffer:
                 f"requested {num_bytes} bytes exceeds reserved {self.reserved_size}"
             )
         target = _round_up(num_bytes, self.granularity) // self.granularity
+        # Committing fewer bytes than already committed is a no-op, which
+        # keeps repeated calls idempotent and monotonic.
+        if target <= len(self._mapped_granules):
+            return self.committed_bytes
         for granule_index in range(target):
             if granule_index not in self._mapped_granules:
                 self._map_granule(granule_index)
