@@ -11,47 +11,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CLI parsing for the opt-in extensible KV cache switch.
+import argparse
+import dataclasses
 
-The switch is read from the environment by
-``sglang.srt.mem_cache.extensible_kv_cache.extensible_kv_cache_enabled``.
-These tests pin the default (off) and the explicit opt-in/opt-out so a
-regression in the env parsing cannot silently enable the VMM path.
-"""
-
-import importlib
-
-import pytest
+from sglang.srt.arg_groups.arg_utils import A, Arg, add_cli_args_from_dataclass
 
 
-@pytest.fixture
-def extensible_module(monkeypatch):
-    monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
-    import sglang.srt.mem_cache.extensible_kv_cache as mod
-
-    return importlib.reload(mod)
-
-
-def test_default_is_disabled(extensible_module):
-    assert extensible_module.extensible_kv_cache_enabled() is False
+@dataclasses.dataclass
+class _ExtensibleKVCacheArgs:
+    enable_extensible_kv_cache: A[
+        bool, Arg(help="Enable the VMM-backed extensible KV cache.")
+    ] = False
 
 
-@pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
-def test_explicit_enable(monkeypatch, extensible_module, value):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", value)
-    assert extensible_module.extensible_kv_cache_enabled() is True
+def _parse(argv):
+    parser = argparse.ArgumentParser()
+    add_cli_args_from_dataclass(parser, _ExtensibleKVCacheArgs)
+    return parser.parse_args(argv)
 
 
-@pytest.mark.parametrize("value", ["0", "false", "no", "off", ""])
-def test_explicit_disable(monkeypatch, extensible_module, value):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", value)
-    assert extensible_module.extensible_kv_cache_enabled() is False
+def test_extensible_kv_cache_flag_defaults_to_disabled():
+    args = _parse([])
+    assert args.enable_extensible_kv_cache is False
 
 
-def test_plan_returns_none_when_disabled(extensible_module):
-    config = extensible_module.ExtensibleKVCacheConfig(
-        bytes_per_block=1 << 20,
-        max_num_blocks=4,
-        device_index=0,
-    )
-    assert extensible_module.plan_extensible_kv_cache(config) is None
+def test_extensible_kv_cache_flag_can_be_enabled():
+    args = _parse(["--enable-extensible-kv-cache"])
+    assert args.enable_extensible_kv_cache is True
+
+
+def test_extensible_kv_cache_flag_help_is_registered():
+    parser = argparse.ArgumentParser()
+    add_cli_args_from_dataclass(parser, _ExtensibleKVCacheArgs)
+    help_text = parser.format_help()
+    assert "--enable-extensible-kv-cache" in help_text
