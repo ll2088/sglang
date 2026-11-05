@@ -12,6 +12,11 @@ from pathlib import Path
 
 import pytest
 
+# This is the single authoritative test module for stream error event
+# handling in benchmark clients. Do not add duplicate copies under
+# python/.../benchmarks/ or test/benchmark/; pytest collection conflicts
+# and CI instability result from duplicated module names.
+
 
 _BENCH_DIR = (
     Path(__file__).resolve().parents[2]
@@ -24,7 +29,9 @@ _BENCH_DIR = (
 
 def _load_module(name: str, filename: str):
     """Load a benchmark module by path without importing the sglang package."""
-    module_path = _BENCH_DIR / filename
+    module_path = Path(filename)
+    if not module_path.is_absolute():
+        module_path = _BENCH_DIR / filename
     spec = importlib.util.spec_from_file_location(name, module_path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
@@ -130,3 +137,56 @@ def test_request_manifest_accepts_clean_request(request_manifest, tmp_path):
     loaded = request_manifest.load_request_manifest(manifest)
     assert len(loaded.requests) == 1
     assert loaded.requests[0].prompt == "hello"
+
+
+def test_benchmark_result_rejects_stream_error(tmp_path):
+    """A benchmark result carrying a stream error must not be a success."""
+    results_path = (
+        Path(__file__).resolve().parents[2]
+        / "sgl-model-gateway"
+        / "e2e_test"
+        / "benchmarks"
+        / "results.py"
+    )
+    module = _load_module("benchmark_results_under_test", str(results_path))
+    result_file = tmp_path / "result.json"
+    result_file.write_text(
+        json.dumps(
+            {
+                "error": {"message": _STREAM_ERROR_MESSAGE, "code": 500},
+                "aggregated_metrics": {"stats": {}},
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="stream error"):
+        module.BenchmarkResult.from_json(result_file)
+
+
+def test_benchmark_result_accepts_clean_stream(tmp_path):
+    """A clean benchmark result must still parse as successful."""
+    results_path = (
+        Path(__file__).resolve().parents[2]
+        / "sgl-model-gateway"
+        / "e2e_test"
+        / "benchmarks"
+        / "results.py"
+    )
+    module = _load_module("benchmark_results_under_test", str(results_path))
+    result_file = tmp_path / "result.json"
+    result_file.write_text(
+        json.dumps(
+            {
+                "aggregated_metrics": {
+                    "stats": {
+                        "ttft": {"mean": 0.1},
+                        "e2e_latency": {"mean": 1.0},
+                        "input_throughput": {"mean": 10.0},
+                        "output_throughput": {"mean": 20.0},
+                    }
+                }
+            }
+        )
+    )
+    result = module.BenchmarkResult.from_json(result_file)
+    assert result.ttft_mean == pytest.approx(0.1)
+    assert result.output_throughput_mean == pytest.approx(20.0)
