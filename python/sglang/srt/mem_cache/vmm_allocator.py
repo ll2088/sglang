@@ -366,14 +366,18 @@ class VmmBuffer:
         # every supported torch version understands and which keeps the
         # reservation's stable base pointer.
         device = torch.device("cuda", self._device_index)
-        flat = torch.empty(0, dtype=dtype, device=device)
         # ``torch.cuda.caching_allocator_alloc`` would take ownership, so we
         # deliberately avoid it. ``torch.as_tensor`` on a CUDA array interface
-        # object creates a view over the existing pointer.
+        # object creates a view over the existing pointer. The interface is
+        # passed positionally and the device is inferred from it, which is the
+        # form supported across torch versions.
         flat = torch.as_tensor(
             _CudaArrayInterface(self.base_ptr, nbytes, dtype),
-            device=device,
         )
+        if flat.device != device:
+            raise VmmUnavailableError(
+                f"VMM view landed on {flat.device}, expected {device}"
+            )
         return flat.view(tuple(shape))
 
     def free(self) -> None:
