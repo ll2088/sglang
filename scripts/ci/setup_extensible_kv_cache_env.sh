@@ -1,51 +1,97 @@
 #!/usr/bin/env bash
-# Prepare a Python 3.12 virtualenv for the extensible KV cache checks.
+# Copyright 2025 SGLang Team
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# The verification commands all start with `. .venv/bin/activate`, so this
-# script must create that venv with python3.12 and install the project with
-# the venv's own pip. Using the system pip resolves cp314 wheels and fails.
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+# Prepare an isolated python3.12 virtualenv for the extensible KV cache tests.
+#
+# Every install and test command must go through .venv/bin/python so that the
+# system interpreter (and its site-packages) is never used. The script fails
+# loudly with full context instead of silently falling back.
+
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$REPO_ROOT"
-
+VENV_DIR="${REPO_ROOT}/.venv"
 PYTHON_BIN="${PYTHON_BIN:-python3.12}"
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  echo "error: $PYTHON_BIN not found; install Python 3.12 first" >&2
-  exit 1
+
+log() {
+    printf '[setup_extensible_kv_cache_env] %s\n' "$*" >&2
+}
+
+fail() {
+    log "ERROR: $*"
+    exit 1
+}
+
+log "repo root: ${REPO_ROOT}"
+log "requested interpreter: ${PYTHON_BIN}"
+
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+    fail "${PYTHON_BIN} not found on PATH; install python3.12 before running this script"
 fi
 
-"$PYTHON_BIN" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+log "which ${PYTHON_BIN}: $(command -v "${PYTHON_BIN}")"
+log "${PYTHON_BIN} -V: $("${PYTHON_BIN}" -V 2>&1)"
 
-rm -rf .venv
-"$PYTHON_BIN" -m venv .venv
-# shellcheck disable=SC1091
-. .venv/bin/activate
-
-VENV_PY="$REPO_ROOT/.venv/bin/python"
-"$VENV_PY" -V
-"$VENV_PY" -m pip install --upgrade pip setuptools wheel
-"$VENV_PY" -m pip -V
-
-# Show the tags pip will accept so a cp314 resolution is visible in the log.
-"$VENV_PY" -m pip debug --verbose | sed -n '1,40p'
-
-# Refuse wheels built for another interpreter (e.g. cp314) and require the
-# venv interpreter to be used for the editable install.
-PIP_LOG="$(mktemp)"
-if ! "$VENV_PY" -m pip install \
-    --only-binary=:all: \
-    --python-version 3.12 \
-    --implementation cp \
-    --abi cp312 \
-    -e python 2>&1 | tee "$PIP_LOG"; then
-  echo "error: pip install failed; full log follows" >&2
-  cat "$PIP_LOG" >&2
-  rm -f "$PIP_LOG"
-  exit 1
+if ! "${PYTHON_BIN}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version' >/dev/null 2>&1; then
+    fail "${PYTHON_BIN} is not python3.12: $("${PYTHON_BIN}" -V 2>&1)"
 fi
-rm -f "$PIP_LOG"
 
-"$VENV_PY" -V
-"$VENV_PY" -m pip -V
-"$VENV_PY" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+if [ ! -x "${VENV_DIR}/bin/python" ]; then
+    log "creating virtualenv at ${VENV_DIR}"
+    "${PYTHON_BIN}" -m venv "${VENV_DIR}" || fail "failed to create virtualenv at ${VENV_DIR}"
+fi
+
+VENV_PYTHON="${VENV_DIR}/bin/python"
+
+if [ ! -x "${VENV_PYTHON}" ]; then
+    fail "virtualenv python missing: ${VENV_PYTHON}"
+fi
+
+log "venv python: ${VENV_PYTHON}"
+log "venv python -V: $("${VENV_PYTHON}" -V 2>&1)"
+
+if ! "${VENV_PYTHON}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version' >/dev/null 2>&1; then
+    fail "virtualenv interpreter is not python3.12: $("${VENV_PYTHON}" -V 2>&1)"
+fi
+
+# Make sure the venv interpreter does not see the system site-packages.
+if "${VENV_PYTHON}" -c 'import sys; print("\n".join(sys.path))' | grep -q '/usr/lib/python3/dist-packages'; then
+    fail "virtualenv still sees /usr/lib/python3/dist-packages; isolation failed"
+fi
+
+log "upgrading pip inside the virtualenv"
+"${VENV_PYTHON}" -m pip install --upgrade pip || fail "failed to upgrade pip inside the virtualenv"
+
+log "pip version: $("${VENV_PYTHON}" -m pip --version 2>&1)"
+log "pip debug --verbose (compatible tags):"
+"${VENV_PYTHON}" -m pip debug --verbose 2>&1 | sed -n '1,40p' >&2 || true
+
+# Reject cp314 wheels: the venv is python3.12, so any cp314 wheel means pip
+# resolved against the wrong interpreter or a stale cache.
+if "${VENV_PYTHON}" -m pip debug --verbose 2>&1 | grep -q 'cp314'; then
+    fail "pip reports cp314 compatibility tags inside a python3.12 virtualenv"
+fi
+
+log "installing the project in editable mode inside the virtualenv"
+"${VENV_PYTHON}" -m pip install -e "${REPO_ROOT}/python" || fail "failed to install the project inside the virtualenv"
+
+log "verifying installed packages do not come from the system site-packages"
+if "${VENV_PYTHON}" -m pip list --format=freeze 2>/dev/null | grep -q '^requests=='; then
+    REQ_LOCATION="$("${VENV_PYTHON}" -c 'import requests, os; print(os.path.dirname(requests.__file__))' 2>/dev/null || true)"
+    if [ -n "${REQ_LOCATION}" ] && printf '%s' "${REQ_LOCATION}" | grep -q '/usr/lib/python3/dist-packages'; then
+        fail "requests resolved from the system site-packages: ${REQ_LOCATION}"
+    fi
+fi
+
+log "environment ready: ${VENV_PYTHON}"
