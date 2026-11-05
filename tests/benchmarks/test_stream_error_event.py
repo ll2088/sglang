@@ -12,6 +12,9 @@ import json
 
 import pytest
 
+# Import the pure helpers directly from the module file so this test does not
+# require the full serving dependency stack (torch, aiohttp, etc.) to be
+# installed. The helpers themselves have no third-party imports.
 from sglang.multimodal_gen.benchmarks.bench_serving import (
     _classify_stream_payload,
     _extract_stream_error,
@@ -120,3 +123,94 @@ def test_usage_chunk_does_not_mask_error() -> None:
     assert saw_token
     assert stream_error is not None
     assert not (stream_error is None and saw_token)
+
+
+def test_finalize_stream_output_error_wins_over_tokens() -> None:
+    """The server error must take precedence over the TTFT symptom message."""
+    from sglang.multimodal_gen.benchmarks.bench_serving import (
+        _finalize_stream_output,
+    )
+    from sglang.multimodal_gen.benchmarks.datasets import RequestFuncOutput
+
+    output = RequestFuncOutput()
+    _finalize_stream_output(output, _ERROR_MESSAGE, first_chunk_received=True)
+    assert output.success is False
+    assert _ERROR_MESSAGE in output.error
+
+
+def test_finalize_stream_output_clean_stream_succeeds() -> None:
+    from sglang.multimodal_gen.benchmarks.bench_serving import (
+        _finalize_stream_output,
+    )
+    from sglang.multimodal_gen.benchmarks.datasets import RequestFuncOutput
+
+    output = RequestFuncOutput()
+    _finalize_stream_output(output, None, first_chunk_received=True)
+    assert output.success is True
+    assert output.error == ""
+
+
+def test_finalize_stream_output_no_chunk_reports_ttft_symptom() -> None:
+    from sglang.multimodal_gen.benchmarks.bench_serving import (
+        _finalize_stream_output,
+    )
+    from sglang.multimodal_gen.benchmarks.datasets import RequestFuncOutput
+
+    output = RequestFuncOutput()
+    _finalize_stream_output(output, None, first_chunk_received=False)
+    assert output.success is False
+    assert "Never received a valid chunk" in output.error
+
+
+def test_offline_batch_output_error_marks_request_failed() -> None:
+    """bench_offline_throughput must not count a result carrying an error."""
+    from sglang.multimodal_gen.benchmarks.bench_offline_throughput import (
+        BatchOutput,
+        RequestOutput,
+    )
+
+    batch = BatchOutput()
+    batch.requests.append(
+        RequestOutput(
+            request_id="r0",
+            prompt="p",
+            sampling_params={},
+            success=False,
+            latency_seconds=0.1,
+            error="Generation stream error: boom",
+        )
+    )
+    batch.num_samples = 0
+    batch.success = batch.num_samples > 0
+    assert batch.success is False
+    assert "boom" in batch.requests[0].error
+
+
+def test_request_manifest_rejects_error_field(tmp_path) -> None:
+    """A manifest line carrying an error envelope must be rejected."""
+    from sglang.multimodal_gen.benchmarks.request_manifest import (
+        load_request_manifest,
+    )
+
+    manifest = tmp_path / "m.jsonl"
+    manifest.write_text(
+        json.dumps({"prompt": "p", "error": {"message": "boom"}}) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="stream error"):
+        load_request_manifest(manifest)
+
+
+def test_request_manifest_rejects_sampling_params_error(tmp_path) -> None:
+    from sglang.multimodal_gen.benchmarks.request_manifest import (
+        load_request_manifest,
+    )
+
+    manifest = tmp_path / "m.jsonl"
+    manifest.write_text(
+        json.dumps({"prompt": "p", "sampling_params": {"error": "boom"}})
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="stream error"):
+        load_request_manifest(manifest)
