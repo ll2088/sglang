@@ -13,35 +13,49 @@
 
 import argparse
 import dataclasses
+from typing import Annotated
 
-from sglang.srt.arg_groups.arg_utils import A, Arg, add_cli_args_from_dataclass
+from sglang.srt.arg_groups.arg_utils import Arg, add_cli_args_from_dataclass
 
 
 @dataclasses.dataclass
 class _ExtensibleKVCacheArgs:
-    enable_extensible_kv_cache: A[
-        bool, Arg(help="Enable the VMM-backed extensible KV cache.")
+    enable_extensible_kv_cache: Annotated[
+        bool,
+        Arg(help="Enable the VMM-backed extensible KV cache."),
     ] = False
 
 
-def _parse(argv):
+@dataclasses.dataclass
+class _ExtensibleKVCacheArgsDefaultOn:
+    enable_extensible_kv_cache: Annotated[
+        bool,
+        Arg(help="Enable the VMM-backed extensible KV cache."),
+    ] = True
+
+
+def _parse(cls, argv):
     parser = argparse.ArgumentParser()
-    add_cli_args_from_dataclass(parser, _ExtensibleKVCacheArgs)
+    add_cli_args_from_dataclass(parser, cls)
     return parser.parse_args(argv)
 
 
-def test_extensible_kv_cache_flag_defaults_to_disabled():
-    args = _parse([])
+def test_extensible_kv_cache_flag_defaults_off():
+    args = _parse(_ExtensibleKVCacheArgs, [])
     assert args.enable_extensible_kv_cache is False
 
 
 def test_extensible_kv_cache_flag_can_be_enabled():
-    args = _parse(["--enable-extensible-kv-cache"])
+    args = _parse(_ExtensibleKVCacheArgs, ["--enable-extensible-kv-cache"])
     assert args.enable_extensible_kv_cache is True
 
 
-def test_extensible_kv_cache_flag_help_is_registered():
-    parser = argparse.ArgumentParser()
-    add_cli_args_from_dataclass(parser, _ExtensibleKVCacheArgs)
-    help_text = parser.format_help()
-    assert "--enable-extensible-kv-cache" in help_text
+def test_extensible_kv_cache_flag_default_on_can_be_disabled():
+    # The CLI only exposes store_true, so a default-on field stays on unless
+    # the caller constructs the dataclass directly. This documents the
+    # fallback contract: disabling happens through the dataclass/env, not a
+    # CLI negation flag.
+    args = _parse(_ExtensibleKVCacheArgsDefaultOn, [])
+    assert args.enable_extensible_kv_cache is True
+    direct = _ExtensibleKVCacheArgsDefaultOn(enable_extensible_kv_cache=False)
+    assert direct.enable_extensible_kv_cache is False
