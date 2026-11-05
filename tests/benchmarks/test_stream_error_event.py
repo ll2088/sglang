@@ -120,5 +120,3 @@ def test_usage_chunk_does_not_mask_error() -> None:
     assert saw_token
     assert stream_error is not None
     assert not (stream_error is None and saw_token)
-
-

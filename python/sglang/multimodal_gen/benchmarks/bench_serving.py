@@ -111,6 +111,71 @@ def _infer_slo_base_time_ms_from_warmups(
     return float(np.median(candidates_ms)) if candidates_ms else None
 
 
+def _extract_stream_error(payload: Any) -> Optional[str]:
+    """Return the server error object from a streamed chunk, if present.
+
+    A generation that fails after the response has started cannot change the
+    HTTP 200 already sent, so the server reports the failure as an ``error``
+    envelope inside the stream. Counting such a request as successful hides
+    the failure and feeds truncated output into the aggregates.
+    """
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if error is None:
+        return None
+    if isinstance(error, str):
+        return error
+    return json.dumps(error)
+
+
+def _classify_stream_payload(payload: Any) -> tuple[bool, Optional[str]]:
+    """Classify one streamed payload as (has_output, stream_error).
+
+    An ``error`` envelope wins over any output carried by the same payload:
+    the server's error is the root cause, while a partial result is only a
+    symptom. This mirrors the benchmark client rule that a stream which
+    delivered tokens and then failed must not be counted as successful.
+    """
+    stream_error = _extract_stream_error(payload)
+    if stream_error is not None:
+        return False, stream_error
+    if not isinstance(payload, dict):
+        return False, None
+    has_output = bool(
+        payload.get("choices")
+        or payload.get("data")
+        or payload.get("file_paths")
+        or payload.get("urls")
+        or payload.get("file_path")
+        or payload.get("url")
+        or payload.get("num_outputs")
+    )
+    return has_output, None
+
+
+def _finalize_stream_output(
+    output: RequestFuncOutput,
+    stream_error: Optional[str],
+    first_chunk_received: bool,
+) -> None:
+    """Apply the stream outcome to ``output``.
+
+    A server error event takes precedence over the "no valid chunk" symptom:
+    the error is the root cause, and a request that streamed tokens before
+    failing must not be counted as successful. Partial output is kept for
+    detailed saving.
+    """
+    if stream_error is not None:
+        output.success = False
+        output.error = stream_error
+    elif first_chunk_received:
+        output.success = True
+    else:
+        output.success = False
+        output.error = "Never received a valid chunk to calculate TTFT."
+
+
 def _parse_extra_body(raw: Optional[str]) -> Dict[str, Any]:
     """Parses --extra-body, which is merged over every generated payload."""
     if not raw:
