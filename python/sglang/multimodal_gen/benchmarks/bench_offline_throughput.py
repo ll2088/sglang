@@ -359,6 +359,11 @@ def generate_batch(
                 # this request as successful. The server's error is the root
                 # cause and must win over any partial output.
                 output.error = f"Generation stream error: {stream_error}"
+                partial_paths = [
+                    str(item.output_file_path)
+                    for item in results
+                    if getattr(item, "output_file_path", None) is not None
+                ]
                 output.requests.append(
                     RequestOutput(
                         request_id=request_id,
@@ -367,6 +372,7 @@ def generate_batch(
                         success=False,
                         latency_seconds=time.perf_counter() - request_start_time,
                         error=output.error,
+                        output_file_paths=partial_paths,
                     )
                 )
                 continue
