@@ -115,3 +115,27 @@ def test_result_with_null_error_is_parsed(tmp_path):
     result = BenchmarkResult.from_json(path)
     assert result.ttft_mean == pytest.approx(0.2)
     assert result.output_throughput_mean == pytest.approx(7.0)
+
+
+def test_summarize_excludes_stream_error_from_success(tmp_path):
+    """A result carrying a stream error must not be counted as successful."""
+    summarize_path = Path(__file__).with_name("summarize.py")
+    spec = importlib.util.spec_from_file_location("bench_summarize", summarize_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    folder = tmp_path / "benchmark_stream_error"
+    folder.mkdir()
+    (folder / "result.json").write_text(
+        json.dumps(
+            {
+                "error": {"message": "boom", "code": 500},
+                "aggregated_metrics": {"stats": {}},
+            }
+        )
+    )
+
+    summary = module.generate_summary(tmp_path)
+    assert "❌ Failed" in summary
+    assert "✅ Success" not in summary
