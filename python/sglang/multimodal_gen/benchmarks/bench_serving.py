@@ -48,24 +48,6 @@ PATCH_SIZE = 16
 PATCH_AREA = PATCH_SIZE * PATCH_SIZE
 
 
-def _extract_stream_error(payload: Any) -> Optional[str]:
-    """Return the server error object from a response payload, if present.
-
-    A generation that fails after the response has started cannot change the
-    HTTP 200 already sent, so the server reports the failure as an ``error``
-    envelope inside the payload. Counting such a request as successful hides
-    the failure and feeds truncated output into the aggregates.
-    """
-    if not isinstance(payload, dict):
-        return None
-    error = payload.get("error")
-    if error is None:
-        return None
-    if isinstance(error, str):
-        return error
-    return json.dumps(error)
-
-
 def _get_response_output_count(resp_json: Dict[str, Any]) -> int:
     if isinstance(resp_json.get("num_outputs"), int):
         return resp_json["num_outputs"]
