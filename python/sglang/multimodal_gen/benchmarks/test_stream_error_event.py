@@ -154,3 +154,55 @@ def test_manifest_accepts_clean_line(tmp_path: Path):
     loaded = request_manifest.load_request_manifest(manifest)
     assert len(loaded.requests) == 1
     assert loaded.requests[0].prompt == "hello"
+
+
+def test_manifest_rejects_nested_stream_error(tmp_path: Path):
+    """An error envelope nested in sampling_params must be rejected too."""
+    if not hasattr(request_manifest, "load_request_manifest"):
+        pytest.skip("request_manifest.load_request_manifest not available")
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(
+        json.dumps(
+            {
+                "prompt": "hello",
+                "sampling_params": {
+                    "error": {"message": _STREAM_ERROR_MESSAGE, "code": 500}
+                },
+            }
+        )
+        + "\n"
+    )
+    with pytest.raises(ValueError, match="stream error"):
+        request_manifest.load_request_manifest(manifest)
+
+
+def test_offline_result_error_is_failure():
+    """A generation result carrying an error must not count as success."""
+    offline = _load_module(
+        "bench_offline_stream_error", "bench_offline_throughput.py"
+    )
+    if not hasattr(offline, "_first_result_error"):
+        pytest.skip("bench_offline_throughput._first_result_error not available")
+
+    class _Result:
+        output_file_path = "/tmp/partial.mp4"
+        error = {"message": _STREAM_ERROR_MESSAGE, "code": 500}
+
+    stream_error = offline._first_result_error([_Result()])
+    assert stream_error is not None
+    assert _STREAM_ERROR_MESSAGE in stream_error
+
+
+def test_offline_clean_result_has_no_error():
+    """A clean generation result must not be classified as failed."""
+    offline = _load_module(
+        "bench_offline_stream_error_clean", "bench_offline_throughput.py"
+    )
+    if not hasattr(offline, "_first_result_error"):
+        pytest.skip("bench_offline_throughput._first_result_error not available")
+
+    class _Result:
+        output_file_path = "/tmp/ok.mp4"
+        error = ""
+
+    assert offline._first_result_error([_Result()]) is None
