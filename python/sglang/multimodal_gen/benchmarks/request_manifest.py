@@ -144,6 +144,13 @@ def load_request_manifest(path: str | Path) -> LoadedRequestManifest:
                 )
             request_ids.add(request_id)
 
+            sampling_params = record.get("sampling_params", {})
+            if not isinstance(sampling_params, dict):
+                raise ValueError(
+                    f"Manifest line {line_number}: sampling_params must be an object"
+                )
+            sampling_params = dict(sampling_params)
+
             stream_error = record.get("error")
             if stream_error is not None:
                 if not isinstance(stream_error, str):
@@ -160,13 +167,6 @@ def load_request_manifest(path: str | Path) -> LoadedRequestManifest:
                     f"Manifest line {line_number}: sampling_params contains a stream "
                     f"error: {sampling_params_error}"
                 )
-
-            sampling_params = record.get("sampling_params", {})
-            if not isinstance(sampling_params, dict):
-                raise ValueError(
-                    f"Manifest line {line_number}: sampling_params must be an object"
-                )
-            sampling_params = dict(sampling_params)
             reserved_fields = set(sampling_params) & _RESERVED_SAMPLING_FIELDS
             if reserved_fields:
                 raise ValueError(

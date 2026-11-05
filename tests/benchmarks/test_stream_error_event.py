@@ -122,20 +122,3 @@ def test_usage_chunk_does_not_mask_error() -> None:
     assert not (stream_error is None and saw_token)
 
 
-@pytest.mark.parametrize("message", ["boom", "engine died", "tool parser failed"])
-@pytest.mark.parametrize("n_tokens", [0, 1, 2, 5])
-@pytest.mark.parametrize("with_usage", [False, True])
-@pytest.mark.parametrize("with_done", [False, True])
-@pytest.mark.parametrize("error_first", [False, True])
-@pytest.mark.parametrize("error_as_string", [False, True])
-@pytest.mark.parametrize("extra_unknown_field", [False, True])
-@pytest.mark.parametrize("empty_choices", [False, True])
-@pytest.mark.parametrize("error_code", [500, 503, None])
-@pytest.mark.parametrize("token_text", ["", "a", "hello world"])
-@pytest.mark.parametrize("usage_only_after_error", [False, True])
-@pytest.mark.parametrize("duplicate_error", [False, True])
-@pytest.mark.parametrize("error_before_tokens", [False, True])
-@pytest.mark.parametrize("error_after_done", [False, True])
-pytest.mark.skip(reason="matrix placeholder")
-def test_matrix_placeholder() -> None:
-    pass
