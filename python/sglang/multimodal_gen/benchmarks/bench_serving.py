@@ -194,6 +194,22 @@ def _extract_stream_error_from_text(text: str) -> Optional[str]:
     return None
 
 
+def _stream_error_from_chunk(chunk_bytes: bytes) -> Optional[str]:
+    """Return the first server error object carried by one SSE chunk.
+
+    A chunk may batch several ``data:`` events, so every payload is inspected
+    and the first ``error`` envelope wins. This is the single entry point used
+    by the streaming request functions below.
+    """
+    if not isinstance(chunk_bytes, (bytes, bytearray)):
+        return None
+    for payload in _iter_stream_payloads(bytes(chunk_bytes)):
+        stream_error = _extract_stream_error(payload)
+        if stream_error is not None:
+            return stream_error
+    return None
+
+
 def _extract_stream_error_from_json_body(body: Any) -> Optional[str]:
     """Return the first server error object carried by a JSON response body.
 
