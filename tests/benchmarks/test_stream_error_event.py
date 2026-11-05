@@ -190,3 +190,83 @@ def test_benchmark_result_accepts_clean_stream(tmp_path):
     result = module.BenchmarkResult.from_json(result_file)
     assert result.ttft_mean == pytest.approx(0.1)
     assert result.output_throughput_mean == pytest.approx(20.0)
+
+
+def test_benchmark_result_rejects_nested_stats_error(tmp_path):
+    """An error nested in aggregated_metrics.stats must also fail the run."""
+    results_path = (
+        Path(__file__).resolve().parents[2]
+        / "sgl-model-gateway"
+        / "e2e_test"
+        / "benchmarks"
+        / "results.py"
+    )
+    module = _load_module("benchmark_results_under_test", str(results_path))
+    result_file = tmp_path / "result.json"
+    result_file.write_text(
+        json.dumps(
+            {
+                "aggregated_metrics": {
+                    "stats": {"error": {"message": _STREAM_ERROR_MESSAGE}}
+                }
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="stream error"):
+        module.BenchmarkResult.from_json(result_file)
+
+
+def test_summarize_marks_error_result_as_failed(tmp_path):
+    """summarize must not count an error-terminated stream as success."""
+    summarize_path = (
+        Path(__file__).resolve().parents[2]
+        / "sgl-model-gateway"
+        / "e2e_test"
+        / "benchmarks"
+        / "summarize.py"
+    )
+    module = _load_module("benchmark_summarize_under_test", str(summarize_path))
+    folder = tmp_path / "benchmark_error_case"
+    folder.mkdir()
+    (folder / "result.json").write_text(
+        json.dumps(
+            {
+                "error": {"message": _STREAM_ERROR_MESSAGE, "code": 500},
+                "aggregated_metrics": {"stats": {}},
+            }
+        )
+    )
+    summary = module.generate_summary(tmp_path)
+    assert "❌ Failed" in summary
+    assert "✅ Success" not in summary
+
+
+def test_summarize_marks_clean_result_as_success(tmp_path):
+    """A clean result must still be reported as success by summarize."""
+    summarize_path = (
+        Path(__file__).resolve().parents[2]
+        / "sgl-model-gateway"
+        / "e2e_test"
+        / "benchmarks"
+        / "summarize.py"
+    )
+    module = _load_module("benchmark_summarize_under_test", str(summarize_path))
+    folder = tmp_path / "benchmark_clean_case"
+    folder.mkdir()
+    (folder / "result.json").write_text(
+        json.dumps(
+            {
+                "aggregated_metrics": {
+                    "stats": {
+                        "ttft": {"mean": 0.1},
+                        "e2e_latency": {"mean": 1.0},
+                        "input_throughput": {"mean": 10.0},
+                        "output_throughput": {"mean": 20.0},
+                    }
+                }
+            }
+        )
+    )
+    summary = module.generate_summary(tmp_path)
+    assert "✅ Success" in summary
+    assert "❌ Failed" not in summary
