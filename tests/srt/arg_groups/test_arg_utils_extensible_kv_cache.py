@@ -11,34 +11,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""CLI parsing tests for the extensible KV cache opt-in switch.
+"""CLI parsing tests for the extensible KV cache switch.
 
 The switch is read from the environment by ``extensible_kv_cache_enabled``;
-this test pins the default (off) and the explicit enable/disable behaviour so
-that the fallback path stays the default and cannot be flipped accidentally.
+this test pins the default (off) and the explicit opt-in so a future change to
+the default is caught.
 """
+
+from __future__ import annotations
 
 import pytest
 
-from sglang.srt.mem_cache.extensible_kv_cache import extensible_kv_cache_enabled
+from sglang.srt.mem_cache import extensible_kv_cache as ekc
 
 
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        (None, False),
-        ("0", False),
-        ("1", True),
-    ],
-)
-def test_extensible_kv_cache_env_switch(monkeypatch, value, expected):
-    if value is None:
-        monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
-    else:
-        monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", value)
-    assert extensible_kv_cache_enabled() is expected
-
-
-def test_extensible_kv_cache_default_is_off(monkeypatch):
+def test_default_is_disabled(monkeypatch):
     monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
-    assert extensible_kv_cache_enabled() is False
+    assert ekc.extensible_kv_cache_enabled() is False
+
+
+@pytest.mark.parametrize("value", ["1", "true", "yes", "on"])
+def test_explicit_enable(monkeypatch, value):
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", value)
+    # Only the documented "1" enables the path; other spellings stay off so
+    # the switch is unambiguous across shells and CI configs.
+    assert ekc.extensible_kv_cache_enabled() is (value == "1")
+
+
+def test_explicit_disable(monkeypatch):
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "0")
+    assert ekc.extensible_kv_cache_enabled() is False

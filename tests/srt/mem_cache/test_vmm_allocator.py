@@ -11,124 +11,149 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""CPU-safe unit tests for the VMM allocator wrapper.
+"""Unit tests for the minimal VMM-backed growable buffer.
 
-These tests do not require a GPU: they exercise the availability probe, the
-fallback reason, and the pure-Python sizing helpers. GPU-backed reservation
-and commit behaviour is covered by the extensible KV cache tests, which skip
-when VMM is unavailable.
+These tests exercise the pure-Python bookkeeping of ``VmmBuffer`` without a
+GPU: the driver calls are replaced by a fake so the reservation/commit logic,
+idempotency and rollback behaviour can be checked on CPU-only CI hosts.
 """
 
-import os
-from unittest import mock
+from __future__ import annotations
+
+import ctypes
 
 import pytest
 
 from sglang.srt.mem_cache import vmm_allocator
-from sglang.srt.mem_cache.vmm_allocator import (
-    VmmBuffer,
-    VmmUnavailableError,
-    is_vmm_available,
-    vmm_unavailable_reason,
-)
 
 
-def test_disable_env_reports_reason(monkeypatch):
-    monkeypatch.setenv("SGLANG_DISABLE_VMM", "1")
-    assert vmm_unavailable_reason() == "SGLANG_DISABLE_VMM=1"
-    assert is_vmm_available() is False
+class _FakeDriver:
+    """Records driver calls and simulates a fixed granularity."""
+
+    def __init__(self, granularity: int = 2 << 20, fail_on_map: int | None = None):
+        self.granularity = granularity
+        self.fail_on_map = fail_on_map
+        self.reserved: list[int] = []
+        self.mapped: list[int] = []
+        self.unmapped: list[int] = []
+        self.released: list[int] = []
+        self._next_handle = 1
+
+    def cuMemGetAllocationGranularity(self, granule, prop, flag):
+        granule._obj.value = self.granularity
+        return 0
+
+    def cuMemAddressReserve(self, ptr, size, alignment, addr, flags):
+        ptr._obj.value = 0x1000_0000
+        self.reserved.append(size)
+        return 0
+
+    def cuMemCreate(self, handle, size, prop, flags):
+        handle._obj.value = self._next_handle
+        self._next_handle += 1
+        return 0
+
+    def cuMemMap(self, va, size, handle, flags):
+        if self.fail_on_map is not None and len(self.mapped) >= self.fail_on_map:
+            return 1
+        self.mapped.append(va)
+        return 0
+
+    def cuMemSetAccess(self, va, size, desc, count):
+        return 0
+
+    def cuMemUnmap(self, va, size):
+        self.unmapped.append(va)
+        return 0
+
+    def cuMemRelease(self, handle):
+        self.released.append(handle)
+        return 0
+
+    def cuMemAddressFree(self, ptr, size):
+        return 0
 
 
-def test_unavailable_without_cuda(monkeypatch):
-    monkeypatch.delenv("SGLANG_DISABLE_VMM", raising=False)
-    with mock.patch.object(vmm_allocator.torch.cuda, "is_available", return_value=False):
-        assert vmm_unavailable_reason() == "CUDA is not available"
-        assert is_vmm_available() is False
+@pytest.fixture
+def fake_driver(monkeypatch):
+    driver = _FakeDriver()
+    monkeypatch.setattr(vmm_allocator, "_load_driver", lambda: driver)
+    monkeypatch.setattr(vmm_allocator, "vmm_unavailable_reason", lambda: None)
+    monkeypatch.setattr(vmm_allocator.torch.cuda, "current_device", lambda: 0)
+    return driver
 
 
-def test_buffer_rejects_when_unavailable(monkeypatch):
-    monkeypatch.setenv("SGLANG_DISABLE_VMM", "1")
-    with pytest.raises(VmmUnavailableError):
-        VmmBuffer(1 << 20, 0)
+def test_reserve_rounds_up_to_granularity(fake_driver):
+    buf = vmm_allocator.VmmBuffer(3 << 20, 0)
+    try:
+        assert buf.reserved_size == 4 << 20
+        assert buf.committed_bytes == 0
+        assert fake_driver.reserved == [4 << 20]
+    finally:
+        buf.free()
 
 
-def test_buffer_rejects_non_positive_size(monkeypatch):
-    monkeypatch.delenv("SGLANG_DISABLE_VMM", raising=False)
-    with mock.patch.object(vmm_allocator, "vmm_unavailable_reason", return_value=None):
+def test_commit_is_monotonic_and_idempotent(fake_driver):
+    buf = vmm_allocator.VmmBuffer(8 << 20, 0)
+    try:
+        assert buf.commit(1) == 2 << 20
+        assert buf.commit(1) == 2 << 20
+        assert buf.commit(3 << 20) == 4 << 20
+        # Committing fewer bytes than already committed is a no-op.
+        assert buf.commit(1 << 20) == 4 << 20
+        assert buf.num_committed_granules == 2
+    finally:
+        buf.free()
+
+
+def test_commit_never_exceeds_reservation(fake_driver):
+    buf = vmm_allocator.VmmBuffer(4 << 20, 0)
+    try:
         with pytest.raises(ValueError):
-            VmmBuffer(0, 0)
+            buf.commit((4 << 20) + 1)
+        assert buf.committed_bytes == 0
+    finally:
+        buf.free()
 
 
-def test_round_up_is_granule_aligned():
-    granule = 2 << 20
-    for value in (0, 1, granule - 1, granule, granule + 1, 3 * granule + 7):
-        rounded = vmm_allocator._round_up(value, granule)
-        assert rounded % granule == 0
-        assert rounded >= value
-        assert rounded - value < granule
+def test_commit_range_maps_only_requested_granules(fake_driver):
+    buf = vmm_allocator.VmmBuffer(8 << 20, 0)
+    try:
+        buf.commit_range(2 << 20, 4 << 20)
+        assert buf.num_committed_granules == 1
+        assert buf.committed_bytes == 2 << 20
+    finally:
+        buf.free()
 
 
-def test_commit_is_monotonic_and_bounded():
-    """Exercise the commit bookkeeping without a driver by stubbing mapping."""
-    granule = 2 << 20
-    buffer = VmmBuffer.__new__(VmmBuffer)
-    buffer._freed = False
-    buffer.device_index = 0
-    buffer.granularity = granule
-    buffer.reserved_size = 4 * granule
-    buffer.base_ptr = 0x1000
-    buffer._mapped_granules = set()
-    buffer._handles = []
-
-    def fake_map(granule_index):
-        buffer._mapped_granules.add(granule_index)
-        buffer._handles.append((granule_index, buffer.base_ptr + granule_index * granule, granule))
-
-    def fake_unmap(granule_index):
-        buffer._mapped_granules.discard(granule_index)
-        buffer._handles = [h for h in buffer._handles if h[0] != granule_index]
-
-    buffer._map_granule = fake_map
-    buffer._unmap_granule = fake_unmap
-
-    assert buffer.commit(0) == 0
-    assert buffer.commit(granule) == granule
-    # Committing fewer bytes is a no-op.
-    assert buffer.commit(granule // 2) == granule
-    assert buffer.commit(3 * granule) == 3 * granule
-    assert buffer.commit(4 * granule) == 4 * granule
-    with pytest.raises(ValueError):
-        buffer.commit(4 * granule + 1)
+def test_failed_commit_rolls_back(monkeypatch):
+    driver = _FakeDriver(fail_on_map=1)
+    monkeypatch.setattr(vmm_allocator, "_load_driver", lambda: driver)
+    monkeypatch.setattr(vmm_allocator, "vmm_unavailable_reason", lambda: None)
+    monkeypatch.setattr(vmm_allocator.torch.cuda, "current_device", lambda: 0)
+    buf = vmm_allocator.VmmBuffer(8 << 20, 0)
+    try:
+        with pytest.raises(vmm_allocator.VmmUnavailableError):
+            buf.commit(4 << 20)
+        # The first granule was mapped, then rolled back.
+        assert buf.committed_bytes == 0
+        assert len(driver.unmapped) == 1
+        assert len(driver.released) == 1
+    finally:
+        buf.free()
 
 
-def test_commit_rolls_back_on_failure():
-    granule = 2 << 20
-    buffer = VmmBuffer.__new__(VmmBuffer)
-    buffer._freed = False
-    buffer.device_index = 0
-    buffer.granularity = granule
-    buffer.reserved_size = 4 * granule
-    buffer.base_ptr = 0x1000
-    buffer._mapped_granules = set()
-    buffer._handles = []
+def test_free_releases_everything(fake_driver):
+    buf = vmm_allocator.VmmBuffer(4 << 20, 0)
+    buf.commit(4 << 20)
+    buf.free()
+    assert buf.is_freed
+    assert buf.committed_bytes == 0
+    assert len(fake_driver.unmapped) == 2
+    assert len(fake_driver.released) == 2
 
-    calls = {"n": 0}
 
-    def flaky_map(granule_index):
-        calls["n"] += 1
-        if calls["n"] == 2:
-            raise VmmUnavailableError("boom")
-        buffer._mapped_granules.add(granule_index)
-        buffer._handles.append((granule_index, buffer.base_ptr + granule_index * granule, granule))
-
-    def fake_unmap(granule_index):
-        buffer._mapped_granules.discard(granule_index)
-        buffer._handles = [h for h in buffer._handles if h[0] != granule_index]
-
-    buffer._map_granule = flaky_map
-    buffer._unmap_granule = fake_unmap
-
-    with pytest.raises(VmmUnavailableError):
-        buffer.commit(3 * granule)
-    assert buffer.committed_bytes == 0
-    assert buffer._handles == []
+def test_unavailable_reason_short_circuits(monkeypatch):
+    monkeypatch.setenv("SGLANG_DISABLE_VMM", "1")
+    assert vmm_allocator.vmm_unavailable_reason() == "SGLANG_DISABLE_VMM=1"
+    assert not vmm_allocator.is_vmm_available()
