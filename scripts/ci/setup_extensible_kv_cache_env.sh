@@ -12,67 +12,79 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-# Prepare an isolated python3.12 virtualenv for the extensible KV cache checks.
+# Sole installation entry point for the extensible KV cache CI dimensions.
 #
-# The CI job previously ran a bare `pip install -e python`, which resolved
-# wheels for whatever interpreter happened to be first on PATH (cp314 in the
-# failing run) while the test steps activated a .venv that was never created.
-# This script makes the interpreter explicit and fails fast when it is wrong.
+# The CI runner ships a system python3.14; installing the package with it
+# resolves cp314 wheels and breaks the python3.12 assertions in the test
+# commands. This script therefore creates an isolated python3.12 venv and
+# performs every install through it. It must be the only install step run by
+# the tests / stability / performance / usability dimensions.
+
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VENV_DIR="${REPO_ROOT}/.venv"
-PYTHON_BIN="${PYTHON_BIN:-python3.12}"
+cd "${REPO_ROOT}"
 
-log() { printf '[setup-extensible-kv-cache] %s\n' "$*" >&2; }
-
-log "repo root: ${REPO_ROOT}"
-log "requested interpreter: ${PYTHON_BIN}"
-
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  log "ERROR: ${PYTHON_BIN} not found on PATH"
-  log "PATH=${PATH}"
-  exit 1
-fi
-
-log "which ${PYTHON_BIN}: $(command -v "${PYTHON_BIN}")"
-log "${PYTHON_BIN} -V: $(${PYTHON_BIN} -V 2>&1)"
-
-# Recreate the venv when it is missing or built from another interpreter.
-if [ -d "${VENV_DIR}" ]; then
-  if ! "${VENV_DIR}/bin/python" -c 'import sys; assert sys.version_info[:2]==(3,12), sys.version' >/dev/null 2>&1; then
-    log "existing .venv is not python3.12, recreating"
-    rm -rf "${VENV_DIR}"
-  fi
-fi
-
-if [ ! -d "${VENV_DIR}" ]; then
-  log "creating venv at ${VENV_DIR}"
-  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
-fi
-
-# Guard against an inherited PYTHONPATH or VIRTUAL_ENV pointing elsewhere.
+# Never let an inherited PYTHONPATH leak the system interpreter's packages
+# into the venv.
 unset PYTHONPATH || true
-export VIRTUAL_ENV="${VENV_DIR}"
-export PATH="${VENV_DIR}/bin:${PATH}"
 
-VENV_PY="${VENV_DIR}/bin/python"
+if ! command -v python3.12 >/dev/null 2>&1; then
+    echo "ERROR: python3.12 not found on PATH" >&2
+    command -v python3 || true
+    python3 -V || true
+    exit 1
+fi
 
-log "which python: $(command -v python || true)"
-log "${VENV_PY} -V: $(${VENV_PY} -V 2>&1)"
+rm -rf .venv
+python3.12 -m venv .venv
 
-"${VENV_PY}" -c 'import sys; assert sys.version_info[:2]==(3,12), sys.version'
+VENV_PY="${REPO_ROOT}/.venv/bin/python"
+VENV_PIP="${REPO_ROOT}/.venv/bin/python -m pip"
 
-log "upgrading pip"
-"${VENV_PY}" -m pip install --upgrade pip
+# Fail fast if the venv is not the interpreter the test commands assert on.
+"${VENV_PY}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
 
-log "installing sglang editable"
-"${VENV_PY}" -m pip install -e "${REPO_ROOT}/python"
+# Only binary wheels: no source builds, and no cp314 wheels can be selected
+# because the interpreter is 3.12.
+export PIP_ONLY_BINARY=:all:
+export PIP_DISABLE_PIP_VERSION_CHECK=1
 
-log "installing test dependencies"
-"${VENV_PY}" -m pip install pytest pytest-randomly
+${VENV_PIP} install --upgrade pip setuptools wheel
 
-log "verifying sglang import"
-"${VENV_PY}" -c 'import sglang; print("sglang", sglang.__version__)'
+# Dry run first so a cp314 resolution fails before anything is installed.
+DRY_RUN_LOG="$(mktemp)"
+trap 'rm -f "${DRY_RUN_LOG}"' EXIT
+if ! ${VENV_PIP} install --dry-run -e python >"${DRY_RUN_LOG}" 2>&1; then
+    echo "ERROR: pip dry-run failed" >&2
+    cat "${DRY_RUN_LOG}" >&2
+    "${VENV_PY}" -V || true
+    ${VENV_PIP} -V || true
+    ${VENV_PIP} debug --verbose || true
+    exit 1
+fi
+if grep -q 'cp314' "${DRY_RUN_LOG}"; then
+    echo "ERROR: pip resolved cp314 wheels; refusing to install" >&2
+    grep 'cp314' "${DRY_RUN_LOG}" >&2 || true
+    exit 1
+fi
 
-log "environment ready: ${VENV_PY}"
+${VENV_PIP} install -e python
+
+# Post-install assertions: interpreter version and importability.
+if ! "${VENV_PY}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'; then
+    echo "ERROR: venv interpreter is not python3.12" >&2
+    "${VENV_PY}" -V || true
+    ${VENV_PIP} -V || true
+    ${VENV_PIP} debug --verbose || true
+    exit 1
+fi
+if ! "${VENV_PY}" -c 'import sglang'; then
+    echo "ERROR: sglang is not importable in the venv" >&2
+    "${VENV_PY}" -V || true
+    ${VENV_PIP} -V || true
+    ${VENV_PIP} debug --verbose || true
+    exit 1
+fi
+
+echo "extensible KV cache CI environment ready: $("${VENV_PY}" -V)"
