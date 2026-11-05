@@ -12,85 +12,53 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-# Prepare a reproducible environment for the extensible KV cache tests.
+# Prepare a Python 3.12 virtualenv for the extensible KV cache tests.
 #
-# The previous CI failure happened during dependency resolution because the
-# runner picked up Python 3.14 and tried to install cp314 wheels. This script
-# pins the interpreter, creates an isolated virtual environment, and installs
-# the project into it so that the test commands in the verification plan can
-# run against a known Python version.
-#
-# Usage:
-#   bash scripts/ci/setup_extensible_kv_cache_env.sh
-#   . .venv/bin/activate
-#   python -m pytest -q tests/srt/mem_cache/test_vmm_allocator.py ...
+# The runner's default interpreter may be newer than the versions the project
+# publishes wheels for, which makes pip resolve cp314 wheels and fail. This
+# script always creates the venv from python3.12 and verifies the interpreter
+# before and after installing dependencies.
 
 set -euo pipefail
 
-REQUIRED_PYTHON_MAJOR=3
-REQUIRED_PYTHON_MINOR=12
-VENV_DIR="${VENV_DIR:-.venv}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+VENV_DIR="${VENV_DIR:-${REPO_ROOT}/.venv}"
+PYTHON_BIN="${PYTHON_BIN:-python3.12}"
 
-log() {
-    printf '[setup_extensible_kv_cache_env] %s\n' "$*" >&2
-}
-
-fail() {
-    log "ERROR: $*"
-    exit 1
-}
-
-# 1. Locate a Python interpreter matching the required version.
-PYTHON_BIN=""
-for candidate in "python${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}" python3 python; do
-    if ! command -v "${candidate}" >/dev/null 2>&1; then
-        continue
-    fi
-    version="$("${candidate}" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)"
-    if [ "${version}" = "${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}" ]; then
-        PYTHON_BIN="$(command -v "${candidate}")"
-        break
-    fi
-done
-
-if [ -z "${PYTHON_BIN}" ]; then
-    fail "Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR} not found; install it before running this script"
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  echo "error: ${PYTHON_BIN} not found on PATH" >&2
+  exit 1
 fi
 
-log "Using interpreter: ${PYTHON_BIN}"
-"${PYTHON_BIN}" -c 'import sys; print(sys.version)' >&2
-
-# 2. Create (or reuse) an isolated virtual environment.
 if [ ! -x "${VENV_DIR}/bin/python" ]; then
-    log "Creating virtual environment at ${VENV_DIR}"
-    "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
 fi
 
 VENV_PYTHON="${VENV_DIR}/bin/python"
+
+# Never fall back to the system interpreter: fail loudly instead.
 if [ ! -x "${VENV_PYTHON}" ]; then
-    fail "virtual environment interpreter ${VENV_PYTHON} is missing"
+  echo "error: ${VENV_PYTHON} is missing" >&2
+  exit 1
 fi
 
-venv_version="$("${VENV_PYTHON}" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
-if [ "${venv_version}" != "${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}" ]; then
-    fail "virtual environment uses Python ${venv_version}, expected ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}"
+echo "which python: $(command -v python || true)"
+echo "venv python: ${VENV_PYTHON}"
+echo "venv version: $(${VENV_PYTHON} -V 2>&1)"
+
+if ! "${VENV_PYTHON}" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)'; then
+  echo "error: ${VENV_PYTHON} is not Python 3.12.x" >&2
+  "${VENV_PYTHON}" -V >&2 || true
+  exit 1
 fi
 
-# 3. Upgrade packaging tools inside the venv only.
-log "Upgrading pip/setuptools/wheel"
-"${VENV_PYTHON}" -m pip install --upgrade pip setuptools wheel
+"${VENV_PYTHON}" -m pip install -U pip
+"${VENV_PYTHON}" -m pip install -e "${REPO_ROOT}/python"
 
-# 4. Install the project in editable mode using the pinned interpreter.
-if [ -f "python/pyproject.toml" ] || [ -f "python/setup.py" ]; then
-    log "Installing project from python/"
-    "${VENV_PYTHON}" -m pip install -e python
-else
-    log "Installing project from repository root"
-    "${VENV_PYTHON}" -m pip install -e .
+echo "installed version: $(${VENV_PYTHON} -V 2>&1)"
+if ! "${VENV_PYTHON}" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)'; then
+  echo "error: interpreter changed during install" >&2
+  exit 1
 fi
 
-# 5. Sanity check: the package must import under the pinned interpreter.
-log "Verifying sglang import"
-"${VENV_PYTHON}" -c 'import sglang; print("sglang import OK")'
-
-log "Environment ready. Activate with: . ${VENV_DIR}/bin/activate"
+echo "extensible kv cache env ready: ${VENV_PYTHON}"

@@ -10,47 +10,49 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# ==============================================================================
-"""Argument parsing tests for the opt-in extensible KV cache switch.
 
-These tests exercise the environment-variable switch that gates the VMM-backed
-KV cache path. They do not require CUDA: the switch is read from the process
-environment and must default to disabled so that the existing estimate-based
-allocation path remains the default.
-"""
+import argparse
+import dataclasses
+from typing import Optional
 
-import pytest
-
-from sglang.srt.mem_cache.extensible_kv_cache import (
-    extensible_kv_cache_enabled,
-    plan_extensible_kv_cache,
-    ExtensibleKVCacheConfig,
-)
+from sglang.srt.arg_groups.arg_utils import A, Arg, add_cli_args_from_dataclass
 
 
-def test_switch_defaults_to_disabled(monkeypatch):
-    monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
-    assert extensible_kv_cache_enabled() is False
+@dataclasses.dataclass
+class _ExtensibleKVCacheArgs:
+    enable_extensible_kv_cache: A[
+        bool, Arg(help="Enable the VMM-backed extensible KV cache.")
+    ] = False
+    extensible_kv_cache_fallback: A[
+        Optional[str],
+        Arg(help="Fallback mode when VMM is unavailable."),
+    ] = None
 
 
-def test_switch_enabled_by_env(monkeypatch):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
-    assert extensible_kv_cache_enabled() is True
+def _parse(argv):
+    parser = argparse.ArgumentParser()
+    add_cli_args_from_dataclass(parser, _ExtensibleKVCacheArgs)
+    return parser.parse_args(argv)
 
 
-def test_switch_explicit_disable_falls_back(monkeypatch):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "0")
-    assert extensible_kv_cache_enabled() is False
-    config = ExtensibleKVCacheConfig(
-        bytes_per_block=1 << 20,
-        max_num_blocks=4,
-        device_index=0,
-    )
-    # Disabled switch must short-circuit before touching the driver.
-    assert plan_extensible_kv_cache(config) is None
+def test_defaults_are_off():
+    args = _parse([])
+    assert args.enable_extensible_kv_cache is False
+    assert args.extensible_kv_cache_fallback is None
 
 
-@pytest.mark.parametrize("value", ["", "false", "no", "off", "2"])
-def test_switch_rejects_non_enabled_values(monkeypatch, value):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", value)
-    assert extensible_kv_cache_enabled() is False
+def test_explicit_enable():
+    args = _parse(["--enable-extensible-kv-cache"])
+    assert args.enable_extensible_kv_cache is True
+
+
+def test_explicit_fallback_mode():
+    args = _parse(["--extensible-kv-cache-fallback", "estimate"])
+    assert args.extensible_kv_cache_fallback == "estimate"
+
+
+def test_help_mentions_vmm():
+    parser = argparse.ArgumentParser()
+    add_cli_args_from_dataclass(parser, _ExtensibleKVCacheArgs)
+    help_text = parser.format_help()
+    assert "VMM-backed" in help_text

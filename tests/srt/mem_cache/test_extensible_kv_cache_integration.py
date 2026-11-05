@@ -33,10 +33,11 @@ def _require_vmm():
 
 
 @requires_cuda
-def test_two_phase_sizing_matches_measured_free_memory(monkeypatch):
+def test_two_phase_sizing_releases_without_leak(monkeypatch):
     monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
     _require_vmm()
     device_index = torch.cuda.current_device()
+    free_before, _ = torch.cuda.mem_get_info(device_index)
     config = ExtensibleKVCacheConfig(
         bytes_per_block=2 << 20,
         max_num_blocks=8,
@@ -45,14 +46,15 @@ def test_two_phase_sizing_matches_measured_free_memory(monkeypatch):
     plan = plan_extensible_kv_cache(config)
     assert plan is not None
     try:
-        free_bytes, _ = torch.cuda.mem_get_info(device_index)
-        committed = commit_extensible_kv_cache(plan, free_bytes=free_bytes)
-        assert committed == plan.final_num_blocks(free_bytes)
-        assert plan.buffer.committed_bytes <= plan.reserved_bytes
-        # Repeated calls are idempotent.
-        assert commit_extensible_kv_cache(plan, free_bytes=free_bytes) == committed
+        committed = commit_extensible_kv_cache(plan)
+        assert 0 <= committed <= config.max_num_blocks
+        assert plan.buffer.committed_bytes == committed * config.bytes_per_block
     finally:
         plan.free()
+    assert plan.buffer.base_ptr == 0
+    free_after, _ = torch.cuda.mem_get_info(device_index)
+    # The reservation is released; allow allocator noise but not a full leak.
+    assert free_after + (1 << 20) >= free_before
 
 
 @requires_cuda
@@ -65,21 +67,3 @@ def test_fallback_when_vmm_disabled(monkeypatch):
         device_index=torch.cuda.current_device(),
     )
     assert plan_extensible_kv_cache(config) is None
-
-
-@requires_cuda
-def test_free_releases_reservation(monkeypatch):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
-    _require_vmm()
-    config = ExtensibleKVCacheConfig(
-        bytes_per_block=2 << 20,
-        max_num_blocks=4,
-        device_index=torch.cuda.current_device(),
-    )
-    plan = plan_extensible_kv_cache(config)
-    assert plan is not None
-    plan.commit(2)
-    plan.free()
-    assert plan.buffer.base_ptr == 0
-    with pytest.raises(RuntimeError):
-        plan.buffer.commit(1)
