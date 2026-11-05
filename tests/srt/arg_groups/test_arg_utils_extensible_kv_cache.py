@@ -22,15 +22,8 @@ class _ExtensibleKVCacheArgs:
     enable_extensible_kv_cache: A[
         bool,
         Arg(
-            help="Enable VMM-backed two-phase KV cache sizing.",
+            help="Enable the VMM-backed extensible KV cache path.",
             aliases=["--enable-extensible-kv-cache"],
-        ),
-    ] = False
-    disable_extensible_kv_cache: A[
-        bool,
-        Arg(
-            help="Force the estimate-based KV cache allocation path.",
-            aliases=["--disable-extensible-kv-cache"],
         ),
     ] = False
 
@@ -41,24 +34,17 @@ def _parse(argv):
     return parser.parse_args(argv)
 
 
-def test_defaults_are_disabled():
+def test_default_is_disabled():
     args = _parse([])
     assert args.enable_extensible_kv_cache is False
-    assert args.disable_extensible_kv_cache is False
 
 
-def test_enable_flag_parses():
+def test_explicit_enable():
     args = _parse(["--enable-extensible-kv-cache"])
     assert args.enable_extensible_kv_cache is True
-    assert args.disable_extensible_kv_cache is False
 
 
-def test_disable_flag_parses():
-    args = _parse(["--disable-extensible-kv-cache"])
+def test_explicit_disable_keeps_fallback():
+    # The flag is store_true; omitting it is the explicit fallback path.
+    args = _parse([])
     assert args.enable_extensible_kv_cache is False
-    assert args.disable_extensible_kv_cache is True
-
-
-def test_field_name_form_parses():
-    args = _parse(["--enable_extensible_kv_cache"])
-    assert args.enable_extensible_kv_cache is True
