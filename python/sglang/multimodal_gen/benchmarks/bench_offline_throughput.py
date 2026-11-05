@@ -351,9 +351,20 @@ def generate_batch(
             stream_error = _first_result_error(results)
             if stream_error is not None:
                 # Keep the partial output for diagnostics, but never count
-                # this request as successful.
+                # this request as successful. The server's error is the root
+                # cause and must win over any partial output.
                 output.error = f"Generation stream error: {stream_error}"
-                raise RuntimeError(output.error)
+                output.requests.append(
+                    RequestOutput(
+                        request_id=request_id,
+                        prompt=prompt,
+                        sampling_params=dict(params),
+                        success=False,
+                        latency_seconds=time.perf_counter() - request_start_time,
+                        error=output.error,
+                    )
+                )
+                continue
             # A result that carries no error but also no output is not a
             # successful generation; keep it out of the success aggregates.
             if not any(_result_has_output(item) for item in results):
