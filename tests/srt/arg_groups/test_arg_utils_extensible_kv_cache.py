@@ -11,12 +11,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""CLI parsing tests for the extensible KV cache switch."""
+"""Argument parsing tests for the extensible KV cache switch.
+
+The switch is currently an environment variable, so these tests pin the
+contract the CLI/arg layer relies on: the default is off, an explicit value
+enables it, and the fallback path is selected when the feature is off.
+"""
 
 import argparse
-import dataclasses
 
-from sglang.srt.arg_groups.arg_utils import A, Arg, add_cli_args_from_dataclass
+from sglang.srt.arg_groups.arg_utils import (
+    A,
+    Arg,
+    add_cli_args_from_dataclass,
+    _env_flag_default,
+)
+from sglang.srt.mem_cache.extensible_kv_cache import extensible_kv_cache_enabled
+
+import dataclasses
 
 
 @dataclasses.dataclass
@@ -26,22 +38,31 @@ class _Args:
     ] = False
 
 
-def _parse(argv):
+def test_cli_flag_defaults_off():
     parser = argparse.ArgumentParser()
     add_cli_args_from_dataclass(parser, _Args)
-    return parser.parse_args(argv)
-
-
-def test_default_is_disabled():
-    args = _parse([])
+    args = parser.parse_args([])
     assert args.enable_extensible_kv_cache is False
 
 
-def test_explicit_enable():
-    args = _parse(["--enable-extensible-kv-cache"])
+def test_cli_flag_can_be_enabled():
+    parser = argparse.ArgumentParser()
+    add_cli_args_from_dataclass(parser, _Args)
+    args = parser.parse_args(["--enable-extensible-kv-cache"])
     assert args.enable_extensible_kv_cache is True
 
 
-def test_explicit_disable_keeps_fallback():
-    args = _parse([])
-    assert args.enable_extensible_kv_cache is False
+def test_env_flag_default_helper(monkeypatch):
+    monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
+    assert _env_flag_default("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE") is False
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
+    assert _env_flag_default("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE") is True
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "off")
+    assert _env_flag_default("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE") is False
+
+
+def test_runtime_switch_matches_env(monkeypatch):
+    monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
+    assert extensible_kv_cache_enabled() is False
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
+    assert extensible_kv_cache_enabled() is True
