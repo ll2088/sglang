@@ -97,3 +97,17 @@ def test_manifest_error_message_is_readable(manifest_module, tmp_path):
     with pytest.raises(ValueError) as excinfo:
         manifest_module.load_request_manifest(path)
     assert "boom" in str(excinfo.value)
+
+
+def test_manifest_rejects_error_in_sampling_params(manifest_module, tmp_path):
+    path = _write_manifest(
+        tmp_path,
+        [
+            {
+                "prompt": "hello",
+                "sampling_params": {"error": {"message": "boom", "code": 500}},
+            }
+        ],
+    )
+    with pytest.raises(ValueError, match="stream error"):
+        manifest_module.load_request_manifest(path)

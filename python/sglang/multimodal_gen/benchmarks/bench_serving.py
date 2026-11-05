@@ -320,6 +320,149 @@ def _finalize_stream_output(
         output.error = "Never received a valid chunk to calculate TTFT."
 
 
+def _extract_stream_error_from_text(text: str) -> Optional[str]:
+    """Return the first server error object carried by an SSE text body.
+
+    The server may batch several ``data:`` events into one chunk, so the body
+    is split and each payload is inspected. An ``error`` envelope wins over
+    any output carried by the same body: the server's error is the root cause,
+    while a partial result is only a symptom.
+    """
+    if not isinstance(text, str):
+        return None
+    for payload in _iter_stream_payloads(text.encode("utf-8")):
+        stream_error = _extract_stream_error(payload)
+        if stream_error is not None:
+            return stream_error
+    return None
+
+
+def _stream_error_from_chunk(chunk_bytes: bytes) -> Optional[str]:
+    """Return the first server error object carried by one SSE chunk.
+
+    A chunk may batch several ``data:`` events, so every payload is inspected
+    and the first ``error`` envelope wins. This is the single entry point used
+    by the streaming request functions below.
+    """
+    if not isinstance(chunk_bytes, (bytes, bytearray)):
+        return None
+    for payload in _iter_stream_payloads(bytes(chunk_bytes)):
+        stream_error = _extract_stream_error(payload)
+        if stream_error is not None:
+            return stream_error
+    return None
+
+
+def _extract_stream_error_from_json_body(body: Any) -> Optional[str]:
+    """Return the first server error object carried by a JSON response body.
+
+    A non-streaming response may still report a generation failure as an
+    ``error`` envelope with HTTP 200, so the top-level object and the nested
+    ``data``/``results``/``outputs`` containers are inspected. The server's
+    error is the root cause and wins over any partial output.
+    """
+    stream_error = _extract_stream_error(body)
+    if stream_error is not None:
+        return stream_error
+    if not isinstance(body, dict):
+        return None
+    for key in ("data", "results", "outputs"):
+        items = body.get(key)
+        if isinstance(items, dict):
+            items = [items]
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            stream_error = _extract_stream_error(item)
+            if stream_error is not None:
+                return stream_error
+    return None
+
+
+def _extract_stream_error_from_response_body(body: Any) -> Optional[str]:
+    """Return the first server error object carried by a response body.
+
+    A response body may be a JSON object, a JSON list, or an SSE text body.
+    The server's error is the root cause and wins over any partial output.
+    """
+    if isinstance(body, str):
+        return _extract_stream_error_from_text(body)
+    if isinstance(body, list):
+        for item in body:
+            stream_error = _extract_stream_error_from_json_body(item)
+            if stream_error is not None:
+                return stream_error
+        return None
+    return _extract_stream_error_from_json_body(body)
+
+
+def _iter_stream_payloads(chunk_bytes: bytes):
+    """Yield decoded JSON payloads from one SSE chunk.
+
+    The server may batch several ``data:`` events into a single chunk, so a
+    chunk is split on newlines and each ``data:`` line is decoded on its own.
+    Non-JSON payloads (for example the ``[DONE]`` sentinel) are skipped.
+    """
+    for line in chunk_bytes.splitlines():
+        line = line.strip()
+        if not line.startswith(b"data:"):
+            continue
+        data = line[len(b"data:") :].strip()
+        if not data or data == b"[DONE]":
+            continue
+        try:
+            yield json.loads(data)
+        except json.JSONDecodeError:
+            continue
+
+
+def _classify_stream_payload(payload: Any) -> tuple[bool, Optional[str]]:
+    """Classify one streamed payload as (has_output, stream_error).
+
+    An ``error`` envelope wins over any output carried by the same payload:
+    the server's error is the root cause, while a partial result is only a
+    symptom. This mirrors the benchmark client rule that a stream which
+    delivered tokens and then failed must not be counted as successful.
+    """
+    stream_error = _extract_stream_error(payload)
+    if stream_error is not None:
+        return False, stream_error
+    if not isinstance(payload, dict):
+        return False, None
+    has_output = bool(
+        payload.get("choices")
+        or payload.get("data")
+        or payload.get("file_paths")
+        or payload.get("urls")
+        or payload.get("file_path")
+        or payload.get("url")
+        or payload.get("num_outputs")
+    )
+    return has_output, None
+
+
+def _finalize_stream_output(
+    output: RequestFuncOutput,
+    stream_error: Optional[str],
+    first_chunk_received: bool,
+) -> None:
+    """Apply the stream outcome to ``output``.
+
+    A server error event takes precedence over the "no valid chunk" symptom:
+    the error is the root cause, and a request that streamed tokens before
+    failing must not be counted as successful. Partial output is kept for
+    detailed saving.
+    """
+    if stream_error is not None:
+        output.success = False
+        output.error = stream_error
+    elif first_chunk_received:
+        output.success = True
+    else:
+        output.success = False
+        output.error = "Never received a valid chunk to calculate TTFT."
+
+
 async_request_image_sglang(
     input: RequestFuncInput,
     session: aiohttp.ClientSession,
