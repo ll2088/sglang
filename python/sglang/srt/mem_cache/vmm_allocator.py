@@ -112,7 +112,7 @@ def _torch_dtype_to_typestr(dtype: torch.dtype) -> str:
     """Map a torch dtype to the NumPy-style typestr used by the interface."""
     mapping = {
         torch.float16: "<f2",
-        torch.bfloat16: "<f2",
+        torch.bfloat16: "<V2",
         torch.float32: "<f4",
         torch.float64: "<f8",
         torch.int8: "|i1",
@@ -233,7 +233,7 @@ class VmmBuffer:
         if max_bytes <= 0:
             raise ValueError("max_bytes must be positive")
         self._lib = _load_driver()
-        self._device_index = device_index
+        self.device_index = device_index
         self._freed = False
 
         # Ensure the CUDA context exists before touching the driver API.
@@ -277,7 +277,7 @@ class VmmBuffer:
         prop = _CuMemAllocationProp()
         prop.type = _CU_MEM_ALLOCATION_TYPE_PINNED
         prop.location.type = _CU_MEM_LOCATION_TYPE_DEVICE
-        prop.location.id = self._device_index
+        prop.location.id = self.device_index
         return prop
 
     def _map_granule(self, granule_index: int) -> None:
@@ -297,7 +297,7 @@ class VmmBuffer:
             )
             access = _CuMemAccessDesc()
             access.location.type = _CU_MEM_LOCATION_TYPE_DEVICE
-            access.location.id = self._device_index
+            access.location.id = self.device_index
             access.flags = _CU_MEM_ACCESS_FLAGS_PROT_READWRITE
             _check(
                 self._lib.cuMemSetAccess(
@@ -361,11 +361,10 @@ class VmmBuffer:
             )
         # Build a tensor over the reservation without copying or taking
         # ownership. ``torch.frombuffer`` only accepts host buffers, so wrap
-        # the device pointer with ``from_dlpack`` over a ctypes-backed capsule
-        # is not portable either; use the CUDA array interface instead, which
-        # every supported torch version understands and which keeps the
+        # the device pointer with the CUDA array interface, which every
+        # supported torch version understands and which keeps the
         # reservation's stable base pointer.
-        device = torch.device("cuda", self._device_index)
+        device = torch.device("cuda", self.device_index)
         # ``torch.cuda.caching_allocator_alloc`` would take ownership, so we
         # deliberately avoid it. ``torch.as_tensor`` on a CUDA array interface
         # object creates a view over the existing pointer. The interface is

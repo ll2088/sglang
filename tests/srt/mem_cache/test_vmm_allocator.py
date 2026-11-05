@@ -87,3 +87,18 @@ def test_unavailable_reason_is_string_or_none():
 
 def test_vmm_unavailable_error_is_runtime_error():
     assert issubclass(VmmUnavailableError, RuntimeError)
+
+
+@requires_cuda
+def test_as_tensor_view_stays_valid_across_commit():
+    _require_vmm()
+    buf = VmmBuffer(8 << 20, torch.cuda.current_device())
+    try:
+        view = buf.as_tensor(torch.float16, (1024,))
+        assert view.data_ptr() == buf.base_ptr
+        buf.commit(4 << 20)
+        # The view keeps the same base pointer after more pages are mapped.
+        assert view.data_ptr() == buf.base_ptr
+        assert buf.committed_bytes >= 4 << 20
+    finally:
+        buf.free()

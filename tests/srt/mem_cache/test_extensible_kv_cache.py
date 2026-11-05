@@ -113,3 +113,26 @@ def test_commit_failure_falls_back_to_estimate(monkeypatch):
     with pytest.raises(VmmUnavailableError):
         commit_extensible_kv_cache(plan, free_bytes=8 << 20)
     plan.free()
+
+
+def test_commit_is_idempotent_with_fake_buffer():
+    plan = ExtensibleKVCachePlan.__new__(ExtensibleKVCachePlan)
+    plan.bytes_per_block = 1 << 20
+    plan.max_num_blocks = 4
+
+    class _FakeBuffer:
+        reserved_size = 4 << 20
+        committed_bytes = 0
+
+        def commit(self, num_bytes):
+            self.committed_bytes = max(self.committed_bytes, num_bytes)
+            return self.committed_bytes
+
+        def free(self):
+            pass
+
+    plan.buffer = _FakeBuffer()
+    first = commit_extensible_kv_cache(plan, free_bytes=8 << 20)
+    second = commit_extensible_kv_cache(plan, free_bytes=8 << 20)
+    assert first == second
+    assert first <= plan.max_num_blocks

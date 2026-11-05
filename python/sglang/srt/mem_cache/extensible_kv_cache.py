@@ -159,6 +159,6 @@ def commit_extensible_kv_cache(
     mapping failure so the caller can fall back.
     """
     if free_bytes is None:
-        free_bytes, _ = torch.cuda.mem_get_info(plan.buffer._device_index)
+        free_bytes, _ = torch.cuda.mem_get_info(plan.buffer.device_index)
     num_blocks = plan.final_num_blocks(free_bytes)
     return plan.commit(num_blocks)
