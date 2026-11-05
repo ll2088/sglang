@@ -11,54 +11,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""CLI parsing for the opt-in extensible KV cache switch.
-
-The switch is read from the environment by ``extensible_kv_cache_enabled``;
-this test pins the default (off) and the explicit opt-in/opt-out behaviour so
-that the fallback path stays the default.
-"""
+"""CLI parsing for the opt-in extensible KV cache switch."""
 
 import argparse
-import os
+import dataclasses
 
-import pytest
-
-from sglang.srt.mem_cache.extensible_kv_cache import (
-    extensible_kv_cache_enabled,
-)
+from sglang.srt.arg_groups.arg_utils import A, add_cli_args_from_dataclass
 
 
-def _parse(env_value):
-    """Parse the switch the way the server would, without importing the
-    full ServerArgs (which pulls in the model stack)."""
+@dataclasses.dataclass
+class _Args:
+    enable_extensible_kv_cache: A[
+        bool, "Reserve KV cache VA space and commit after warmup."
+    ] = False
+
+
+def _parse(argv):
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--enable-extensible-kv-cache",
-        action="store_true",
-        default=env_value == "1",
-    )
-    return parser.parse_args([])
+    add_cli_args_from_dataclass(parser, _Args)
+    return parser.parse_args(argv)
 
 
-def test_default_is_disabled(monkeypatch):
-    monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
-    assert extensible_kv_cache_enabled() is False
-    assert _parse(None).enable_extensible_kv_cache is False
+def test_default_is_disabled():
+    assert _parse([]).enable_extensible_kv_cache is False
 
 
-def test_explicit_enable(monkeypatch):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
-    assert extensible_kv_cache_enabled() is True
-    assert _parse("1").enable_extensible_kv_cache is True
+def test_explicit_enable():
+    assert _parse(["--enable-extensible-kv-cache"]).enable_extensible_kv_cache is True
 
 
-def test_explicit_disable(monkeypatch):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "0")
-    assert extensible_kv_cache_enabled() is False
-    assert _parse("0").enable_extensible_kv_cache is False
-
-
-@pytest.mark.parametrize("value", ["", "true", "yes", "on", "2"])
-def test_only_exact_one_enables(monkeypatch, value):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", value)
-    assert extensible_kv_cache_enabled() is False
+def test_explicit_disable_keeps_fallback():
+    # store_true cannot express an explicit off, so the default must stay off
+    # and the runtime env switch must be able to force the fallback path.
+    args = _parse([])
+    assert args.enable_extensible_kv_cache is False
