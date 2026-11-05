@@ -1,4 +1,7 @@
-# Lightweight dependencies for tests/benchmarks stream error tests.
-# These tests load benchmark modules by path and must not require the full
-# sglang dependency tree (no torch, no pyzmq, no quack-kernels).
-pytest>=7.0
+# Minimal dependencies for the benchmark stream-error tests.
+# Deliberately excludes the sglang meta-package so CI does not pull in
+# torch, kernels or other heavy runtime dependencies.
+aiohttp>=3.9
+numpy>=1.24
+pytest>=7.4
+pytest-asyncio>=0.23
