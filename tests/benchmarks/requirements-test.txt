@@ -1,5 +1,4 @@
-# CPU-only dependencies for the stream-error benchmark tests.
+# Lightweight dependencies for tests/benchmarks stream error tests.
 # These tests load benchmark modules by path and must not require the full
-# sglang GPU dependency tree.
+# sglang dependency tree (no torch, no pyzmq, no quack-kernels).
 pytest>=7.0
-numpy

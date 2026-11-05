@@ -185,3 +185,67 @@ def test_benchmark_result_accepts_clean_run(tmp_path: Path) -> None:
     result = module.BenchmarkResult.from_json(result_path)
     assert result.ttft_mean == pytest.approx(0.1)
     assert result.output_throughput_mean == pytest.approx(50.0)
+
+
+def test_summary_excludes_error_event_from_success(tmp_path: Path) -> None:
+    """A run whose stream ended in an error event must not count as success.
+
+    The summary is the user-facing aggregate, so a failed stream has to show
+    up as a failed row rather than contributing its partial metrics.
+    """
+    _require_pytest()
+    summarize = _load_module(
+        "_bench_summarize",
+        _REPO_ROOT / "sgl-model-gateway" / "e2e_test" / "benchmarks" / "summarize.py",
+    )
+    folder = tmp_path / "benchmark_error_case"
+    folder.mkdir()
+    (folder / "result.json").write_text(
+        json.dumps(
+            {
+                "error": {"message": "boom", "code": 500},
+                "aggregated_metrics": {
+                    "stats": {
+                        "ttft": {"mean": 0.1},
+                        "e2e_latency": {"mean": 1.0},
+                        "input_throughput": {"mean": 100.0},
+                        "output_throughput": {"mean": 50.0},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary = summarize.generate_summary(tmp_path)
+    assert "error case" in summary
+    assert "Failed" in summary
+    assert "Success" not in summary
+
+
+def test_summary_counts_clean_run_as_success(tmp_path: Path) -> None:
+    _require_pytest()
+    summarize = _load_module(
+        "_bench_summarize",
+        _REPO_ROOT / "sgl-model-gateway" / "e2e_test" / "benchmarks" / "summarize.py",
+    )
+    folder = tmp_path / "benchmark_clean_case"
+    folder.mkdir()
+    (folder / "result.json").write_text(
+        json.dumps(
+            {
+                "aggregated_metrics": {
+                    "stats": {
+                        "ttft": {"mean": 0.1},
+                        "e2e_latency": {"mean": 1.0},
+                        "input_throughput": {"mean": 100.0},
+                        "output_throughput": {"mean": 50.0},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary = summarize.generate_summary(tmp_path)
+    assert "clean case" in summary
+    assert "Success" in summary
+    assert "Failed" not in summary
