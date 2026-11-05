@@ -314,6 +314,11 @@ def _result_has_output(item: Any) -> bool:
     return getattr(item, "output_file_path", None) is not None
 
 
+def _result_has_output(item: Any) -> bool:
+    """Return whether one generation result carries usable output."""
+    return getattr(item, "output_file_path", None) is not None
+
+
 def generate_batch(
     engine: DiffGenerator,
     bench_args: BenchArgs,
