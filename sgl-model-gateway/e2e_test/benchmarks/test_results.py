@@ -70,6 +70,33 @@ def test_result_with_string_stream_error_is_rejected(tmp_path):
         BenchmarkResult.from_json(path)
 
 
+def test_result_with_nested_aggregated_error_is_rejected(tmp_path):
+    path = _write_result(
+        tmp_path,
+        {
+            "aggregated_metrics": {
+                "error": {"message": "boom", "code": 500},
+                "stats": {},
+            }
+        },
+    )
+    with pytest.raises(ValueError, match="Benchmark stream error"):
+        BenchmarkResult.from_json(path)
+
+
+def test_result_with_stats_error_is_rejected(tmp_path):
+    path = _write_result(
+        tmp_path,
+        {
+            "aggregated_metrics": {
+                "stats": {"error": "internal server error during generation"}
+            }
+        },
+    )
+    with pytest.raises(ValueError, match="Benchmark stream error"):
+        BenchmarkResult.from_json(path)
+
+
 def test_result_with_null_error_is_parsed(tmp_path):
     path = _write_result(
         tmp_path,
