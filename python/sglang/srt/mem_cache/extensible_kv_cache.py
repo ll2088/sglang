@@ -58,8 +58,18 @@ KV_CACHE_MARGIN_FRACTION = 0.75
 
 
 def extensible_kv_cache_enabled() -> bool:
-    """Whether the opt-in extensible KV cache path is enabled."""
-    return os.environ.get("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "0") == "1"
+    """Whether the opt-in extensible KV cache path is enabled.
+
+    Defaults to off so the existing estimate-based allocation path is used
+    unless explicitly requested. The environment variable is the single
+    source of truth shared by the CLI default and the runtime check.
+    """
+    return os.environ.get("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 @dataclass(frozen=True)
