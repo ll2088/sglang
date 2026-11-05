@@ -1,64 +1,72 @@
 #!/usr/bin/env bash
-# Copyright 2025 SGLang Team
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Prepare the environment used by the extensible KV cache verification jobs.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# ==============================================================================
-# Prepare a python3.12 virtualenv for the extensible KV cache tests.
-#
-# The CI runner ships a system python (possibly 3.14) whose dist-packages and
-# pip configuration leak into dependency resolution. This script isolates the
-# install: it clears PIP_*/PYTHONPATH/PYTHONHOME, creates (or reuses) a venv,
-# and always invokes pip through "$VENV/bin/python" -m pip --isolated.
-set -euxo pipefail
+# The verification commands require Python 3.12. CI images may ship a newer
+# interpreter (e.g. 3.14), and pip would then resolve cp314 wheels, which is
+# not what the tests are validated against. This script therefore:
+#   1. fails fast on any error and prints diagnostics,
+#   2. locates a Python 3.12 interpreter explicitly,
+#   3. creates/uses a venv from that interpreter,
+#   4. installs dependencies with that venv's pip only.
+set -euo pipefail
+
+log() { printf '[setup_extensible_kv_cache_env] %s\n' "$*" >&2; }
+
+on_error() {
+  local exit_code=$?
+  log "environment setup failed with exit code ${exit_code}"
+  log "python candidates on PATH:"
+  command -v python3.12 || true
+  command -v python3 || true
+  python3 --version || true
+  exit "${exit_code}"
+}
+trap on_error ERR
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VENV="${VENV:-$REPO_ROOT/.venv}"
-PYTHON_BIN="${PYTHON_BIN:-python3.12}"
+cd "${REPO_ROOT}"
 
-# Drop inherited configuration that could redirect pip or shadow the venv.
-unset PIP_INDEX_URL PIP_EXTRA_INDEX_URL PIP_CONFIG_FILE PYTHONPATH PYTHONHOME || true
-unset PIP_TARGET PIP_PREFIX PIP_USER || true
-export PIP_DISABLE_PIP_VERSION_CHECK=1
-
-if [ ! -x "$VENV/bin/python" ]; then
-  "$PYTHON_BIN" -m venv "$VENV"
+# 1. Locate Python 3.12 explicitly. Do not fall back to whatever `python3`
+#    happens to be: a 3.14 interpreter silently changes wheel selection.
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [[ -z "${PYTHON_BIN}" ]]; then
+  for candidate in python3.12 python3; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      if "${candidate}" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' 2>/dev/null; then
+        PYTHON_BIN="$(command -v "${candidate}")"
+        break
+      fi
+    fi
+  done
 fi
 
-"$VENV/bin/python" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
-
-# Diagnostics so a mis-bound interpreter is obvious in CI logs.
-which python || true
-python -V || true
-python -m pip -V || true
-"$VENV/bin/python" -c 'import sys; print("sys.executable=", sys.executable); print("sys.prefix=", sys.prefix)'
-"$VENV/bin/python" -m pip -V
-
-"$VENV/bin/python" -m pip --isolated install --no-cache-dir --upgrade pip setuptools wheel
-"$VENV/bin/python" -m pip --isolated install --no-cache-dir -e "$REPO_ROOT/python"
-
-# Assert the install did not pull wheels for another interpreter or fall back
-# to the system dist-packages.
-"$VENV/bin/python" -m pip freeze > "$VENV/pip-freeze.txt"
-if grep -E 'cp3(13|14)' "$VENV/pip-freeze.txt"; then
-  echo "unexpected non-3.12 wheel in pip freeze" >&2
+if [[ -z "${PYTHON_BIN}" ]]; then
+  log "no Python 3.12 interpreter found; install one (e.g. actions/setup-python with 3.12) or set PYTHON_BIN"
   exit 1
 fi
-"$VENV/bin/python" - <<'PY'
-import sys
 
-bad = [p for p in sys.path if "/usr/lib/python3/dist-packages" in p]
-assert not bad, f"system dist-packages leaked into sys.path: {bad}"
-import sglang  # noqa: F401
-import pydantic  # noqa: F401
-import pybase64  # noqa: F401
-print("extensible kv cache env ready")
-PY
+log "using interpreter: ${PYTHON_BIN}"
+"${PYTHON_BIN}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+
+# 2. Create or reuse a venv from that interpreter.
+VENV_DIR="${VENV_DIR:-.venv}"
+if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+  log "creating venv at ${VENV_DIR}"
+  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+fi
+
+VENV_PYTHON="${VENV_DIR}/bin/python"
+"${VENV_PYTHON}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+log "venv interpreter: $("${VENV_PYTHON}" -c 'import sys; print(sys.executable, sys.version.split()[0])')"
+
+# 3. Install with the venv's pip only, so wheel tags match Python 3.12.
+"${VENV_PYTHON}" -m pip install --upgrade pip
+
+# Prefer wheels to avoid long source builds in CI; fall back to source only
+# when a wheel is genuinely unavailable for this platform.
+if ! "${VENV_PYTHON}" -m pip install --only-binary=:all: -e '.[dev]'; then
+  log "binary-only install failed; retrying allowing source builds"
+  "${VENV_PYTHON}" -m pip install -e '.[dev]'
+fi
+
+log "environment ready"

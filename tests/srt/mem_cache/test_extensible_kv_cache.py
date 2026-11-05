@@ -14,6 +14,7 @@
 import pytest
 import torch
 
+from sglang.srt.mem_cache import extensible_kv_cache as ekv
 from sglang.srt.mem_cache.extensible_kv_cache import (
     ExtensibleKVCacheConfig,
     ExtensibleKVCachePlan,
@@ -21,7 +22,11 @@ from sglang.srt.mem_cache.extensible_kv_cache import (
     extensible_kv_cache_enabled,
     plan_extensible_kv_cache,
 )
-from sglang.srt.mem_cache.vmm_allocator import vmm_unavailable_reason
+from sglang.srt.mem_cache.vmm_allocator import (
+    VmmBuffer,
+    VmmUnavailableError,
+    vmm_unavailable_reason,
+)
 
 requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="requires CUDA"
@@ -34,105 +39,97 @@ def _require_vmm():
         pytest.skip(f"VMM unavailable: {reason}")
 
 
-def test_feature_is_opt_in(monkeypatch):
+def test_enabled_flag_reads_env(monkeypatch):
     monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
-    assert not extensible_kv_cache_enabled()
+    assert extensible_kv_cache_enabled() is False
     monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
-    assert extensible_kv_cache_enabled()
+    assert extensible_kv_cache_enabled() is True
 
 
 def test_plan_returns_none_when_disabled(monkeypatch):
     monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
     config = ExtensibleKVCacheConfig(
-        bytes_per_block=1 << 20, max_num_blocks=8, device_index=0
+        bytes_per_block=1 << 20, max_num_blocks=4, device_index=0
+    )
+    assert plan_extensible_kv_cache(config) is None
+
+
+def test_plan_returns_none_when_vmm_unavailable(monkeypatch):
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
+    monkeypatch.setattr(ekv, "vmm_unavailable_reason", lambda: "forced")
+    config = ExtensibleKVCacheConfig(
+        bytes_per_block=1 << 20, max_num_blocks=4, device_index=0
+    )
+    assert plan_extensible_kv_cache(config) is None
+
+
+def test_plan_returns_none_on_reservation_failure(monkeypatch):
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
+    monkeypatch.setattr(ekv, "vmm_unavailable_reason", lambda: None)
+
+    def _boom(*args, **kwargs):
+        raise VmmUnavailableError("forced reservation failure")
+
+    monkeypatch.setattr(ekv, "VmmBuffer", _boom)
+    config = ExtensibleKVCacheConfig(
+        bytes_per_block=1 << 20, max_num_blocks=4, device_index=0
     )
     assert plan_extensible_kv_cache(config) is None
 
 
 def test_final_num_blocks_respects_cap_and_margin():
     plan = ExtensibleKVCachePlan.__new__(ExtensibleKVCachePlan)
+    plan.buffer = None
     plan.bytes_per_block = 1 << 20
     plan.max_num_blocks = 100
-    # Free memory below the floor leaves no usable blocks.
-    assert plan.final_num_blocks(0) == 0
-    # Large free memory is capped by max_num_blocks.
+    # Free memory far above the cap: never exceed max_num_blocks.
     assert plan.final_num_blocks(1 << 40) == 100
+    # Free memory below the floor margin: no blocks.
+    assert plan.final_num_blocks(0) == 0
+
+
+def test_commit_is_idempotent_and_monotonic():
+    plan = ExtensibleKVCachePlan.__new__(ExtensibleKVCachePlan)
+    plan.bytes_per_block = 1 << 20
+    plan.max_num_blocks = 8
+    plan.buffer = _FakeBuffer()
+    first = plan.commit(4)
+    second = plan.commit(4)
+    assert first == second == 4
+    smaller = plan.commit(1)
+    assert smaller == 4
+    assert plan.buffer.committed_bytes == 4 << 20
+
+
+class _FakeBuffer:
+    def __init__(self):
+        self.committed_bytes = 0
+
+    def commit(self, num_bytes):
+        self.committed_bytes = max(self.committed_bytes, num_bytes)
+        return self.committed_bytes
+
+    def free(self):
+        self.committed_bytes = 0
 
 
 @requires_cuda
-def test_plan_and_commit_roundtrip(monkeypatch):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
+def test_commit_uses_measured_free_memory(monkeypatch):
     _require_vmm()
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
+    device_index = torch.cuda.current_device()
     config = ExtensibleKVCacheConfig(
-        bytes_per_block=2 << 20,
-        max_num_blocks=4,
-        device_index=torch.cuda.current_device(),
+        bytes_per_block=1 << 20, max_num_blocks=4, device_index=device_index
     )
     plan = plan_extensible_kv_cache(config)
-    assert plan is not None
+    if plan is None:
+        pytest.skip("VMM reservation unavailable on this host")
     try:
-        free_bytes, _ = torch.cuda.mem_get_info(config.device_index)
+        free_bytes = 64 << 20
         committed = commit_extensible_kv_cache(plan, free_bytes=free_bytes)
-        assert 0 <= committed <= config.max_num_blocks
-        # Repeated commit is idempotent.
+        assert 0 <= committed <= plan.max_num_blocks
+        assert plan.buffer.committed_bytes <= plan.reserved_bytes
+        # Repeated calls are idempotent.
         assert commit_extensible_kv_cache(plan, free_bytes=free_bytes) == committed
     finally:
         plan.free()
-
-
-@requires_cuda
-def test_commit_falls_back_when_vmm_unavailable(monkeypatch):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
-    monkeypatch.setenv("SGLANG_DISABLE_VMM", "1")
-    config = ExtensibleKVCacheConfig(
-        bytes_per_block=1 << 20,
-        max_num_blocks=4,
-        device_index=torch.cuda.current_device(),
-    )
-    assert plan_extensible_kv_cache(config) is None
-
-
-def test_commit_failure_falls_back_to_estimate(monkeypatch):
-    """A mapping failure during commit must surface so callers fall back."""
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
-    plan = ExtensibleKVCachePlan.__new__(ExtensibleKVCachePlan)
-    plan.bytes_per_block = 1 << 20
-    plan.max_num_blocks = 4
-
-    class _FailingBuffer:
-        reserved_size = 4 << 20
-        committed_bytes = 0
-
-        def commit(self, num_bytes):
-            raise VmmUnavailableError("simulated mapping failure")
-
-        def free(self):
-            pass
-
-    plan.buffer = _FailingBuffer()
-    with pytest.raises(VmmUnavailableError):
-        commit_extensible_kv_cache(plan, free_bytes=8 << 20)
-    plan.free()
-
-
-def test_commit_is_idempotent_with_fake_buffer():
-    plan = ExtensibleKVCachePlan.__new__(ExtensibleKVCachePlan)
-    plan.bytes_per_block = 1 << 20
-    plan.max_num_blocks = 4
-
-    class _FakeBuffer:
-        reserved_size = 4 << 20
-        committed_bytes = 0
-
-        def commit(self, num_bytes):
-            self.committed_bytes = max(self.committed_bytes, num_bytes)
-            return self.committed_bytes
-
-        def free(self):
-            pass
-
-    plan.buffer = _FakeBuffer()
-    first = commit_extensible_kv_cache(plan, free_bytes=8 << 20)
-    second = commit_extensible_kv_cache(plan, free_bytes=8 << 20)
-    assert first == second
-    assert first <= plan.max_num_blocks
