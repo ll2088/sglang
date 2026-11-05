@@ -43,3 +43,35 @@ def test_clean_result_is_parsed(tmp_path):
     result = BenchmarkResult.from_json(path)
     assert result.ttft_mean == pytest.approx(0.1)
     assert result.output_throughput_mean == pytest.approx(20.0)
+
+
+def test_result_with_string_stream_error_is_rejected(tmp_path):
+    path = _write_result(
+        tmp_path,
+        {
+            "error": "internal server error during generation",
+            "aggregated_metrics": {"stats": {}},
+        },
+    )
+    with pytest.raises(ValueError, match="Benchmark stream error"):
+        BenchmarkResult.from_json(path)
+
+
+def test_result_with_null_error_is_parsed(tmp_path):
+    path = _write_result(
+        tmp_path,
+        {
+            "error": None,
+            "aggregated_metrics": {
+                "stats": {
+                    "ttft": {"mean": 0.2},
+                    "e2e_latency": {"mean": 2.0},
+                    "input_throughput": {"mean": 5.0},
+                    "output_throughput": {"mean": 7.0},
+                }
+            },
+        },
+    )
+    result = BenchmarkResult.from_json(path)
+    assert result.ttft_mean == pytest.approx(0.2)
+    assert result.output_throughput_mean == pytest.approx(7.0)
