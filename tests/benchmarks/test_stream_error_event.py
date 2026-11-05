@@ -3,6 +3,10 @@
 A generation that fails after the HTTP 200 has been sent reports the failure
 as an ``error`` envelope inside the stream. Such a request must be counted as
 failed even if tokens arrived first, and a clean stream must stay successful.
+
+These tests load the benchmark modules by file path and stub the heavy
+``sglang`` runtime imports, so they run without a GPU stack or an installed
+``sglang`` package.
 """
 
 import importlib.util
