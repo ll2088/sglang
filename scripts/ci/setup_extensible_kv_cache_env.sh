@@ -1,60 +1,60 @@
 #!/usr/bin/env bash
-# Prepare a Python 3.12 virtualenv for the extensible KV cache checks.
+# Copyright 2025 SGLang Team
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# The previous CI setup reused the system interpreter, which resolved
-# cp314 wheels and failed before pytest ever ran. This script pins the
-# interpreter, verifies it, and keeps the full pip log on disk so a
-# failure can be diagnosed from the CI artifact.
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+# Prepare a Python 3.12 virtualenv for the extensible KV cache tests.
+#
+# This script is the single source of truth for CI environment preparation of
+# the VMM two-phase sizing tests. It is intentionally strict: any failure exits
+# non-zero so the CI job fails at the environment step instead of silently
+# running with the wrong interpreter.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VENV_DIR="${REPO_ROOT}/.venv"
-LOG_DIR="${REPO_ROOT}/ci-logs"
-PIP_LOG="${LOG_DIR}/pip-install.log"
-PYTHON_BIN="${PYTHON312_BIN:-python3.12}"
+cd "${REPO_ROOT}"
 
-mkdir -p "${LOG_DIR}"
+LOG_FILE="${REPO_ROOT}/ci_pip.log"
+: > "${LOG_FILE}"
 
-log() { printf '[setup] %s\n' "$*" >&2; }
+exec > >(tee -a "${LOG_FILE}") 2>&1
 
-fail() {
-  log "ERROR: $*"
-  log "which ${PYTHON_BIN}: $(command -v "${PYTHON_BIN}" || echo '<not found>')"
-  log "${PYTHON_BIN} -V: $("${PYTHON_BIN}" -V 2>&1 || echo '<failed>')"
-  log "PATH: ${PATH}"
+echo "[setup] repo root: ${REPO_ROOT}"
+echo "[setup] host python: $(command -v python3 || true)"
+python3 -V || true
+
+if ! command -v python3.12 >/dev/null 2>&1; then
+  echo "[setup] python3.12 not found on PATH" >&2
   exit 1
-}
-
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  fail "${PYTHON_BIN} not found; install Python 3.12 or set PYTHON312_BIN"
 fi
 
-log "using interpreter: $(command -v "${PYTHON_BIN}")"
-log "interpreter version: $("${PYTHON_BIN}" -V 2>&1)"
+rm -rf .venv
+python3.12 -m venv .venv
+# shellcheck disable=SC1091
+source .venv/bin/activate
 
-if [ ! -x "${VENV_DIR}/bin/python" ]; then
-  log "creating venv at ${VENV_DIR}"
-  "${PYTHON_BIN}" -m venv "${VENV_DIR}" || fail "venv creation failed"
-fi
+python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+echo "[setup] venv python: $(command -v python)"
+python -V
 
-VENV_PY="${VENV_DIR}/bin/python"
-if ! "${VENV_PY}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version' >/dev/null 2>&1; then
-  fail "venv interpreter is not Python 3.12: $("${VENV_PY}" -V 2>&1)"
-fi
-log "venv interpreter verified: $("${VENV_PY}" -V 2>&1)"
+python -m pip install -U pip
+python -m pip --version
+python -m pip debug --verbose || true
 
-# Upgrade pip inside the venv only, so the system interpreter is never used.
-"${VENV_PY}" -m pip install --upgrade pip setuptools wheel \
-  >>"${PIP_LOG}" 2>&1 || fail "pip bootstrap failed; see ${PIP_LOG}"
+# Constrain resolution to the venv interpreter so no cp314 wheels are pulled.
+export PIP_ONLY_BINARY="${PIP_ONLY_BINARY:-:all:}"
+export PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install the project in editable mode. --only-binary=:all: keeps pip from
-# building sdists against the wrong interpreter, and the log is kept whole.
-set -x
-"${VENV_PY}" -m pip install --only-binary=:all: -e "${REPO_ROOT}/python" \
-  >>"${PIP_LOG}" 2>&1 || {
-  set +x
-  fail "pip install failed; see ${PIP_LOG}"
-}
-set +x
+python -m pip install --only-binary=:all: -e python
 
-log "environment ready; pip log at ${PIP_LOG}"
+python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+echo "[setup] environment ready"

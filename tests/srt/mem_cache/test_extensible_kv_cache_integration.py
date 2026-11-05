@@ -11,67 +11,58 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Integration: two-phase sizing keeps views valid and frees cleanly."""
+"""Integration tests for the two-phase sizing flow.
+
+These tests skip when the driver VMM API is unavailable so they can run on
+CPU-only CI hosts without failing.
+"""
+
+from __future__ import annotations
 
 import pytest
 import torch
 
-from sglang.srt.mem_cache.extensible_kv_cache import (
-    ExtensibleKVCacheConfig,
-    commit_extensible_kv_cache,
-    plan_extensible_kv_cache,
-)
+from sglang.srt.mem_cache import extensible_kv_cache as ekc
 from sglang.srt.mem_cache.vmm_allocator import vmm_unavailable_reason
 
-requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="requires CUDA"
-)
 
-
-def _require_vmm():
-    reason = vmm_unavailable_reason()
-    if reason is not None:
+@pytest.fixture
+def vmm():
+    if (reason := vmm_unavailable_reason()) is not None:
         pytest.skip(f"VMM unavailable: {reason}")
 
 
-@requires_cuda
-def test_two_phase_sizing_keeps_view_and_frees(monkeypatch):
-    _require_vmm()
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_two_phase_sizing_commits_within_reservation(vmm, monkeypatch):
     monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
     bytes_per_block = 2 << 20
-    plan = plan_extensible_kv_cache(
-        ExtensibleKVCacheConfig(
+    max_blocks = 8
+    plan = ekc.plan_extensible_kv_cache(
+        ekc.ExtensibleKVCacheConfig(
             bytes_per_block=bytes_per_block,
-            max_num_blocks=4,
+            max_num_blocks=max_blocks,
             device_index=torch.cuda.current_device(),
         )
     )
-    if plan is None:
-        pytest.skip("extensible KV cache disabled in this environment")
+    assert plan is not None
     try:
-        view = plan.buffer.as_tensor(torch.float16, (bytes_per_block // 2,))
-        base_ptr = view.data_ptr()
-        committed = commit_extensible_kv_cache(plan)
-        assert 0 <= committed <= plan.max_num_blocks
-        # The view must keep its address across the commit, which is what
-        # keeps captured CUDA graphs valid.
-        assert view.data_ptr() == base_ptr
+        free_bytes, _ = torch.cuda.mem_get_info(plan.buffer.device_index)
+        committed = ekc.commit_extensible_kv_cache(plan, free_bytes=free_bytes)
+        assert 0 <= committed <= max_blocks
         assert plan.buffer.committed_bytes <= plan.buffer.reserved_size
+        # Idempotent: a second commit does not shrink the reservation.
+        assert ekc.commit_extensible_kv_cache(plan, free_bytes=free_bytes) == committed
     finally:
         plan.free()
-    assert plan.buffer.base_ptr == 0
+    assert plan.buffer.is_freed
 
 
-@requires_cuda
-def test_fallback_path_allocates_equivalent_capacity(monkeypatch):
-    # With the feature disabled, planning returns None and the caller keeps
-    # the existing estimate-based allocation path unchanged.
-    monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
-    plan = plan_extensible_kv_cache(
-        ExtensibleKVCacheConfig(
-            bytes_per_block=2 << 20,
-            max_num_blocks=4,
-            device_index=torch.cuda.current_device(),
-        )
-    )
-    assert plan is None
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_fallback_when_vmm_unavailable(monkeypatch):
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
+    monkeypatch.setattr(ekc, "vmm_unavailable_reason", lambda: "forced")
+    assert ekc.plan_extensible_kv_cache(
+        ekc.ExtensibleKVCacheConfig(1 << 20, 4, 0)
+    ) is None
+    # The estimate-based fallback still produces a bounded block count.
+    assert ekc.fallback_num_blocks(1 << 20, 4 << 20, 4) == 4

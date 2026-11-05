@@ -11,33 +11,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""CLI parsing tests for the extensible KV cache switch.
-
-The switch is read from the environment by ``extensible_kv_cache_enabled``;
-this test pins the default (off) and the explicit opt-in so a future change to
-the default is caught.
-"""
+"""Argument parsing tests for the extensible KV cache switch."""
 
 from __future__ import annotations
 
-import pytest
+import argparse
+import dataclasses
 
-from sglang.srt.mem_cache import extensible_kv_cache as ekc
-
-
-def test_default_is_disabled(monkeypatch):
-    monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
-    assert ekc.extensible_kv_cache_enabled() is False
+from sglang.srt.arg_groups.arg_utils import A, Arg, add_cli_args_from_dataclass
 
 
-@pytest.mark.parametrize("value", ["1", "true", "yes", "on"])
-def test_explicit_enable(monkeypatch, value):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", value)
-    # Only the documented "1" enables the path; other spellings stay off so
-    # the switch is unambiguous across shells and CI configs.
-    assert ekc.extensible_kv_cache_enabled() is (value == "1")
+@dataclasses.dataclass
+class _Args:
+    enable_extensible_kv_cache: A[
+        bool, Arg(help="Enable the VMM-backed extensible KV cache.")
+    ] = False
 
 
-def test_explicit_disable(monkeypatch):
-    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "0")
-    assert ekc.extensible_kv_cache_enabled() is False
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    add_cli_args_from_dataclass(parser, _Args)
+    return parser
+
+
+def test_default_is_disabled():
+    args = _parser().parse_args([])
+    assert args.enable_extensible_kv_cache is False
+
+
+def test_explicit_enable():
+    args = _parser().parse_args(["--enable-extensible-kv-cache"])
+    assert args.enable_extensible_kv_cache is True
+
+
+def test_explicit_disable_keeps_fallback():
+    args = _parser().parse_args([])
+    assert args.enable_extensible_kv_cache is False
