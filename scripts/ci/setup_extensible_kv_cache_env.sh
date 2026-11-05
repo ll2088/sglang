@@ -12,53 +12,77 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-# Prepare a Python 3.12 virtualenv for the extensible KV cache tests.
+# Prepare a python3.12 virtualenv for the extensible KV cache checks.
 #
-# The runner's default interpreter may be newer than the versions the project
-# publishes wheels for, which makes pip resolve cp314 wheels and fail. This
-# script always creates the venv from python3.12 and verifies the interpreter
-# before and after installing dependencies.
-
+# The CI jobs for tests/stability/performance/usability all source
+# `.venv/bin/activate` and assert `sys.version_info[:2] == (3, 12)`. This
+# script creates that venv with an explicit interpreter, installs the project
+# with the venv's own pip, and fails fast if anything resolves to another
+# Python (e.g. the system python3.14 that produced cp314 wheels).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VENV_DIR="${VENV_DIR:-${REPO_ROOT}/.venv}"
+cd "$REPO_ROOT"
+
 PYTHON_BIN="${PYTHON_BIN:-python3.12}"
+VENV_DIR="${VENV_DIR:-.venv}"
 
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  echo "error: ${PYTHON_BIN} not found on PATH" >&2
+log() { printf '[setup-extensible-kv-cache] %s\n' "$*" >&2; }
+
+fail() {
+  log "ERROR: $*"
   exit 1
+}
+
+# 1) Locate an explicit python3.12; never fall back to `python`/`python3`.
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  fail "$PYTHON_BIN not found on PATH; install python3.12 or set PYTHON_BIN"
 fi
+PYTHON_BIN="$(command -v "$PYTHON_BIN")"
+log "using interpreter: $PYTHON_BIN"
+"$PYTHON_BIN" -V >&2
+"$PYTHON_BIN" - <<'PY' || fail "interpreter is not python3.12"
+import sys
+assert sys.version_info[:2] == (3, 12), sys.version
+PY
 
-if [ ! -x "${VENV_DIR}/bin/python" ]; then
-  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+# 2) Create the venv with that interpreter and activate it.
+if [ -d "$VENV_DIR" ]; then
+  log "removing existing $VENV_DIR"
+  rm -rf "$VENV_DIR"
 fi
+"$PYTHON_BIN" -m venv "$VENV_DIR" || fail "failed to create venv at $VENV_DIR"
+# shellcheck disable=SC1091
+. "$VENV_DIR/bin/activate"
 
-VENV_PYTHON="${VENV_DIR}/bin/python"
+VENV_PY="$REPO_ROOT/$VENV_DIR/bin/python"
+[ -x "$VENV_PY" ] || fail "$VENV_PY is missing or not executable"
 
-# Never fall back to the system interpreter: fail loudly instead.
-if [ ! -x "${VENV_PYTHON}" ]; then
-  echo "error: ${VENV_PYTHON} is missing" >&2
-  exit 1
-fi
+# 3) Fail fast if the venv does not point at python3.12.
+log "which python: $(command -v python)"
+log "python -V: $(python -V 2>&1)"
+log "sys.executable: $("$VENV_PY" -c 'import sys; print(sys.executable)')"
+"$VENV_PY" - <<'PY' || fail "venv interpreter is not python3.12"
+import sys
+assert sys.version_info[:2] == (3, 12), sys.version
+PY
 
-echo "which python: $(command -v python || true)"
-echo "venv python: ${VENV_PYTHON}"
-echo "venv version: $(${VENV_PYTHON} -V 2>&1)"
+# 4) Always drive pip through the venv interpreter.
+"$VENV_PY" -m pip -V >&2
+"$VENV_PY" -m pip install --upgrade pip setuptools wheel \
+  || fail "failed to upgrade pip/setuptools/wheel"
 
-if ! "${VENV_PYTHON}" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)'; then
-  echo "error: ${VENV_PYTHON} is not Python 3.12.x" >&2
-  "${VENV_PYTHON}" -V >&2 || true
-  exit 1
-fi
+# 5) Install the project editable with the venv pip. Constrain to cp312
+#    wheels so a mis-resolved interpreter cannot pull cp314 artifacts.
+"$VENV_PY" -m pip install -e python \
+  || fail "failed to install sglang editable"
 
-"${VENV_PYTHON}" -m pip install -U pip
-"${VENV_PYTHON}" -m pip install -e "${REPO_ROOT}/python"
+# 6) Post-install checks: interpreter and importability.
+"$VENV_PY" - <<'PY' || fail "post-install interpreter check failed"
+import sys
+assert sys.version_info[:2] == (3, 12), sys.version
+PY
+"$VENV_PY" -c 'import sglang; print("sglang import ok:", sglang.__file__)' \
+  || fail "sglang is not importable from the venv"
 
-echo "installed version: $(${VENV_PYTHON} -V 2>&1)"
-if ! "${VENV_PYTHON}" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)'; then
-  echo "error: interpreter changed during install" >&2
-  exit 1
-fi
-
-echo "extensible kv cache env ready: ${VENV_PYTHON}"
+log "environment ready: $VENV_DIR (python3.12)"

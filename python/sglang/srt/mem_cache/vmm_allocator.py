@@ -83,6 +83,51 @@ class _CuMemAccessDesc(ctypes.Structure):
     _fields_ = [("location", _CuMemLocation), ("flags", ctypes.c_int)]
 
 
+class _CudaArrayInterface:
+    """Minimal CUDA array interface over a raw device pointer.
+
+    ``torch.as_tensor`` consumes ``__cuda_array_interface__`` and returns a
+    view that does not own the memory, which is what the VMM reservation
+    needs. The interface is read-only from torch's perspective; callers must
+    not free the reservation while a view is alive.
+    """
+
+    def __init__(self, ptr: int, nbytes: int, dtype: torch.dtype) -> None:
+        self._ptr = ptr
+        self._nbytes = nbytes
+        self._dtype = dtype
+
+    @property
+    def __cuda_array_interface__(self):
+        return {
+            "shape": (self._nbytes // self._dtype.itemsize,),
+            "typestr": _torch_dtype_to_typestr(self._dtype),
+            "data": (self._ptr, False),
+            "version": 3,
+            "stream": None,
+        }
+
+
+def _torch_dtype_to_typestr(dtype: torch.dtype) -> str:
+    """Map a torch dtype to the NumPy-style typestr used by the interface."""
+    mapping = {
+        torch.float16: "<f2",
+        torch.bfloat16: "<f2",
+        torch.float32: "<f4",
+        torch.float64: "<f8",
+        torch.int8: "|i1",
+        torch.uint8: "|u1",
+        torch.int16: "<i2",
+        torch.int32: "<i4",
+        torch.int64: "<i8",
+        torch.bool: "|b1",
+    }
+    try:
+        return mapping[dtype]
+    except KeyError as exc:  # pragma: no cover - defensive
+        raise ValueError(f"unsupported dtype for VMM view: {dtype}") from exc
+
+
 _DRIVER: Optional[ctypes.CDLL] = None
 _DRIVER_ERROR: Optional[str] = None
 
@@ -312,17 +357,22 @@ class VmmBuffer:
             raise ValueError(
                 f"tensor needs {nbytes} bytes but only {self.reserved_size} reserved"
             )
-        # ``frombuffer`` wraps an existing device pointer without copying and
-        # without taking ownership, which is exactly the reservation contract.
-        # It is available on every supported torch version, unlike from_blob.
-        flat = torch.frombuffer(
-            (ctypes.c_char * nbytes).from_address(self.base_ptr),
-            dtype=dtype,
-            count=numel,
+        # Build a tensor over the reservation without copying or taking
+        # ownership. ``torch.frombuffer`` only accepts host buffers, so wrap
+        # the device pointer with ``from_dlpack`` over a ctypes-backed capsule
+        # is not portable either; use the CUDA array interface instead, which
+        # every supported torch version understands and which keeps the
+        # reservation's stable base pointer.
+        device = torch.device("cuda", self._device_index)
+        flat = torch.empty(0, dtype=dtype, device=device)
+        # ``torch.cuda.caching_allocator_alloc`` would take ownership, so we
+        # deliberately avoid it. ``torch.as_tensor`` on a CUDA array interface
+        # object creates a view over the existing pointer.
+        flat = torch.as_tensor(
+            _CudaArrayInterface(self.base_ptr, nbytes, dtype),
+            device=device,
         )
-        return flat.view(tuple(shape)).to(
-            device=torch.device("cuda", self._device_index), copy=False
-        )
+        return flat.view(tuple(shape))
 
     def free(self) -> None:
         if self._freed:
