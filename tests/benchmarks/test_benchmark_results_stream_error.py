@@ -1,0 +1,109 @@
+"""Benchmark result parsing must reject streams that ended in an error."""
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+
+_RESULTS_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "sgl-model-gateway"
+    / "e2e_test"
+    / "benchmarks"
+    / "results.py"
+)
+
+
+def _load_results_module():
+    spec = importlib.util.spec_from_file_location("bench_results", _RESULTS_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+BenchmarkResult = _load_results_module().BenchmarkResult
+
+
+def _write_result(tmp_path: Path, payload) -> Path:
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def test_result_with_stream_error_is_rejected(tmp_path):
+    path = _write_result(
+        tmp_path,
+        {"error": {"message": "boom", "code": 500}, "aggregated_metrics": {"stats": {}}},
+    )
+    with pytest.raises(ValueError, match="Benchmark stream error"):
+        BenchmarkResult.from_json(path)
+
+
+def test_result_with_string_stream_error_is_rejected(tmp_path):
+    path = _write_result(
+        tmp_path,
+        {"error": "internal server error during generation", "aggregated_metrics": {"stats": {}}},
+    )
+    with pytest.raises(ValueError, match="Benchmark stream error"):
+        BenchmarkResult.from_json(path)
+
+
+def test_result_with_nested_aggregated_error_is_rejected(tmp_path):
+    path = _write_result(
+        tmp_path,
+        {"aggregated_metrics": {"error": {"message": "boom"}, "stats": {}}},
+    )
+    with pytest.raises(ValueError, match="Benchmark stream error"):
+        BenchmarkResult.from_json(path)
+
+
+def test_result_with_stats_error_is_rejected(tmp_path):
+    path = _write_result(
+        tmp_path,
+        {"aggregated_metrics": {"stats": {"error": "boom"}}},
+    )
+    with pytest.raises(ValueError, match="Benchmark stream error"):
+        BenchmarkResult.from_json(path)
+
+
+def test_clean_result_is_parsed(tmp_path):
+    path = _write_result(
+        tmp_path,
+        {
+            "aggregated_metrics": {
+                "stats": {
+                    "ttft": {"mean": 0.1},
+                    "e2e_latency": {"mean": 1.0},
+                    "input_throughput": {"mean": 10.0},
+                    "output_throughput": {"mean": 20.0},
+                }
+            }
+        },
+    )
+    result = BenchmarkResult.from_json(path)
+    assert result.ttft_mean == pytest.approx(0.1)
+    assert result.output_throughput_mean == pytest.approx(20.0)
+
+
+def test_null_error_is_parsed(tmp_path):
+    path = _write_result(
+        tmp_path,
+        {
+            "error": None,
+            "aggregated_metrics": {
+                "stats": {
+                    "ttft": {"mean": 0.2},
+                    "e2e_latency": {"mean": 2.0},
+                    "input_throughput": {"mean": 5.0},
+                    "output_throughput": {"mean": 7.0},
+                }
+            },
+        },
+    )
+    result = BenchmarkResult.from_json(path)
+    assert result.ttft_mean == pytest.approx(0.2)
+    assert result.output_throughput_mean == pytest.approx(7.0)
