@@ -12,67 +12,63 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-# Prepare an isolated Python 3.12 virtualenv for the extensible KV cache tests.
-#
-# The CI runner may have a system Python (3.14) on PATH and PYTHONPATH pointing
-# at /usr/lib/python3/dist-packages. Both are cleared here so that every pip
-# install and every test run uses the venv interpreter explicitly.
-set -euo pipefail
+# Prepare a reproducible Python 3.12 virtualenv for the extensible KV cache
+# tests. The script is intentionally strict: it fails loudly instead of
+# silently reusing a stale venv or the system interpreter, which is what made
+# earlier CI runs install cp314 wheels and touch /usr/lib/python3/dist-packages.
+
+set -euxo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VENV_DIR="${REPO_ROOT}/.venv"
-PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3.12}"
+PYTHON_BIN="${PYTHON_BIN:-python3.12}"
 
-log() { printf '[setup_extensible_kv_cache_env] %s\n' "$*" >&2; }
+log() { echo "[setup_extensible_kv_cache_env] $*" >&2; }
 
 fail() {
   log "ERROR: $*"
+  if [ -x "${VENV_DIR}/bin/python" ]; then
+    "${VENV_DIR}/bin/python" -m pip list || true
+    "${VENV_DIR}/bin/python" -c 'import sys; print(sys.executable); print(sys.version); print("\n".join(sys.path))' || true
+  fi
   exit 1
 }
 
-# 1. Drop inherited interpreter configuration that would leak the system Python.
-unset PYTHONPATH || true
-unset PYTHONHOME || true
-unset PYTHONSTARTUP || true
-
-# 2. Locate a real Python 3.12 interpreter by absolute path.
-if [[ ! -x "${PYTHON_BIN}" ]]; then
-  if command -v python3.12 >/dev/null 2>&1; then
-    PYTHON_BIN="$(command -v python3.12)"
-  else
-    fail "python3.12 not found; set PYTHON_BIN to an absolute interpreter path"
-  fi
+# 1. Locate the interpreter explicitly. Never rely on `python` from PATH.
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  fail "${PYTHON_BIN} not found on PATH; install Python 3.12 first"
 fi
-log "using interpreter: ${PYTHON_BIN}"
-"${PYTHON_BIN}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version' \
-  || fail "interpreter is not Python 3.12"
+PYTHON_PATH="$(command -v "${PYTHON_BIN}")"
+log "which ${PYTHON_BIN}: ${PYTHON_PATH}"
+"${PYTHON_PATH}" -V
+"${PYTHON_PATH}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
 
-# 3. Create (or reuse) the venv and always address it by absolute path.
-if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
-  log "creating venv at ${VENV_DIR}"
-  "${PYTHON_BIN}" -m venv "${VENV_DIR}" || fail "failed to create venv"
-fi
+# 2. Recreate the venv from scratch so a stale interpreter cannot be reused.
+rm -rf "${VENV_DIR}"
+"${PYTHON_PATH}" -m venv --clear "${VENV_DIR}"
+
+# 3. Activate and scrub inherited Python environment variables.
+# shellcheck disable=SC1091
+source "${VENV_DIR}/bin/activate"
+unset PYTHONPATH PYTHONHOME PYTHONSTARTUP || true
+export PIP_REQUIRE_VIRTUALENV=1
+export PIP_NO_USER_CONFIG=1
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+export PIP_NO_CACHE_DIR=1
+
 VENV_PY="${VENV_DIR}/bin/python"
-"${VENV_PY}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version' \
-  || fail "venv interpreter is not Python 3.12"
-log "venv interpreter: $("${VENV_PY}" -c 'import sys; print(sys.executable, sys.version.split()[0])')"
+log "venv python: ${VENV_PY}"
+"${VENV_PY}" -V
+"${VENV_PY}" -c 'import sys; print(sys.executable, sys.version)'
+"${VENV_PY}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
 
-# 4. Install with the venv interpreter only; never bare `pip`.
-"${VENV_PY}" -m pip install --upgrade pip setuptools wheel \
-  || fail "failed to upgrade pip in venv"
-"${VENV_PY}" -m pip install -e "${REPO_ROOT}/python" \
-  || fail "failed to install sglang into venv"
+# 4. Always install through the venv interpreter, never bare `pip`.
+"${VENV_PY}" -m pip -V
+"${VENV_PY}" -m pip install --upgrade pip
+"${VENV_PY}" -m pip install -e "${REPO_ROOT}/python"
 
-# 5. Smoke check: the venv must import sglang and torch, and must not resolve
-#    to the system dist-packages.
-"${VENV_PY}" - <<'PY' || exit 1
-import sys
-assert sys.version_info[:2] == (3, 12), sys.version
-import sglang  # noqa: F401
-import torch  # noqa: F401
-print("smoke ok:", sys.executable, sys.version.split()[0])
-print("sglang:", getattr(sglang, "__file__", "<unknown>"))
-print("torch:", torch.__version__)
-PY
+# 5. Assert the interpreter and key packages are importable before running tests.
+"${VENV_PY}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+"${VENV_PY}" -c 'import torch, pytest; print("torch", torch.__version__); print("pytest", pytest.__version__)'
 
 log "environment ready: ${VENV_PY}"

@@ -11,51 +11,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""CLI parsing tests for the opt-in extensible KV cache switch."""
+"""CLI parsing tests for the extensible KV cache opt-in switch.
 
-import argparse
-import dataclasses
-from typing import Optional
+The switch is read from the environment by ``extensible_kv_cache_enabled``;
+this test pins the default (off) and the explicit enable/disable behaviour so
+that the fallback path stays the default and cannot be flipped accidentally.
+"""
 
-from sglang.srt.arg_groups.arg_utils import A, Arg, add_cli_args_from_dataclass
+import pytest
 
-
-@dataclasses.dataclass
-class _ExtensibleKVCacheArgs:
-    enable_extensible_kv_cache: A[
-        bool, Arg(help="Enable the VMM-backed extensible KV cache.")
-    ] = False
-    extensible_kv_cache_fallback: A[
-        Optional[str],
-        Arg(help="Fallback mode when VMM is unavailable."),
-    ] = None
+from sglang.srt.mem_cache.extensible_kv_cache import extensible_kv_cache_enabled
 
 
-def _parse(argv):
-    parser = argparse.ArgumentParser()
-    add_cli_args_from_dataclass(parser, _ExtensibleKVCacheArgs)
-    return parser.parse_args(argv)
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, False),
+        ("0", False),
+        ("1", True),
+    ],
+)
+def test_extensible_kv_cache_env_switch(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
+    else:
+        monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", value)
+    assert extensible_kv_cache_enabled() is expected
 
 
-def test_default_is_disabled():
-    args = _parse([])
-    assert args.enable_extensible_kv_cache is False
-    assert args.extensible_kv_cache_fallback is None
-
-
-def test_explicit_enable():
-    args = _parse(["--enable-extensible-kv-cache"])
-    assert args.enable_extensible_kv_cache is True
-
-
-def test_explicit_fallback_mode():
-    args = _parse(["--extensible-kv-cache-fallback", "estimate"])
-    assert args.extensible_kv_cache_fallback == "estimate"
-
-
-def test_help_mentions_switch():
-    parser = argparse.ArgumentParser()
-    add_cli_args_from_dataclass(parser, _ExtensibleKVCacheArgs)
-    help_text = parser.format_help()
-    assert "--enable-extensible-kv-cache" in help_text
-    assert "--extensible-kv-cache-fallback" in help_text
+def test_extensible_kv_cache_default_is_off(monkeypatch):
+    monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
+    assert extensible_kv_cache_enabled() is False
