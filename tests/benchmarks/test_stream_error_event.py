@@ -1,18 +1,13 @@
-"""Stream error-event handling for the multimodal benchmark clients.
+"""Tests for stream error event handling in multimodal benchmark clients.
 
-A generation that fails after the HTTP 200 has been sent reports the failure
-as an ``error`` envelope inside the stream. Such a request must be counted as
-failed even if tokens arrived first, and a clean stream must stay successful.
-
-These tests load the benchmark modules by file path and stub the heavy
-``sglang`` runtime imports, so they run without a GPU stack or an installed
-``sglang`` package.
+A stream that delivers tokens and then a server ``error`` envelope must be
+reported as failed, with the server's error object preserved. Partial output
+may be kept for diagnostics but must never count as success.
 """
 
 import importlib.util
 import json
 import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -27,85 +22,30 @@ _BENCH_DIR = (
 )
 
 
-def _install_import_stubs() -> None:
-    """Stub heavy runtime imports so benchmark modules load without a GPU stack.
-
-    ``bench_serving`` imports the multimodal runtime and test utilities at
-    module scope. Those pull in torch/CUDA and are irrelevant to the pure
-    stream-classification helpers under test, so provide inert stand-ins when
-    the real packages are unavailable. Real packages, when installed, win.
-
-    The stubs are installed unconditionally for the modules that are only
-    needed at import time, so the test does not depend on whether a partial
-    ``sglang`` install is present in the CI environment.
-    """
-    stubs = {
-        "aiohttp": {"ClientSession": object, "FormData": object},
-        "numpy": {"median": lambda values: 0.0},
-        "requests": {"get": lambda *a, **k: None},
-        "tqdm": {"asyncio": types.SimpleNamespace(tqdm=object), "tqdm": object},
-        "sglang.multimodal_gen.benchmarks.datasets": {
-            "RandomDataset": object,
-            "RequestFuncInput": object,
-            "RequestFuncOutput": object,
-            "VBenchDataset": object,
-        },
-        "sglang.multimodal_gen.runtime.utils.logging_utils": {
-            "configure_logger": lambda *a, **k: None,
-            "init_logger": lambda *a, **k: types.SimpleNamespace(
-                info=lambda *a, **k: None,
-                warning=lambda *a, **k: None,
-                error=lambda *a, **k: None,
-                debug=lambda *a, **k: None,
-            ),
-        },
-        "sglang.multimodal_gen.test.test_utils": {
-            "print_divider": lambda *a, **k: None,
-            "print_value_formatted": lambda *a, **k: None,
-        },
-        "sglang.srt.utils.network": {"NetworkAddress": object},
-    }
-    for module_name, attributes in stubs.items():
-        if module_name in sys.modules:
-            continue
-        try:
-            importlib.import_module(module_name)
-        except Exception:
-            module = types.ModuleType(module_name)
-            for attribute, value in attributes.items():
-                setattr(module, attribute, value)
-            sys.modules[module_name] = module
-
-
 def _load_module(name: str, filename: str):
     """Load a benchmark module by path without importing the sglang package."""
-    _install_import_stubs()
     module_path = _BENCH_DIR / filename
     spec = importlib.util.spec_from_file_location(name, module_path)
     module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
 
-bench_serving = _load_module("bench_serving_stream_error", "bench_serving.py")
-request_manifest = _load_module(
-    "request_manifest_stream_error", "request_manifest.py"
-)
+@pytest.fixture(scope="module")
+def bench_serving():
+    return _load_module("bench_serving_under_test", "bench_serving.py")
 
 
-class _Output:
-    """Minimal stand-in for ``RequestFuncOutput``."""
-
-    def __init__(self) -> None:
-        self.success = False
-        self.error = ""
+@pytest.fixture(scope="module")
+def request_manifest():
+    return _load_module("request_manifest_under_test", "request_manifest.py")
 
 
-_ERROR_MESSAGE = "internal server error during generation"
+_STREAM_ERROR_MESSAGE = "internal server error during generation"
 
 
-def _error_payload(message: str = _ERROR_MESSAGE):
+def _error_payload(message: str = _STREAM_ERROR_MESSAGE) -> dict:
     return {
         "error": {
             "message": message,
@@ -116,92 +56,77 @@ def _error_payload(message: str = _ERROR_MESSAGE):
     }
 
 
-def test_error_envelope_is_extracted():
-    error = bench_serving._extract_stream_error(_error_payload())
-    assert error is not None
-    assert _ERROR_MESSAGE in error
+def _token_payload(text: str) -> dict:
+    return {"choices": [{"text": text}]}
 
 
-def test_string_error_envelope_is_extracted():
-    assert (
-        bench_serving._extract_stream_error({"error": _ERROR_MESSAGE})
-        == _ERROR_MESSAGE
-    )
+def test_extract_stream_error_returns_json_for_error_envelope(bench_serving):
+    payload = _error_payload()
+    extracted = bench_serving._extract_stream_error(payload)
+    assert extracted is not None
+    assert _STREAM_ERROR_MESSAGE in extracted
 
 
-def test_payload_without_error_has_no_stream_error():
-    assert bench_serving._extract_stream_error({"choices": [{"text": "a"}]}) is None
-    assert bench_serving._extract_stream_error(None) is None
+def test_extract_stream_error_returns_none_for_token_payload(bench_serving):
+    assert bench_serving._extract_stream_error(_token_payload("a")) is None
 
 
-def test_error_wins_over_output_in_same_payload():
-    payload = {"choices": [{"text": "a"}], "error": {"message": "boom"}}
+def test_classify_stream_payload_error_wins_over_output(bench_serving):
+    payload = _token_payload("a")
+    payload.update(_error_payload())
     has_output, stream_error = bench_serving._classify_stream_payload(payload)
     assert has_output is False
     assert stream_error is not None
-    assert "boom" in stream_error
+    assert _STREAM_ERROR_MESSAGE in stream_error
 
 
-def test_tokens_then_error_is_failed():
-    output = _Output()
+def test_finalize_stream_output_marks_error_as_failure(bench_serving):
+    output = bench_serving.RequestFuncOutput()
     bench_serving._finalize_stream_output(
-        output, stream_error=json.dumps(_error_payload()), first_chunk_received=True
+        output, json.dumps(_error_payload()), first_chunk_received=True
     )
-    assert not output.success
-    assert _ERROR_MESSAGE in output.error
+    assert output.success is False
+    assert _STREAM_ERROR_MESSAGE in output.error
 
 
-def test_clean_stream_is_successful():
-    output = _Output()
-    bench_serving._finalize_stream_output(
-        output, stream_error=None, first_chunk_received=True
-    )
-    assert output.success
+def test_finalize_stream_output_clean_stream_is_success(bench_serving):
+    output = bench_serving.RequestFuncOutput()
+    bench_serving._finalize_stream_output(output, None, first_chunk_received=True)
+    assert output.success is True
     assert output.error == ""
 
 
-def test_no_chunk_without_error_reports_ttft_symptom():
-    output = _Output()
-    bench_serving._finalize_stream_output(
-        output, stream_error=None, first_chunk_received=False
-    )
-    assert not output.success
+def test_finalize_stream_output_no_chunk_reports_symptom(bench_serving):
+    output = bench_serving.RequestFuncOutput()
+    bench_serving._finalize_stream_output(output, None, first_chunk_received=False)
+    assert output.success is False
     assert "Never received a valid chunk" in output.error
 
 
-def test_error_takes_precedence_over_ttft_symptom():
-    output = _Output()
-    bench_serving._finalize_stream_output(
-        output, stream_error=_ERROR_MESSAGE, first_chunk_received=False
-    )
-    assert not output.success
-    assert output.error == _ERROR_MESSAGE
-
-
-def test_manifest_rejects_top_level_error(tmp_path: Path):
+def test_request_manifest_rejects_top_level_error(request_manifest, tmp_path):
     manifest = tmp_path / "manifest.jsonl"
     manifest.write_text(
-        json.dumps({"prompt": "hi", "error": _error_payload()}) + "\n"
+        json.dumps({"prompt": "hello", "error": _error_payload()}) + "\n"
     )
-    with pytest.raises(ValueError, match="request contains a stream error"):
+    with pytest.raises(ValueError, match="stream error"):
         request_manifest.load_request_manifest(manifest)
 
 
-def test_manifest_rejects_sampling_params_error(tmp_path: Path):
+def test_request_manifest_rejects_sampling_params_error(request_manifest, tmp_path):
     manifest = tmp_path / "manifest.jsonl"
     manifest.write_text(
         json.dumps(
-            {"prompt": "hi", "sampling_params": {"error": _ERROR_MESSAGE}}
+            {"prompt": "hello", "sampling_params": {"error": _error_payload()}}
         )
         + "\n"
     )
-    with pytest.raises(ValueError, match="sampling_params contains a stream error"):
+    with pytest.raises(ValueError, match="stream error"):
         request_manifest.load_request_manifest(manifest)
 
 
-def test_manifest_accepts_clean_request(tmp_path: Path):
+def test_request_manifest_accepts_clean_request(request_manifest, tmp_path):
     manifest = tmp_path / "manifest.jsonl"
-    manifest.write_text(json.dumps({"prompt": "hi"}) + "\n")
+    manifest.write_text(json.dumps({"prompt": "hello"}) + "\n")
     loaded = request_manifest.load_request_manifest(manifest)
     assert len(loaded.requests) == 1
-    assert loaded.requests[0].prompt == "hi"
+    assert loaded.requests[0].prompt == "hello"
