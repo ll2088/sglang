@@ -14,82 +14,72 @@
 # ==============================================================================
 # Prepare a Python 3.12 virtualenv for the extensible KV cache tests.
 #
-# The CI image ships a system Python 3.14; installing the project with it
-# pulls cp314 wheels and fails. This script creates and activates a 3.12
-# venv, installs the project with that interpreter only, and verifies the
-# interpreter and pip tags before and after installation.
-#
-# Usage (from the repository root):
-#   source scripts/ci/setup_extensible_kv_cache_env.sh
-# or:
-#   bash scripts/ci/setup_extensible_kv_cache_env.sh
-#
-# The script is safe to source: it exports VIRTUAL_ENV and prepends the venv
-# bin directory to PATH so later commands in the same shell use it.
-
+# The CI image may ship a newer system Python (e.g. 3.14) whose pip resolves
+# cp314 wheels. This script pins every step to python3.12 and fails loudly if
+# the interpreter or the resolved wheel tags drift.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VENV_DIR="${REPO_ROOT}/.venv"
-PYTHON_BIN="${PYTHON312_BIN:-python3.12}"
+LOG_FILE="${REPO_ROOT}/.venv-setup.log"
+
+on_error() {
+  local exit_code=$?
+  echo "[setup_extensible_kv_cache_env] failed with exit code ${exit_code}" >&2
+  echo "[setup_extensible_kv_cache_env] last 100 log lines:" >&2
+  tail -n 100 "${LOG_FILE}" >&2 || true
+  exit "${exit_code}"
+}
+trap on_error ERR
 
 log() {
-    printf '[setup_extensible_kv_cache_env] %s\n' "$*" >&2
+  echo "[setup_extensible_kv_cache_env] $*" | tee -a "${LOG_FILE}"
 }
 
-fail() {
-    log "ERROR: $*"
-    log "which python: $(command -v python || true)"
-    log "python -V: $(python -V 2>&1 || true)"
-    log "which python3.12: $(command -v python3.12 || true)"
-    log "pip -V: $(python -m pip -V 2>&1 || true)"
-    exit 1
-}
+: > "${LOG_FILE}"
 
-assert_python312() {
-    local py="$1"
-    "${py}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version' \
-        || fail "${py} is not Python 3.12"
-}
-
-assert_no_cp314_tags() {
-    local py="$1"
-    local tags
-    tags="$("${py}" -m pip debug --verbose 2>/dev/null | grep -E '^  cp[0-9]+' || true)"
-    if printf '%s\n' "${tags}" | grep -q 'cp314'; then
-        fail "pip compatible tags still contain cp314; interpreter is not isolated"
-    fi
-}
-
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-    fail "${PYTHON_BIN} not found; install Python 3.12 or set PYTHON312_BIN"
+if ! command -v python3.12 >/dev/null 2>&1; then
+  log "python3.12 not found on PATH"
+  exit 1
 fi
 
-assert_python312 "${PYTHON_BIN}"
+log "creating venv at ${VENV_DIR}"
+rm -rf "${VENV_DIR}"
+python3.12 -m venv "${VENV_DIR}" 2>&1 | tee -a "${LOG_FILE}"
 
-if [ ! -x "${VENV_DIR}/bin/python" ]; then
-    log "creating venv at ${VENV_DIR} with ${PYTHON_BIN}"
-    "${PYTHON_BIN}" -m venv "${VENV_DIR}" || fail "failed to create venv"
+VENV_PY="${VENV_DIR}/bin/python"
+if [ ! -x "${VENV_PY}" ]; then
+  log "venv python missing at ${VENV_PY}"
+  exit 1
 fi
 
-# shellcheck disable=SC1091
-source "${VENV_DIR}/bin/activate"
-export VIRTUAL_ENV="${VENV_DIR}"
-export PATH="${VENV_DIR}/bin:${PATH}"
+log "verifying interpreter version"
+"${VENV_PY}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version' 2>&1 | tee -a "${LOG_FILE}"
 
-assert_python312 "${VENV_DIR}/bin/python"
+log "pip version before install"
+"${VENV_PY}" -m pip --version 2>&1 | tee -a "${LOG_FILE}"
 
-log "upgrading pip/setuptools/wheel in venv"
-"${VENV_DIR}/bin/python" -m pip install --upgrade pip setuptools wheel \
-    || fail "failed to upgrade pip tooling"
+log "pip compatibility tags before install"
+"${VENV_PY}" -m pip debug --verbose 2>&1 | tee -a "${LOG_FILE}"
+if "${VENV_PY}" -m pip debug --verbose 2>&1 | grep -q 'cp314'; then
+  log "pip resolved cp314 tags; refusing to continue"
+  exit 1
+fi
 
-assert_no_cp314_tags "${VENV_DIR}/bin/python"
+log "upgrading pip/setuptools/wheel"
+"${VENV_PY}" -m pip install --upgrade pip setuptools wheel 2>&1 | tee -a "${LOG_FILE}"
 
-log "installing project in editable mode with venv python"
-"${VENV_DIR}/bin/python" -m pip install -e "${REPO_ROOT}/python" \
-    || fail "failed to install project"
+log "installing project in editable mode"
+"${VENV_PY}" -m pip install -e "${REPO_ROOT}/python" 2>&1 | tee -a "${LOG_FILE}"
 
-assert_python312 "${VENV_DIR}/bin/python"
-assert_no_cp314_tags "${VENV_DIR}/bin/python"
+log "pip version after install"
+"${VENV_PY}" -m pip --version 2>&1 | tee -a "${LOG_FILE}"
 
-log "environment ready: $(command -v python) ($(python -V 2>&1))"
+log "pip compatibility tags after install"
+"${VENV_PY}" -m pip debug --verbose 2>&1 | tee -a "${LOG_FILE}"
+if "${VENV_PY}" -m pip debug --verbose 2>&1 | grep -q 'cp314'; then
+  log "pip resolved cp314 tags after install; refusing to continue"
+  exit 1
+fi
+
+log "environment ready"

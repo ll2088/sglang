@@ -90,3 +90,26 @@ def test_commit_falls_back_when_vmm_unavailable(monkeypatch):
         device_index=torch.cuda.current_device(),
     )
     assert plan_extensible_kv_cache(config) is None
+
+
+def test_commit_failure_falls_back_to_estimate(monkeypatch):
+    """A mapping failure during commit must surface so callers fall back."""
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
+    plan = ExtensibleKVCachePlan.__new__(ExtensibleKVCachePlan)
+    plan.bytes_per_block = 1 << 20
+    plan.max_num_blocks = 4
+
+    class _FailingBuffer:
+        reserved_size = 4 << 20
+        committed_bytes = 0
+
+        def commit(self, num_bytes):
+            raise VmmUnavailableError("simulated mapping failure")
+
+        def free(self):
+            pass
+
+    plan.buffer = _FailingBuffer()
+    with pytest.raises(VmmUnavailableError):
+        commit_extensible_kv_cache(plan, free_bytes=8 << 20)
+    plan.free()

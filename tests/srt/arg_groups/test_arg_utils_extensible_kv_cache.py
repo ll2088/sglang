@@ -45,6 +45,6 @@ def test_explicit_enable():
 
 
 def test_explicit_disable_keeps_fallback():
-    # The flag is store_true; omitting it is the explicit fallback path.
+    # The flag is store_true, so omitting it is the explicit fallback path.
     args = _parse([])
     assert args.enable_extensible_kv_cache is False
