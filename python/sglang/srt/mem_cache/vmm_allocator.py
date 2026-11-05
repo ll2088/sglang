@@ -133,6 +133,26 @@ def _torch_dtype_to_typestr(dtype: torch.dtype) -> str:
         raise ValueError(f"unsupported dtype for VMM view: {dtype}") from exc
 
 
+def _torch_dtype_to_typestr(dtype: torch.dtype) -> str:
+    """Map a torch dtype to the NumPy-style typestr used by the interface."""
+    mapping = {
+        torch.float16: "<f2",
+        torch.bfloat16: "<V2",
+        torch.float32: "<f4",
+        torch.float64: "<f8",
+        torch.int8: "|i1",
+        torch.uint8: "|u1",
+        torch.int16: "<i2",
+        torch.int32: "<i4",
+        torch.int64: "<i8",
+        torch.bool: "|b1",
+    }
+    try:
+        return mapping[dtype]
+    except KeyError as exc:  # pragma: no cover - defensive
+        raise ValueError(f"unsupported dtype for VMM view: {dtype}") from exc
+
+
 _DRIVER: Optional[ctypes.CDLL] = None
 _DRIVER_ERROR: Optional[str] = None
 
