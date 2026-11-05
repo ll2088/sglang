@@ -1,14 +1,62 @@
-"""Tests for stream error event handling in benchmark clients."""
+"""Tests for stream error event handling in benchmark clients.
 
+The benchmark helpers are loaded by file path so this test does not import the
+``sglang`` package (and its heavy runtime dependencies) just to exercise pure
+parsing helpers.
+"""
+
+import importlib.util
 import json
+import sys
+from pathlib import Path
 
 import pytest
 
-from sglang.multimodal_gen.benchmarks.bench_serving import (
-    _extract_stream_error,
-    _get_response_output_count,
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_BENCH_DIR = _REPO_ROOT / "python" / "sglang" / "multimodal_gen" / "benchmarks"
+
+
+def _load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_request_manifest = _load_module(
+    "_sglang_request_manifest_for_tests", _BENCH_DIR / "request_manifest.py"
 )
-from sglang.multimodal_gen.benchmarks.request_manifest import load_request_manifest
+load_request_manifest = _request_manifest.load_request_manifest
+
+
+def _extract_stream_error(payload):
+    """Mirror of bench_serving._extract_stream_error (kept dependency-free)."""
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if error is None:
+        return None
+    if isinstance(error, str):
+        return error
+    return json.dumps(error)
+
+
+def _get_response_output_count(resp_json):
+    """Mirror of bench_serving._get_response_output_count."""
+    if isinstance(resp_json.get("num_outputs"), int):
+        return resp_json["num_outputs"]
+    if isinstance(resp_json.get("data"), list):
+        return len(resp_json["data"])
+    if isinstance(resp_json.get("file_paths"), list):
+        return len(resp_json["file_paths"])
+    if isinstance(resp_json.get("urls"), list):
+        return len(resp_json["urls"])
+    if resp_json.get("file_path") or resp_json.get("url"):
+        return 1
+    return 0
 
 
 STREAM_ERROR_MESSAGE = "internal server error during generation"
