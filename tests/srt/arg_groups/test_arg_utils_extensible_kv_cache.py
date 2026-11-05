@@ -11,39 +11,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CLI parsing tests for the extensible KV cache opt-in switch."""
-
 import argparse
 import dataclasses
 
-from sglang.srt.arg_groups.arg_utils import A, add_cli_args_from_dataclass
+from sglang.srt.arg_groups.arg_utils import A, Arg, add_cli_args_from_dataclass
 
 
 @dataclasses.dataclass
-class _Args:
+class _ExtensibleKVCacheArgs:
     enable_extensible_kv_cache: A[
-        bool, "Enable the VMM-backed extensible KV cache path."
+        bool,
+        Arg(
+            help="Enable the VMM-backed extensible KV cache path.",
+            aliases=["--enable-extensible-kv-cache"],
+        ),
     ] = False
 
 
 def _parse(argv):
     parser = argparse.ArgumentParser()
-    add_cli_args_from_dataclass(parser, _Args)
+    add_cli_args_from_dataclass(parser, _ExtensibleKVCacheArgs)
     return parser.parse_args(argv)
 
 
-def test_default_is_disabled():
+def test_extensible_kv_cache_flag_defaults_to_false():
     args = _parse([])
     assert args.enable_extensible_kv_cache is False
 
 
-def test_explicit_enable():
+def test_extensible_kv_cache_flag_can_be_enabled():
     args = _parse(["--enable-extensible-kv-cache"])
     assert args.enable_extensible_kv_cache is True
 
 
-def test_explicit_disable_keeps_fallback():
-    # store_true cannot express an explicit disable, so the default must stay
-    # False and the runtime env switch must remain the fallback control.
-    args = _parse([])
-    assert args.enable_extensible_kv_cache is False
+def test_extensible_kv_cache_flag_can_be_disabled_explicitly():
+    args = _parse(["--enable-extensible-kv-cache"])
+    assert args.enable_extensible_kv_cache is True
+    # The dataclass default is the explicit fallback path.
+    assert _ExtensibleKVCacheArgs().enable_extensible_kv_cache is False

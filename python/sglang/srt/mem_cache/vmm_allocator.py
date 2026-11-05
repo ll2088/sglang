@@ -189,6 +189,8 @@ def vmm_unavailable_reason() -> Optional[str]:
     """Return a human-readable reason when VMM cannot be used, else None."""
     if os.environ.get("SGLANG_DISABLE_VMM", "0") == "1":
         return "SGLANG_DISABLE_VMM=1"
+    if not torch.cuda.is_available():
+        return "CUDA is not available"
     try:
         lib = _load_driver()
     except VmmUnavailableError as exc:

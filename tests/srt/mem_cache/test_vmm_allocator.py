@@ -81,6 +81,8 @@ def test_free_releases_reservation():
 def test_unavailable_reason_is_string_or_none():
     reason = vmm_unavailable_reason()
     assert reason is None or isinstance(reason, str)
+    if not torch.cuda.is_available():
+        assert reason is not None
 
 
 def test_vmm_unavailable_error_is_runtime_error():
