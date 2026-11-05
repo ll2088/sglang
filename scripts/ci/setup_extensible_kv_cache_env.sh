@@ -12,108 +12,60 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-# Prepare an isolated Python 3.12 virtualenv for the extensible KV cache tests.
-#
-# The CI image defaults to a newer system Python (3.14), so every pip call must
-# go through the venv interpreter explicitly. This script never relies on a
-# bare `pip` and never reads the system site-packages.
-
+# Prepare an isolated Python 3.12 environment for the extensible KV cache
+# checks. Every install and test invocation goes through .venv/bin/python so
+# that a system pip (which may resolve cp314 wheels) can never be used.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VENV_DIR="${REPO_ROOT}/.venv"
-LOG_FILE="${REPO_ROOT}/.setup_extensible_kv_cache_env.log"
+PYTHON_BIN="${PYTHON_BIN:-python3.12}"
 
-log() {
-    echo "[setup_extensible_kv_cache_env] $*"
-}
+log() { printf '[setup_extensible_kv_cache_env] %s\n' "$*" >&2; }
 
 on_error() {
-    local exit_code=$?
-    echo "[setup_extensible_kv_cache_env] FAILED with exit code ${exit_code}" >&2
-    if [[ -f "${LOG_FILE}" ]]; then
-        echo "[setup_extensible_kv_cache_env] last 200 log lines:" >&2
-        tail -n 200 "${LOG_FILE}" >&2 || true
-    fi
-    exit "${exit_code}"
+  local status=$?
+  log "environment setup failed with exit code ${status}"
+  log "which ${PYTHON_BIN}: $(command -v "${PYTHON_BIN}" || echo '<not found>')"
+  log "${PYTHON_BIN} -V: $("${PYTHON_BIN}" -V 2>&1 || echo '<failed>')"
+  log "PATH: ${PATH}"
+  if [[ -x "${VENV_DIR}/bin/python" ]]; then
+    log "venv python: $("${VENV_DIR}/bin/python" -V 2>&1 || echo '<failed>')"
+    log "venv pip: $("${VENV_DIR}/bin/python" -m pip -V 2>&1 || echo '<failed>')"
+  fi
+  exit "${status}"
 }
 trap on_error ERR
 
-# Redirect the rest of the output to the log while still showing it.
-exec > >(tee -a "${LOG_FILE}") 2>&1
-
-log "repo root: ${REPO_ROOT}"
-log "venv dir: ${VENV_DIR}"
-
-# Locate a Python 3.12 interpreter. Prefer the versioned binary so the system
-# default (3.14) is never picked up by accident.
-PYTHON312=""
-for candidate in python3.12 /usr/bin/python3.12 /usr/local/bin/python3.12; do
-    if command -v "${candidate}" >/dev/null 2>&1; then
-        PYTHON312="$(command -v "${candidate}")"
-        break
-    fi
-done
-if [[ -z "${PYTHON312}" ]]; then
-    log "python3.12 not found; available interpreters:"
-    ls -1 /usr/bin/python3* 2>/dev/null || true
-    log "install python3.12 before running this script"
-    exit 1
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  log "${PYTHON_BIN} not found on PATH; install Python 3.12 or set PYTHON_BIN"
+  exit 1
 fi
-log "using interpreter: ${PYTHON312}"
-"${PYTHON312}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
 
-# Recreate the venv from scratch so no stale or system packages leak in.
+log "creating venv at ${VENV_DIR} with ${PYTHON_BIN}"
 rm -rf "${VENV_DIR}"
-"${PYTHON312}" -m venv --clear "${VENV_DIR}"
-# shellcheck disable=SC1091
-source "${VENV_DIR}/bin/activate"
+"${PYTHON_BIN}" -m venv "${VENV_DIR}"
 
-log "which python: $(command -v python)"
-log "python -V: $(python -V 2>&1)"
-log "which pip: $(command -v pip || true)"
-log "pip -V: $(python -m pip -V 2>&1)"
-log "VIRTUAL_ENV: ${VIRTUAL_ENV:-<unset>}"
+VENV_PY="${VENV_DIR}/bin/python"
+if [[ ! -x "${VENV_PY}" ]]; then
+  log "venv python missing at ${VENV_PY}"
+  exit 1
+fi
 
-# Hard assertions: the interpreter must be 3.12 and live inside the venv.
-python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
-python - <<'PY'
-import os
+log "venv python: $("${VENV_PY}" -V)"
+log "venv pip: $("${VENV_PY}" -m pip -V)"
+log "venv sys.executable: $("${VENV_PY}" -c 'import sys; print(sys.executable)')"
+
+"${VENV_PY}" - <<'PY'
 import sys
-
-venv = os.environ.get("VIRTUAL_ENV")
-assert venv, "VIRTUAL_ENV is not set; venv activation failed"
-exe = os.path.realpath(sys.executable)
-assert exe.startswith(os.path.realpath(venv) + os.sep), (
-    f"interpreter {exe} is outside venv {venv}"
-)
-print(f"interpreter ok: {exe}")
+assert sys.version_info[:2] == (3, 12), sys.version
+print(f"interpreter ok: {sys.executable} {sys.version.split()[0]}")
 PY
 
-# Never read the system site-packages.
-export PIP_NO_SYSTEM_SITE_PACKAGES=1
-export PIP_DISABLE_PIP_VERSION_CHECK=1
+log "upgrading pip inside venv"
+"${VENV_PY}" -m pip install --upgrade pip
 
-python -m pip install --upgrade pip setuptools wheel
-
-# Install the project in editable mode through the venv interpreter only.
-# --ignore-installed avoids "Requirement already satisfied" from the system
-# dist-packages that the CI image exposes.
-python -m pip install --ignore-installed -e "${REPO_ROOT}/python"
-
-# Verify the installed package resolves inside the venv.
-python - <<'PY'
-import os
-import sys
-
-import sglang
-
-venv = os.path.realpath(os.environ["VIRTUAL_ENV"])
-path = os.path.realpath(sglang.__file__)
-assert path.startswith(venv + os.sep), (
-    f"sglang resolved to {path}, outside venv {venv}"
-)
-print(f"sglang ok: {path}")
-PY
+log "installing sglang editable into venv"
+"${VENV_PY}" -m pip install -e "${REPO_ROOT}/python"
 
 log "environment ready"

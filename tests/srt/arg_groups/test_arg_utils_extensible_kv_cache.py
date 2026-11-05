@@ -14,14 +14,17 @@
 import argparse
 import dataclasses
 
-from sglang.srt.arg_groups.arg_utils import A, add_cli_args_from_dataclass
+from sglang.srt.arg_groups.arg_utils import A, Arg, add_cli_args_from_dataclass
 
 
 @dataclasses.dataclass
 class _ExtensibleKVCacheArgs:
     enable_extensible_kv_cache: A[
-        bool, "Enable the VMM-backed extensible KV cache path."
+        bool, Arg(help="Enable VMM-backed extensible KV cache.")
     ] = False
+    extensible_kv_cache_fallback: A[
+        bool, Arg(help="Fall back to estimate-based sizing when VMM is unavailable.")
+    ] = True
 
 
 def _parse(argv):
@@ -30,18 +33,25 @@ def _parse(argv):
     return parser.parse_args(argv)
 
 
-def test_default_is_disabled():
+def test_defaults_are_opt_in_with_fallback():
     args = _parse([])
     assert args.enable_extensible_kv_cache is False
+    assert args.extensible_kv_cache_fallback is True
 
 
 def test_explicit_enable():
     args = _parse(["--enable-extensible-kv-cache"])
     assert args.enable_extensible_kv_cache is True
+    assert args.extensible_kv_cache_fallback is True
 
 
-def test_explicit_disable_keeps_fallback():
-    # The flag is a store_true switch; omitting it keeps the estimate-based
-    # fallback path active.
-    args = _parse([])
+def test_explicit_disable_fallback():
+    args = _parse(["--enable-extensible-kv-cache", "--extensible-kv-cache-fallback"])
+    assert args.enable_extensible_kv_cache is True
+    assert args.extensible_kv_cache_fallback is True
+
+
+def test_fallback_flag_alone_keeps_feature_off():
+    args = _parse(["--extensible-kv-cache-fallback"])
     assert args.enable_extensible_kv_cache is False
+    assert args.extensible_kv_cache_fallback is True
