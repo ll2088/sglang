@@ -11,9 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Argument parsing tests for the extensible KV cache switch."""
-
-from __future__ import annotations
+"""CLI parsing tests for the extensible KV cache switch."""
 
 import argparse
 import dataclasses
@@ -28,22 +26,22 @@ class _Args:
     ] = False
 
 
-def _parser() -> argparse.ArgumentParser:
+def _parse(argv):
     parser = argparse.ArgumentParser()
     add_cli_args_from_dataclass(parser, _Args)
-    return parser
+    return parser.parse_args(argv)
 
 
 def test_default_is_disabled():
-    args = _parser().parse_args([])
+    args = _parse([])
     assert args.enable_extensible_kv_cache is False
 
 
 def test_explicit_enable():
-    args = _parser().parse_args(["--enable-extensible-kv-cache"])
+    args = _parse(["--enable-extensible-kv-cache"])
     assert args.enable_extensible_kv_cache is True
 
 
 def test_explicit_disable_keeps_fallback():
-    args = _parser().parse_args([])
+    args = _parse([])
     assert args.enable_extensible_kv_cache is False
