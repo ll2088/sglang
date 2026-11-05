@@ -58,4 +58,28 @@ mod tests {
         assert_eq!(events[0], "{\"test\":true}");
         assert_eq!(events[1], "[DONE]");
     }
+
+    /// A stream that delivers tokens and then a server error envelope must
+    /// surface the error payload as its own data event, so callers can fail
+    /// the request instead of counting the partial tokens as success.
+    #[test]
+    fn parse_sse_data_surfaces_error_event() {
+        let raw = b"data: {\"choices\":[{\"text\":\"a\"}]}\n\n\
+                    data: {\"choices\":[{\"text\":\"b\"}]}\n\n\
+                    data: {\"error\":{\"message\":\"boom\",\"code\":500}}\n\n\
+                    data: [DONE]\n\n";
+        let events = parse_sse_data(raw);
+        assert_eq!(events.len(), 4, "got: {events:?}");
+        assert_eq!(events[3], "[DONE]");
+
+        let error_event: serde_json::Value = serde_json::from_str(&events[2]).unwrap();
+        assert_eq!(
+            error_event.get("error").and_then(|e| e.get("message")),
+            Some(&serde_json::Value::String("boom".to_string()))
+        );
+        assert!(
+            error_event.get("choices").is_none(),
+            "error envelope must not carry choices"
+        );
+    }
 }

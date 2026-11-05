@@ -217,4 +217,31 @@ mod tests {
         assert_eq!(events[0], "{\"test\":true}");
         assert_eq!(events[1], "[DONE]");
     }
+
+    #[test]
+    fn test_sse_error_event_after_tokens_is_visible() {
+        let parse_sse_chunk = |chunk: &[u8]| -> Vec<String> {
+            let text = String::from_utf8_lossy(chunk);
+            text.lines()
+                .filter(|line| line.starts_with("data: "))
+                .map(|line| line[6..].to_string())
+                .collect()
+        };
+
+        let sse_data = b"data: {\"choices\":[{\"text\":\"a\"}]}\n\n\
+                        data: {\"choices\":[{\"text\":\"b\"}]}\n\n\
+                        data: {\"error\":{\"message\":\"boom\",\"code\":500}}\n\n\
+                        data: [DONE]\n\n";
+        let events = parse_sse_chunk(sse_data);
+
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[3], "[DONE]");
+
+        let error_event: serde_json::Value = serde_json::from_str(&events[2]).unwrap();
+        assert_eq!(
+            error_event.get("error").and_then(|e| e.get("message")),
+            Some(&serde_json::Value::String("boom".to_string()))
+        );
+        assert!(error_event.get("choices").is_none());
+    }
 }
