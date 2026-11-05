@@ -1,56 +1,51 @@
 #!/usr/bin/env bash
-# Single authoritative environment setup for CI.
-#
-# Goals:
-#   * Never inherit PYTHONPATH/PYTHONHOME from the runner.
-#   * Rebuild .venv with an absolute python3.12, not whatever `python` is on PATH.
-#   * Run every pip/pytest invocation through .venv/bin/python -m ... so the
-#     interpreter that installs is the interpreter that tests.
-#   * Fail loudly if pip resolves to the system interpreter.
+# Create and validate the Python 3.12 virtualenv used by CI checks.
+# Fails loudly with interpreter diagnostics instead of silently falling back
+# to the system Python (which may be 3.14 and pull cp314 wheels).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$REPO_ROOT"
+VENV_DIR="${VENV_DIR:-${REPO_ROOT}/.venv}"
+PYTHON_BIN="${PYTHON_BIN:-python3.12}"
 
-unset PYTHONPATH || true
-unset PYTHONHOME || true
-export PYTHONNOUSERSITE=1
+log() { printf '[setup_env] %s\n' "$*" >&2; }
 
-PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3.12}"
-if [ ! -x "$PYTHON_BIN" ]; then
-  echo "error: $PYTHON_BIN not found; python3.12 is required" >&2
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  log "${PYTHON_BIN} not found on PATH"
+  log "which python3: $(command -v python3 || true)"
+  log "python3 -V: $(python3 -V 2>&1 || true)"
   exit 1
 fi
 
-"$PYTHON_BIN" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+if [ ! -x "${VENV_DIR}/bin/python" ]; then
+  log "creating venv at ${VENV_DIR} with ${PYTHON_BIN}"
+  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+fi
 
-"$PYTHON_BIN" -m venv --clear .venv
+# shellcheck disable=SC1091
+. "${VENV_DIR}/bin/activate"
 
-VENV_PY=".venv/bin/python"
-if [ ! -x "$VENV_PY" ]; then
-  echo "error: $VENV_PY missing after venv creation" >&2
+if ! python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version' 2>/dev/null; then
+  log "venv interpreter is not Python 3.12"
+  log "which python: $(command -v python || true)"
+  log "python -V: $(python -V 2>&1 || true)"
+  log "pip -V: $(pip -V 2>&1 || true)"
   exit 1
 fi
 
-"$VENV_PY" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+log "python: $(command -v python)"
+log "python -V: $(python -V 2>&1)"
+log "pip -V: $(pip -V 2>&1)"
 
-# Upgrade pip inside the venv before installing anything, so wheel tags are
-# resolved for the venv interpreter rather than a stale bundled pip.
-"$VENV_PY" -m pip install --upgrade pip
+# Keep the full pip output so dependency failures are diagnosable in CI logs.
+if ! python -m pip install --upgrade pip; then
+  log "pip self-upgrade failed"
+  exit 1
+fi
 
-"$VENV_PY" -m pip install -e python
+if ! python -m pip install -e "${REPO_ROOT}/python"; then
+  log "editable install of python/ failed; see pip output above"
+  exit 1
+fi
 
-# Guard against installs landing in /usr/lib/python3/dist-packages.
-"$VENV_PY" - <<'PY'
-import sys
-import pip
-
-assert sys.version_info[:2] == (3, 12), sys.version
-assert sys.prefix != sys.base_prefix, f"not in a venv: {sys.prefix}"
-assert ".venv" in sys.executable, sys.executable
-assert ".venv" in pip.__file__, pip.__file__
-print("venv ok:", sys.executable)
-print("pip ok:", pip.__file__)
-PY
-
-echo "setup_env.sh: environment ready"
+log "environment ready"

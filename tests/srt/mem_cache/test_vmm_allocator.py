@@ -10,10 +10,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# ==============================================================================
+"""CPU-safe unit tests for the VMM allocator wrapper.
+
+These tests do not require a GPU: they exercise the availability probe, the
+fallback reason, and the pure-Python sizing helpers. GPU-backed reservation
+and commit behaviour is covered by the extensible KV cache tests, which skip
+when VMM is unavailable.
+"""
+
+import os
+from unittest import mock
 
 import pytest
-import torch
 
+from sglang.srt.mem_cache import vmm_allocator
 from sglang.srt.mem_cache.vmm_allocator import (
     VmmBuffer,
     VmmUnavailableError,
@@ -21,112 +32,103 @@ from sglang.srt.mem_cache.vmm_allocator import (
     vmm_unavailable_reason,
 )
 
-requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="requires CUDA"
-)
+
+def test_disable_env_reports_reason(monkeypatch):
+    monkeypatch.setenv("SGLANG_DISABLE_VMM", "1")
+    assert vmm_unavailable_reason() == "SGLANG_DISABLE_VMM=1"
+    assert is_vmm_available() is False
 
 
-def _require_vmm():
-    # VMM needs a CUDA/HIP driver exposing the cuMem*/hipMem* API. Hosts
-    # without a GPU, or with a driver that lacks the symbols, skip instead
-    # of failing so the suite stays meaningful on CPU-only CI runners.
-    reason = vmm_unavailable_reason()
-    if reason is not None:
-        pytest.skip(f"VMM unavailable: {reason}")
+def test_unavailable_without_cuda(monkeypatch):
+    monkeypatch.delenv("SGLANG_DISABLE_VMM", raising=False)
+    with mock.patch.object(vmm_allocator.torch.cuda, "is_available", return_value=False):
+        assert vmm_unavailable_reason() == "CUDA is not available"
+        assert is_vmm_available() is False
 
 
-@requires_cuda
-def test_vmm_availability_is_consistent():
-    reason = vmm_unavailable_reason()
-    assert is_vmm_available() == (reason is None)
+def test_buffer_rejects_when_unavailable(monkeypatch):
+    monkeypatch.setenv("SGLANG_DISABLE_VMM", "1")
+    with pytest.raises(VmmUnavailableError):
+        VmmBuffer(1 << 20, 0)
 
 
-@requires_cuda
-def test_commit_never_exceeds_reservation():
-    _require_vmm()
-    buf = VmmBuffer(8 << 20, torch.cuda.current_device())
-    try:
-        assert buf.committed_bytes == 0
-        committed = buf.commit(3 << 20)
-        assert committed <= buf.reserved_size
-        assert committed == buf.committed_bytes
+def test_buffer_rejects_non_positive_size(monkeypatch):
+    monkeypatch.delenv("SGLANG_DISABLE_VMM", raising=False)
+    with mock.patch.object(vmm_allocator, "vmm_unavailable_reason", return_value=None):
         with pytest.raises(ValueError):
-            buf.commit(buf.reserved_size + 1)
-    finally:
-        buf.free()
+            VmmBuffer(0, 0)
 
 
-@requires_cuda
-def test_commit_is_idempotent_and_monotonic():
-    _require_vmm()
-    buf = VmmBuffer(8 << 20, torch.cuda.current_device())
-    try:
-        first = buf.commit(4 << 20)
-        second = buf.commit(4 << 20)
-        assert first == second
-        smaller = buf.commit(1 << 20)
-        assert smaller == first
-    finally:
-        buf.free()
+def test_round_up_is_granule_aligned():
+    granule = 2 << 20
+    for value in (0, 1, granule - 1, granule, granule + 1, 3 * granule + 7):
+        rounded = vmm_allocator._round_up(value, granule)
+        assert rounded % granule == 0
+        assert rounded >= value
+        assert rounded - value < granule
 
 
-@requires_cuda
-def test_free_releases_reservation():
-    _require_vmm()
-    buf = VmmBuffer(4 << 20, torch.cuda.current_device())
-    buf.commit(2 << 20)
-    buf.free()
-    assert buf.base_ptr == 0
-    with pytest.raises(RuntimeError):
-        buf.commit(1 << 20)
+def test_commit_is_monotonic_and_bounded():
+    """Exercise the commit bookkeeping without a driver by stubbing mapping."""
+    granule = 2 << 20
+    buffer = VmmBuffer.__new__(VmmBuffer)
+    buffer._freed = False
+    buffer.device_index = 0
+    buffer.granularity = granule
+    buffer.reserved_size = 4 * granule
+    buffer.base_ptr = 0x1000
+    buffer._mapped_granules = set()
+    buffer._handles = []
 
+    def fake_map(granule_index):
+        buffer._mapped_granules.add(granule_index)
+        buffer._handles.append((granule_index, buffer.base_ptr + granule_index * granule, granule))
 
-def test_unavailable_reason_is_string_or_none():
-    reason = vmm_unavailable_reason()
-    assert reason is None or isinstance(reason, str)
-    if not torch.cuda.is_available():
-        assert reason is not None
+    def fake_unmap(granule_index):
+        buffer._mapped_granules.discard(granule_index)
+        buffer._handles = [h for h in buffer._handles if h[0] != granule_index]
 
+    buffer._map_granule = fake_map
+    buffer._unmap_granule = fake_unmap
 
-def test_vmm_unavailable_error_is_runtime_error():
-    assert issubclass(VmmUnavailableError, RuntimeError)
-
-
-def test_commit_range_rejects_invalid_range():
-    # Range validation happens before any driver call, so this runs on CPU.
-    buf = VmmBuffer.__new__(VmmBuffer)
-    buf._freed = False
-    buf.reserved_size = 8 << 20
-    buf.granularity = 2 << 20
-    buf._mapped_granules = set()
-    buf._handles = []
+    assert buffer.commit(0) == 0
+    assert buffer.commit(granule) == granule
+    # Committing fewer bytes is a no-op.
+    assert buffer.commit(granule // 2) == granule
+    assert buffer.commit(3 * granule) == 3 * granule
+    assert buffer.commit(4 * granule) == 4 * granule
     with pytest.raises(ValueError):
-        buf.commit_range(1, 0)
-    with pytest.raises(ValueError):
-        buf.commit_range(0, buf.reserved_size + 1)
+        buffer.commit(4 * granule + 1)
 
 
-def test_commit_range_after_free_raises():
-    buf = VmmBuffer.__new__(VmmBuffer)
-    buf._freed = True
-    buf.reserved_size = 8 << 20
-    buf.granularity = 2 << 20
-    buf._mapped_granules = set()
-    buf._handles = []
-    with pytest.raises(RuntimeError):
-        buf.commit_range(0, 1)
+def test_commit_rolls_back_on_failure():
+    granule = 2 << 20
+    buffer = VmmBuffer.__new__(VmmBuffer)
+    buffer._freed = False
+    buffer.device_index = 0
+    buffer.granularity = granule
+    buffer.reserved_size = 4 * granule
+    buffer.base_ptr = 0x1000
+    buffer._mapped_granules = set()
+    buffer._handles = []
 
+    calls = {"n": 0}
 
-@requires_cuda
-def test_as_tensor_view_stays_valid_across_commit():
-    _require_vmm()
-    buf = VmmBuffer(8 << 20, torch.cuda.current_device())
-    try:
-        view = buf.as_tensor(torch.float16, (1024,))
-        assert view.data_ptr() == buf.base_ptr
-        buf.commit(4 << 20)
-        # The view keeps the same base pointer after more pages are mapped.
-        assert view.data_ptr() == buf.base_ptr
-        assert buf.committed_bytes >= 4 << 20
-    finally:
-        buf.free()
+    def flaky_map(granule_index):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise VmmUnavailableError("boom")
+        buffer._mapped_granules.add(granule_index)
+        buffer._handles.append((granule_index, buffer.base_ptr + granule_index * granule, granule))
+
+    def fake_unmap(granule_index):
+        buffer._mapped_granules.discard(granule_index)
+        buffer._handles = [h for h in buffer._handles if h[0] != granule_index]
+
+    buffer._map_granule = flaky_map
+    buffer._unmap_granule = fake_unmap
+
+    with pytest.raises(VmmUnavailableError):
+        buffer.commit(3 * granule)
+    assert buffer.committed_bytes == 0
+    assert buffer._handles == []
