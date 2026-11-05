@@ -20,11 +20,7 @@ from sglang.srt.arg_groups.arg_utils import A, Arg, add_cli_args_from_dataclass
 @dataclasses.dataclass
 class _ExtensibleKVCacheArgs:
     enable_extensible_kv_cache: A[
-        bool,
-        Arg(
-            help="Reserve KV cache address space and size it after warmup.",
-            aliases=["--enable-extensible-kv-cache"],
-        ),
+        bool, Arg(help="Enable the VMM-backed extensible KV cache.")
     ] = False
 
 
@@ -34,18 +30,18 @@ def _parse(argv):
     return parser.parse_args(argv)
 
 
-def test_default_is_disabled():
+def test_extensible_kv_cache_flag_defaults_off():
     args = _parse([])
     assert args.enable_extensible_kv_cache is False
 
 
-def test_explicit_enable():
+def test_extensible_kv_cache_flag_can_be_enabled():
     args = _parse(["--enable-extensible-kv-cache"])
     assert args.enable_extensible_kv_cache is True
 
 
-def test_explicit_disable_keeps_fallback():
-    # The flag is a store_true switch; omitting it is the documented way to
-    # stay on the estimate-based allocation path.
-    args = _parse([])
-    assert args.enable_extensible_kv_cache is False
+def test_extensible_kv_cache_flag_help_is_registered():
+    parser = argparse.ArgumentParser()
+    add_cli_args_from_dataclass(parser, _ExtensibleKVCacheArgs)
+    help_text = parser.format_help()
+    assert "--enable-extensible-kv-cache" in help_text
