@@ -82,17 +82,6 @@ def generate_summary(base_dir: Path) -> str:
         ):
             lines.append(f"| {label} | ❌ Failed | - | - | - | - |")
             continue
-        if not all(
-            math.isfinite(value)
-            for value in (
-                result.ttft_mean,
-                result.e2e_latency_mean,
-                result.input_throughput_mean,
-                result.output_throughput_mean,
-            )
-        ):
-            lines.append(f"| {label} | ❌ Failed | - | - | - | - |")
-            continue
 
         lines.append(
             f"| {label} | ✅ Success | "

@@ -291,12 +291,16 @@ def _first_result_error(results: List[Any]) -> Optional[str]:
 
     A generation that fails after producing output reports the failure on the
     result object instead of raising. The server's error is the root cause and
-    must win over any partial output, which is only a symptom.
+    must win over any partial output, which is only a symptom. An empty error
+    string is treated as no error so a clean result is not failed by accident.
     """
     for item in results:
         error = getattr(item, "error", None)
-        if error is not None:
-            return str(error)
+        if error is None:
+            continue
+        if isinstance(error, str) and not error.strip():
+            continue
+        return str(error)
     return None
 
 

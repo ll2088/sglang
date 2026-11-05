@@ -38,6 +38,20 @@ class BenchmarkResult:
         stats = aggregated.get("stats", {}) if isinstance(aggregated, dict) else {}
         if isinstance(stats, dict) and stats.get("error") is not None:
             raise ValueError(f"Benchmark stream error: {stats['error']}")
+        for container in (data, aggregated, stats):
+            if not isinstance(container, dict):
+                continue
+            for key in ("data", "results", "outputs"):
+                items = container.get(key)
+                if isinstance(items, dict):
+                    items = [items]
+                if not isinstance(items, list):
+                    continue
+                for item in items:
+                    if isinstance(item, dict) and item.get("error") is not None:
+                        raise ValueError(
+                            f"Benchmark stream error: {item['error']}"
+                        )
         return cls(
             ttft_mean=float(stats.get("ttft", {}).get("mean", float("inf"))),
             e2e_latency_mean=float(

@@ -136,6 +136,15 @@ def load_request_manifest(path: str | Path) -> LoadedRequestManifest:
                     f"{_format_stream_error(record['error'])}"
                 )
 
+            sampling_params = record.get("sampling_params", {})
+            if isinstance(sampling_params, dict) and (
+                sampling_params.get("error") is not None
+            ):
+                raise ValueError(
+                    f"Manifest line {line_number}: stream error: "
+                    f"{_format_stream_error(sampling_params['error'])}"
+                )
+
             unknown_fields = set(record) - _ALLOWED_FIELDS
             if unknown_fields:
                 raise ValueError(

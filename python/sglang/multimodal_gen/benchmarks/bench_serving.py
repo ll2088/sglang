@@ -189,6 +189,32 @@ def _extract_stream_error_from_text(text: str) -> Optional[str]:
     return None
 
 
+def _extract_stream_error_from_json_body(body: Any) -> Optional[str]:
+    """Return the first server error object carried by a JSON response body.
+
+    A non-streaming response may still report a generation failure as an
+    ``error`` envelope with HTTP 200, so the top-level object and the nested
+    ``data``/``results``/``outputs`` containers are inspected. The server's
+    error is the root cause and wins over any partial output.
+    """
+    stream_error = _extract_stream_error(body)
+    if stream_error is not None:
+        return stream_error
+    if not isinstance(body, dict):
+        return None
+    for key in ("data", "results", "outputs"):
+        items = body.get(key)
+        if isinstance(items, dict):
+            items = [items]
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            stream_error = _extract_stream_error(item)
+            if stream_error is not None:
+                return stream_error
+    return None
+
+
 def _iter_stream_payloads(chunk_bytes: bytes):
     """Yield decoded JSON payloads from one SSE chunk.
 
@@ -316,7 +342,7 @@ async_request_image_sglang(
                 if response.status == 200:
                     resp_json = await response.json()
                     output.response_body = resp_json
-                    stream_error = _extract_stream_error(resp_json)
+                    stream_error = _extract_stream_error_from_json_body(resp_json)
                     if stream_error is not None:
                         output.error = stream_error
                         output.success = False
@@ -353,7 +379,7 @@ async_request_image_sglang(
                 if response.status == 200:
                     resp_json = await response.json()
                     output.response_body = resp_json
-                    stream_error = _extract_stream_error(resp_json)
+                    stream_error = _extract_stream_error_from_json_body(resp_json)
                     if stream_error is not None:
                         output.error = stream_error
                         output.success = False
@@ -507,7 +533,7 @@ async def async_request_video_sglang(
                     status_data = await response.json()
                     status = status_data.get("status")
                     if status == "completed":
-                        stream_error = _extract_stream_error(status_data)
+                        stream_error = _extract_stream_error_from_json_body(status_data)
                         if stream_error is None:
                             stream_error = _extract_stream_error_from_text(
                                 json.dumps(status_data)
