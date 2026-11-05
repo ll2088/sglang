@@ -20,11 +20,10 @@ from sglang.srt.arg_groups.arg_utils import A, Arg, add_cli_args_from_dataclass
 @dataclasses.dataclass
 class _ExtensibleKVCacheArgs:
     enable_extensible_kv_cache: A[
-        bool,
-        Arg(
-            help="Enable the VMM-backed two-phase KV cache sizing path.",
-            aliases=["--enable-extensible-kv-cache"],
-        ),
+        bool, Arg(help="Enable the VMM-backed extensible KV cache.")
+    ] = False
+    disable_extensible_kv_cache: A[
+        bool, Arg(help="Force the estimate-based KV cache path.")
     ] = False
 
 
@@ -34,16 +33,19 @@ def _parse(argv):
     return parser.parse_args(argv)
 
 
-def test_extensible_kv_cache_defaults_to_disabled():
+def test_defaults_are_disabled():
     args = _parse([])
     assert args.enable_extensible_kv_cache is False
+    assert args.disable_extensible_kv_cache is False
 
 
-def test_extensible_kv_cache_can_be_enabled():
+def test_enable_flag():
     args = _parse(["--enable-extensible-kv-cache"])
     assert args.enable_extensible_kv_cache is True
+    assert args.disable_extensible_kv_cache is False
 
 
-def test_extensible_kv_cache_alias_matches_field_name():
-    args = _parse(["--enable-extensible-kv-cache"])
-    assert args.enable_extensible_kv_cache is True
+def test_explicit_disable_flag():
+    args = _parse(["--disable-extensible-kv-cache"])
+    assert args.enable_extensible_kv_cache is False
+    assert args.disable_extensible_kv_cache is True

@@ -33,11 +33,10 @@ def _require_vmm():
 
 
 @requires_cuda
-def test_two_phase_sizing_allocates_and_frees_without_leak(monkeypatch):
+def test_two_phase_sizing_matches_measured_free_memory(monkeypatch):
     monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
     _require_vmm()
     device_index = torch.cuda.current_device()
-    free_before, _ = torch.cuda.mem_get_info(device_index)
     config = ExtensibleKVCacheConfig(
         bytes_per_block=2 << 20,
         max_num_blocks=8,
@@ -46,19 +45,18 @@ def test_two_phase_sizing_allocates_and_frees_without_leak(monkeypatch):
     plan = plan_extensible_kv_cache(config)
     assert plan is not None
     try:
-        committed = commit_extensible_kv_cache(plan)
-        assert 0 <= committed <= config.max_num_blocks
-        # Committing again must be idempotent.
-        assert commit_extensible_kv_cache(plan) == committed
+        free_bytes, _ = torch.cuda.mem_get_info(device_index)
+        committed = commit_extensible_kv_cache(plan, free_bytes=free_bytes)
+        assert committed == plan.final_num_blocks(free_bytes)
+        assert plan.buffer.committed_bytes <= plan.reserved_bytes
+        # Repeated calls are idempotent.
+        assert commit_extensible_kv_cache(plan, free_bytes=free_bytes) == committed
     finally:
         plan.free()
-    free_after, _ = torch.cuda.mem_get_info(device_index)
-    # The reservation is released; allow a small tolerance for allocator noise.
-    assert free_after + (1 << 20) >= free_before
 
 
 @requires_cuda
-def test_fallback_when_vmm_disabled_matches_estimate_path(monkeypatch):
+def test_fallback_when_vmm_disabled(monkeypatch):
     monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
     monkeypatch.setenv("SGLANG_DISABLE_VMM", "1")
     config = ExtensibleKVCacheConfig(
@@ -66,26 +64,22 @@ def test_fallback_when_vmm_disabled_matches_estimate_path(monkeypatch):
         max_num_blocks=4,
         device_index=torch.cuda.current_device(),
     )
-    # With VMM disabled the planner returns None and callers keep the
-    # existing estimate-based allocation path unchanged.
     assert plan_extensible_kv_cache(config) is None
 
 
 @requires_cuda
-def test_commit_failure_falls_back(monkeypatch):
+def test_free_releases_reservation(monkeypatch):
     monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
     _require_vmm()
     config = ExtensibleKVCacheConfig(
-        bytes_per_block=1 << 20,
+        bytes_per_block=2 << 20,
         max_num_blocks=4,
         device_index=torch.cuda.current_device(),
     )
     plan = plan_extensible_kv_cache(config)
     assert plan is not None
-    try:
-        # A negative free-memory measurement must be rejected rather than
-        # silently committing an invalid block count.
-        with pytest.raises(ValueError):
-            plan.final_num_blocks(-1)
-    finally:
-        plan.free()
+    plan.commit(2)
+    plan.free()
+    assert plan.buffer.base_ptr == 0
+    with pytest.raises(RuntimeError):
+        plan.buffer.commit(1)

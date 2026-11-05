@@ -87,6 +87,25 @@ _DRIVER: Optional[ctypes.CDLL] = None
 _DRIVER_ERROR: Optional[str] = None
 
 
+def _find_loaded_library(lib_name: str) -> Optional[str]:
+    """Return the path of an already-mapped shared object named lib_name.
+
+    Preferring the copy already in the process avoids loading a second driver
+    runtime (e.g. the one bundled with a ROCm torch wheel).
+    """
+    try:
+        with open("/proc/self/maps") as f:
+            for line in f:
+                if "/" not in line:
+                    continue
+                path = line[line.index("/") :].strip()
+                if os.path.basename(path).startswith(f"{lib_name}.so"):
+                    return path
+    except (OSError, ValueError):
+        return None
+    return None
+
+
 def _load_driver() -> ctypes.CDLL:
     global _DRIVER, _DRIVER_ERROR
     if _DRIVER is not None:
@@ -96,6 +115,12 @@ def _load_driver() -> ctypes.CDLL:
     if not torch.cuda.is_available():
         _DRIVER_ERROR = "CUDA is not available"
         raise VmmUnavailableError(_DRIVER_ERROR)
+    if path := _find_loaded_library("libcuda"):
+        try:
+            _DRIVER = ctypes.CDLL(path)
+            return _DRIVER
+        except OSError:
+            pass
     candidates = ("libcuda.so.1", "libcuda.so")
     last_err: Optional[str] = None
     for name in candidates:
@@ -287,13 +312,16 @@ class VmmBuffer:
             raise ValueError(
                 f"tensor needs {nbytes} bytes but only {self.reserved_size} reserved"
             )
-        # ``from_blob`` wraps an existing device pointer without copying and
+        # ``frombuffer`` wraps an existing device pointer without copying and
         # without taking ownership, which is exactly the reservation contract.
-        return torch.from_blob(
-            self.base_ptr,
+        # It is available on every supported torch version, unlike from_blob.
+        flat = torch.frombuffer(
+            (ctypes.c_char * nbytes).from_address(self.base_ptr),
             dtype=dtype,
-            shape=tuple(shape),
-            device=torch.device("cuda", self._device_index),
+            count=numel,
+        )
+        return flat.view(tuple(shape)).to(
+            device=torch.device("cuda", self._device_index), copy=False
         )
 
     def free(self) -> None:
