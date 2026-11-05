@@ -7,7 +7,10 @@ import os
 import sys
 from pathlib import Path
 
-from results import BenchmarkResult, GPUUtilization
+try:
+    from results import BenchmarkResult, GPUUtilization
+except ImportError:  # pragma: no cover - direct script execution
+    from .results import BenchmarkResult, GPUUtilization
 
 
 def discover_benchmarks(base_dir: Path) -> list[tuple[Path, str]]:

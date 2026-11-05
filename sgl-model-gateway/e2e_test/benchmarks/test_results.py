@@ -1,11 +1,24 @@
 """Tests for benchmark result parsing and stream error handling."""
 
+import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
-from results import BenchmarkResult
+
+def _load_results_module():
+    """Load results.py by path so the test does not need the package installed."""
+    module_path = Path(__file__).with_name("results.py")
+    spec = importlib.util.spec_from_file_location("bench_results", module_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+BenchmarkResult = _load_results_module().BenchmarkResult
 
 
 def _write_result(tmp_path: Path, payload) -> Path:
