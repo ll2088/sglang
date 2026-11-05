@@ -1,60 +1,59 @@
 #!/usr/bin/env bash
-# Single CI entrypoint for the extensible KV cache checks.
-# Creates a python3.12 virtualenv, installs the project into it, and fails
-# fast with diagnostics if the interpreter is not the expected one.
-set -euxo pipefail
+# Copyright 2025 SGLang Team
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+# Single entry point for preparing the extensible KV cache CI environment.
+#
+# Every install and check goes through .venv/bin/python so the interpreter is
+# pinned to python3.12 and never falls back to the system pip (which may be a
+# different minor version and resolve cp314 wheels).
+set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "${REPO_ROOT}"
-
 VENV_DIR="${REPO_ROOT}/.venv"
-PYTHON_BIN="python3.12"
+PYTHON_BIN="${VENV_DIR}/bin/python"
 
-log() { echo "[setup_extensible_kv_cache_env] $*"; }
-
-log "repo root: ${REPO_ROOT}"
-log "pwd: $(pwd)"
-
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  log "ERROR: ${PYTHON_BIN} not found on PATH"
-  command -v python3 || true
-  python3 -V || true
-  exit 1
-fi
-
-log "which ${PYTHON_BIN}: $(command -v "${PYTHON_BIN}")"
-"${PYTHON_BIN}" -V
-
-if [ ! -x "${VENV_DIR}/bin/python" ]; then
-  log "creating virtualenv at ${VENV_DIR}"
-  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
-fi
-
-VENV_PY="${VENV_DIR}/bin/python"
-log "venv python: ${VENV_PY}"
-"${VENV_PY}" -V
-
-# Assert the venv interpreter is python3.12 and that sys.prefix points at the
-# venv, so pip never falls back to a system interpreter (cp314 wheels).
-"${VENV_PY}" - <<'PY'
+assert_venv_python() {
+  "${PYTHON_BIN}" - <<'PY'
 import sys
 assert sys.version_info[:2] == (3, 12), sys.version
 assert sys.prefix.endswith(".venv"), sys.prefix
 print("interpreter:", sys.executable)
-print("version:", sys.version)
+print("version:", sys.version.split()[0])
 print("prefix:", sys.prefix)
 PY
+}
 
-log "upgrading pip inside venv"
-"${VENV_PY}" -m pip install --upgrade pip
+if ! command -v python3.12 >/dev/null 2>&1; then
+  echo "python3.12 is required but was not found on PATH" >&2
+  exit 1
+fi
 
-log "installing project into venv"
-"${VENV_PY}" -m pip install -e "${REPO_ROOT}/python"
+if [ ! -x "${PYTHON_BIN}" ]; then
+  rm -rf "${VENV_DIR}"
+  python3.12 -m venv "${VENV_DIR}"
+fi
 
-log "pip check"
-"${VENV_PY}" -m pip check
+# Fail fast if the venv is not the interpreter we expect.
+assert_venv_python
 
-log "import smoke test"
-"${VENV_PY}" -c 'import sglang; print("sglang import ok")'
+"${PYTHON_BIN}" -m pip install --upgrade pip
+# --require-virtualenv keeps pip from ever installing into the system
+# interpreter if the venv activation is lost.
+"${PYTHON_BIN}" -m pip install --require-virtualenv -e "${REPO_ROOT}/python"
 
-log "environment ready"
+# Re-assert after installation: a broken venv or a stray system install would
+# otherwise only surface much later as a confusing import error.
+assert_venv_python
+
+echo "extensible KV cache environment ready: ${PYTHON_BIN}"

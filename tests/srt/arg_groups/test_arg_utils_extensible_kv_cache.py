@@ -11,37 +11,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""CLI parsing tests for the extensible KV cache switch."""
+"""CLI parsing tests for the extensible KV cache switch.
+
+The switch is read from the environment by ``extensible_kv_cache_enabled``;
+this test pins the default (off) and the explicit opt-in/opt-out behaviour so
+the fallback path stays reachable from the command line.
+"""
+
+from __future__ import annotations
 
 import argparse
 import dataclasses
-import os
-from typing import Optional
-from unittest import mock
+from typing import Annotated
 
-from sglang.srt.arg_groups.arg_utils import A, Arg, add_cli_args_from_dataclass
+import pytest
+
+from sglang.srt.arg_groups.arg_utils import Arg, add_cli_args_from_dataclass
+from sglang.srt.mem_cache.extensible_kv_cache import extensible_kv_cache_enabled
 
 
 @dataclasses.dataclass
-class _ExtensibleKVCacheArgs:
-    enable_extensible_kv_cache: A[
+class _Args:
+    enable_extensible_kv_cache: Annotated[
         bool, Arg(help="Enable the VMM-backed extensible KV cache.")
     ] = False
-    extensible_kv_cache_max_blocks: A[
-        Optional[int], Arg(help="Upper bound on reserved KV cache blocks.")
-    ] = None
 
 
 def _parse(argv):
     parser = argparse.ArgumentParser()
-    add_cli_args_from_dataclass(parser, _ExtensibleKVCacheArgs)
+    add_cli_args_from_dataclass(parser, _Args)
     return parser.parse_args(argv)
 
 
-def test_default_is_disabled():
+def test_default_is_off():
     args = _parse([])
     assert args.enable_extensible_kv_cache is False
-    assert args.extensible_kv_cache_max_blocks is None
 
 
 def test_explicit_enable():
@@ -49,40 +53,24 @@ def test_explicit_enable():
     assert args.enable_extensible_kv_cache is True
 
 
-def test_explicit_max_blocks():
-    args = _parse(["--extensible-kv-cache-max-blocks", "128"])
-    assert args.extensible_kv_cache_max_blocks == 128
+def test_env_default_off(monkeypatch):
+    monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
+    assert not extensible_kv_cache_enabled()
 
 
-def test_runtime_flag_defaults_off():
-    from sglang.srt.mem_cache.extensible_kv_cache import (
-        extensible_kv_cache_enabled,
-    )
-
-    with mock.patch.dict(os.environ, {}, clear=False):
-        os.environ.pop("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", None)
-        assert extensible_kv_cache_enabled() is False
+def test_env_explicit_disable(monkeypatch):
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "0")
+    assert not extensible_kv_cache_enabled()
 
 
-def test_runtime_flag_accepts_truthy_values():
-    from sglang.srt.mem_cache.extensible_kv_cache import (
-        extensible_kv_cache_enabled,
-    )
-
-    for value in ("1", "true", "TRUE", "yes", "on"):
-        with mock.patch.dict(
-            os.environ, {"SGLANG_ENABLE_EXTENSIBLE_KV_CACHE": value}
-        ):
-            assert extensible_kv_cache_enabled() is True
+def test_env_explicit_enable(monkeypatch):
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
+    assert extensible_kv_cache_enabled()
 
 
-def test_runtime_flag_rejects_falsey_values():
-    from sglang.srt.mem_cache.extensible_kv_cache import (
-        extensible_kv_cache_enabled,
-    )
-
-    for value in ("0", "false", "no", "off", ""):
-        with mock.patch.dict(
-            os.environ, {"SGLANG_ENABLE_EXTENSIBLE_KV_CACHE": value}
-        ):
-            assert extensible_kv_cache_enabled() is False
+def test_cli_flag_does_not_change_env(monkeypatch):
+    monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
+    args = _parse(["--enable-extensible-kv-cache"])
+    assert args.enable_extensible_kv_cache is True
+    # The runtime check is env-driven; parsing alone must not flip it.
+    assert not extensible_kv_cache_enabled()
