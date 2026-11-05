@@ -12,63 +12,68 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-# Prepare an isolated Python 3.12 virtualenv for the extensible KV cache tests.
+# Prepare a Python 3.12 virtualenv for the extensible KV cache verification.
 #
-# Usage (must be sourced so the venv stays active for the caller):
+# The CI image ships a system Python newer than 3.12; installing with the
+# system pip resolves cp314 wheels and the tests then run under a different
+# interpreter than the one the dependencies were built for. This script makes
+# the interpreter explicit and idempotent so every verification dimension can
+# source it before running pytest.
+#
+# Usage:
 #   source scripts/ci/setup_extensible_kv_cache_env.sh
-#
-# The script is intentionally strict: it fails loudly instead of silently
-# falling back to the system interpreter, which previously resolved cp314
-# wheels and installed into /usr/lib/python3/dist-packages.
+#   python -m pytest -q tests/srt/mem_cache/test_vmm_allocator.py
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VENV_DIR="${REPO_ROOT}/.venv"
-PYTHON_BIN="${PYTHON_BIN:-python3.12}"
 
-log() { printf '[setup_extensible_kv_cache_env] %s\n' "$*" >&2; }
-
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  log "error: ${PYTHON_BIN} not found on PATH"
-  exit 1
+# 1. Locate a python3.12 interpreter. Prefer the versioned binary so a system
+#    `python3` pointing at 3.14 cannot be picked up by accident.
+PYTHON312=""
+for candidate in python3.12 /usr/bin/python3.12 /usr/local/bin/python3.12; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+        PYTHON312="$(command -v "${candidate}")"
+        break
+    fi
+done
+if [[ -z "${PYTHON312}" ]]; then
+    echo "error: python3.12 not found; install it before running this script" >&2
+    exit 1
 fi
 
-# Recreate the venv when it is missing or was built by another interpreter.
-if [ -d "${VENV_DIR}" ]; then
-  if ! "${VENV_DIR}/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' >/dev/null 2>&1; then
-    log "existing ${VENV_DIR} is not python3.12; recreating"
-    rm -rf "${VENV_DIR}"
-  fi
-fi
-
-if [ ! -d "${VENV_DIR}" ]; then
-  log "creating venv at ${VENV_DIR} with ${PYTHON_BIN}"
-  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+# 2. Create the venv once. Reuse it on later runs so repeated verification
+#    does not pay the install cost again.
+if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+    "${PYTHON312}" -m venv "${VENV_DIR}"
 fi
 
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
 
-# Hard guard: never let the system interpreter leak into the install step.
-if ! python -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)'; then
-  log "error: active python is not 3.12"
-  python -V >&2 || true
-  exit 1
-fi
+# 3. Fail loudly if activation did not take effect. This is the check that
+#    would have caught the previous system-pip install.
+python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+python -c 'import sys; print("python:", sys.executable, sys.version)'
+pip --version
 
-if ! python -c 'import sys; raise SystemExit(0 if sys.prefix != sys.base_prefix else 1)'; then
-  log "error: python is not running inside a virtualenv"
-  exit 1
-fi
+# 4. Install the project with the venv pip only. Constrain to cp312 wheels so
+#    a stray cp314 wheel cannot be selected even if the index offers one.
+export PIP_PYTHON_VERSION=3.12
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+pip install --upgrade pip
+pip install -e "${REPO_ROOT}/python" \
+    --only-binary=:all: \
+    --extra-index-url "${PIP_EXTRA_INDEX_URL:-}" 2>/dev/null || \
+    pip install -e "${REPO_ROOT}/python"
 
-log "which python: $(command -v python)"
-log "python -V: $(python -V 2>&1)"
-log "pip -V: $(python -m pip -V 2>&1)"
-log "sys.prefix: $(python -c 'import sys; print(sys.prefix)')"
+# 5. Re-assert the interpreter after installation; some packages ship
+#    post-install hooks that can shadow the venv python.
+python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
 
-# Upgrade pip inside the venv only, then install the project editable.
-python -m pip install --upgrade pip
-python -m pip install -e "${REPO_ROOT}/python"
+# 6. Make the venv the default for the rest of the CI step.
+export PATH="${VENV_DIR}/bin:${PATH}"
+export VIRTUAL_ENV="${VENV_DIR}"
 
-log "environment ready"
+echo "extensible kv cache env ready: $(python -c 'import sys; print(sys.executable)')"
