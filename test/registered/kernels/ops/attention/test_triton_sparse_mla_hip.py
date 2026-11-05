@@ -65,6 +65,20 @@ def test_gfx950_fp8_gate_supports_tp8_prefill(monkeypatch):
     assert not _is_gfx950_sparse_mla_fp8(torch.float8_e4m3fn, 4, 512, 64, 576)
 
 
+def test_non_gfx942_gate_keeps_in_tree_path():
+    """The gfx942 AITER gate is off on other CDNA versions and on non-ROCm."""
+    from sglang.kernels.ops.attention.dsv4.sparse_prefill_kernels import (
+        _can_use_aiter_pa_prefill_sparse,
+    )
+
+    q = torch.empty(1024, 16, 576, dtype=torch.bfloat16)
+    kv = torch.empty(4, 1, 576, dtype=torch.bfloat16)
+    for cdna in (0, 1, 2, 4):
+        assert not _can_use_aiter_pa_prefill_sparse(
+            q, kv, cdna_version=cdna, mla_enabled=True
+        )
+
+
 def test_splitk_workspaces_are_graph_and_stream_safe():
     workspace = []
     device = torch.device("cuda")

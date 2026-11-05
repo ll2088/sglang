@@ -430,5 +430,153 @@ class TestPrefillSparseIndexer(CustomTestCase):
         torch.testing.assert_close(tail.blocks, blocks[rows])
 
 
+class TestGfx942AiterPaPrefillSparseGate(unittest.TestCase):
+    """Pure gate, lazy import and routing dispatch for the gfx942 AITER path.
+
+    These cases do not need a GPU: the gate takes the hardware/MLA decision as
+    arguments and the kernel is injected.
+    """
+
+    def _tensors(self, rows, dtype=torch.bfloat16, kv_dtype=None):
+        kv_dtype = dtype if kv_dtype is None else kv_dtype
+        q = torch.empty(rows, 16, 576, dtype=dtype)
+        kv = torch.empty(4, 1, 576, dtype=kv_dtype)
+        return q, kv
+
+    def test_gate_boundaries(self):
+        from sglang.kernels.ops.attention.dsv4.sparse_prefill_kernels import (
+            _can_use_aiter_pa_prefill_sparse,
+        )
+
+        cases = [
+            (512, 3, True, torch.bfloat16, torch.bfloat16, True),
+            (512, 3, True, torch.float16, torch.float16, True),
+            (511, 3, True, torch.bfloat16, torch.bfloat16, False),
+            (512, 4, True, torch.bfloat16, torch.bfloat16, False),
+            (512, 0, True, torch.bfloat16, torch.bfloat16, False),
+            (512, 3, False, torch.bfloat16, torch.bfloat16, False),
+            (512, 3, True, torch.float32, torch.float32, False),
+            (512, 3, True, torch.bfloat16, torch.float16, False),
+        ]
+        for rows, cdna, mla, dtype, kv_dtype, expected in cases:
+            with self.subTest(rows=rows, cdna=cdna, mla=mla, dtype=dtype):
+                q, kv = self._tensors(rows, dtype, kv_dtype)
+                self.assertIs(
+                    _can_use_aiter_pa_prefill_sparse(
+                        q, kv, cdna_version=cdna, mla_enabled=mla
+                    ),
+                    expected,
+                )
+
+    def test_lazy_import_missing_aiter_does_not_raise(self):
+        import builtins
+
+        from sglang.kernels.ops.attention.dsv4 import sparse_prefill_kernels as mod
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name.startswith("aiter"):
+                raise ImportError("aiter not installed")
+            return real_import(name, *args, **kwargs)
+
+        builtins.__import__ = fake_import
+        try:
+            self.assertIsNone(mod._get_aiter_pa_prefill_sparse())
+        finally:
+            builtins.__import__ = real_import
+
+    def test_dispatch_routes_only_when_gate_passes(self):
+        from sglang.kernels.ops.attention.dsv4 import sparse_prefill_kernels as mod
+
+        q, kv = self._tensors(512)
+        indices = torch.zeros(512, 1, dtype=torch.int32)
+        indptr = torch.zeros(513, dtype=torch.int32)
+        output = torch.empty(512, 16, 512, dtype=torch.bfloat16)
+        calls = {"aiter": 0, "fallback": 0}
+
+        def fake_aiter(*args, out=None, **kwargs):
+            calls["aiter"] += 1
+            target = out if out is not None else args[0].new_empty(512, 16, 512)
+            target.zero_()
+            return target
+
+        def fallback(*args, **kwargs):
+            calls["fallback"] += 1
+
+        routed = mod._dispatch_sparse_mla_prefill(
+            q,
+            kv,
+            indices,
+            indptr,
+            0.1,
+            None,
+            output,
+            fallback=fallback,
+            kernel_getter=lambda: fake_aiter,
+            cdna_version=3,
+            mla_enabled=True,
+        )
+        self.assertTrue(routed)
+        self.assertEqual(calls, {"aiter": 1, "fallback": 0})
+
+        calls.update(aiter=0, fallback=0)
+        routed = mod._dispatch_sparse_mla_prefill(
+            q,
+            kv,
+            indices,
+            indptr,
+            0.1,
+            None,
+            output,
+            fallback=fallback,
+            kernel_getter=lambda: self.fail("kernel getter must not run"),
+            cdna_version=3,
+            mla_enabled=True,
+        ) if False else mod._dispatch_sparse_mla_prefill(
+            q[:511],
+            kv,
+            indices[:511],
+            indptr,
+            0.1,
+            None,
+            output[:511],
+            fallback=fallback,
+            kernel_getter=lambda: self.fail("kernel getter must not run"),
+            cdna_version=3,
+            mla_enabled=True,
+        )
+        self.assertFalse(routed)
+        self.assertEqual(calls, {"aiter": 0, "fallback": 1})
+
+    def test_dispatch_falls_back_when_aiter_missing(self):
+        from sglang.kernels.ops.attention.dsv4 import sparse_prefill_kernels as mod
+
+        q, kv = self._tensors(512)
+        indices = torch.zeros(512, 1, dtype=torch.int32)
+        indptr = torch.zeros(513, dtype=torch.int32)
+        output = torch.empty(512, 16, 512, dtype=torch.bfloat16)
+        calls = {"fallback": 0}
+
+        def fallback(*args, **kwargs):
+            calls["fallback"] += 1
+
+        routed = mod._dispatch_sparse_mla_prefill(
+            q,
+            kv,
+            indices,
+            indptr,
+            0.1,
+            None,
+            output,
+            fallback=fallback,
+            kernel_getter=lambda: None,
+            cdna_version=3,
+            mla_enabled=True,
+        )
+        self.assertFalse(routed)
+        self.assertEqual(calls["fallback"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

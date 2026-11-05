@@ -3,7 +3,7 @@
 Migrated from ``sglang.srt.layers.attention.dsv4.sparse_prefill_utils`` (RFC #29630, Phase 2.5).
 """
 
-from typing import Optional
+from typing import Callable, Optional
 
 import torch
 import triton
@@ -154,6 +154,142 @@ def combined_topk_width(topk: int, window_size: int) -> int:
     """Width of the padded combined_indices last dim that
     ``combine_topk_swa_indices`` would produce for these args."""
     return ceil_align(topk + window_size, SPARSE_PREFILL_TOPK_ALIGNMENT)
+
+
+# Conservative perf gate, not a correctness bound: AITER pa_prefill_sparse is
+# correct for any query count, but the in-tree ragged prefill stays faster below
+# this measured crossover. Re-measure before changing it.
+_GFX942_AITER_PA_PREFILL_SPARSE_MIN_QUERIES = 512
+
+
+def _can_use_aiter_pa_prefill_sparse(
+    q: torch.Tensor,
+    kv: torch.Tensor,
+    *,
+    cdna_version: Optional[int] = None,
+    mla_enabled: Optional[bool] = None,
+) -> bool:
+    """Cheap gate for routing sparse MLA prefill to AITER pa_prefill_sparse.
+
+    Pure function: no kernel import and no device query unless the caller leaves
+    ``cdna_version`` / ``mla_enabled`` unset. The AITER import runs only after
+    this returns True.
+    """
+    if cdna_version is None:
+        cdna_version = _get_cdna_version()
+    if mla_enabled is None:
+        mla_enabled = _is_mla_enabled()
+    return (
+        cdna_version == 3
+        and mla_enabled
+        and q.shape[0] >= _GFX942_AITER_PA_PREFILL_SPARSE_MIN_QUERIES
+        and q.dtype in (torch.bfloat16, torch.float16)
+        and kv.dtype == q.dtype
+    )
+
+
+def _get_cdna_version() -> int:
+    """CDNA version of the current device, or 0 when unknown / not ROCm."""
+    try:
+        from sglang.srt.utils import is_hip
+
+        if not is_hip():
+            return 0
+        from sglang.srt.utils import get_cdna_version
+
+        return int(get_cdna_version())
+    except Exception:
+        return 0
+
+
+def _is_mla_enabled() -> bool:
+    """Whether the AITER MLA path is enabled; False when AITER is unavailable."""
+    try:
+        from sglang.srt.utils import is_hip
+
+        if not is_hip():
+            return False
+        from sglang._aiter_ops import rocm_aiter_ops
+
+        return bool(rocm_aiter_ops.is_mla_enabled())
+    except Exception:
+        return False
+
+
+def _get_aiter_pa_prefill_sparse() -> Optional[Callable[..., torch.Tensor]]:
+    """Resolve the AITER kernel lazily; None when AITER is not installed."""
+    try:
+        from aiter.ops.triton.attention.pa_prefill_sparse import pa_prefill_sparse
+    except ImportError:
+        return None
+    return pa_prefill_sparse
+
+
+def _rocm_sparse_attn_prefill_aiter(
+    pa_prefill_sparse: Callable[..., torch.Tensor],
+    q: torch.Tensor,
+    kv: torch.Tensor,
+    indices: torch.Tensor,
+    indptr: torch.Tensor,
+    scale: float,
+    attn_sink: Optional[torch.Tensor],
+    output: torch.Tensor,
+) -> None:
+    """gfx942 path. One KV pool; the extend sources stay unset."""
+    indices = indices.contiguous().to(torch.int32)
+    indptr = indptr.contiguous().to(torch.int32)
+    inplace = (
+        output.shape == q.shape and output.dtype == q.dtype and output.is_contiguous()
+    )
+    written = pa_prefill_sparse(
+        q,
+        kv,
+        indices,
+        indptr,
+        None,
+        None,
+        None,
+        attn_sink,
+        float(scale),
+        out=output if inplace else None,
+    )
+    if written.data_ptr() != output.data_ptr():
+        output.copy_(written[..., : output.shape[-1]])
+
+
+def _dispatch_sparse_mla_prefill(
+    q: torch.Tensor,
+    kv: torch.Tensor,
+    indices: torch.Tensor,
+    indptr: torch.Tensor,
+    scale: float,
+    attn_sink: Optional[torch.Tensor],
+    output: torch.Tensor,
+    *,
+    fallback: Callable[..., None],
+    kernel_getter: Optional[Callable[[], Optional[Callable[..., torch.Tensor]]]] = None,
+    cdna_version: Optional[int] = None,
+    mla_enabled: Optional[bool] = None,
+) -> bool:
+    """Route to AITER pa_prefill_sparse when the gate passes, else ``fallback``.
+
+    Returns True when the AITER kernel handled the call. The kernel getter is
+    only invoked after the gate passes, so short calls never import AITER.
+    """
+    if not _can_use_aiter_pa_prefill_sparse(
+        q, kv, cdna_version=cdna_version, mla_enabled=mla_enabled
+    ):
+        fallback(q, kv, indices, indptr, scale, attn_sink, output)
+        return False
+    getter = kernel_getter or _get_aiter_pa_prefill_sparse
+    kernel = getter()
+    if kernel is None:
+        fallback(q, kv, indices, indptr, scale, attn_sink, output)
+        return False
+    _rocm_sparse_attn_prefill_aiter(
+        kernel, q, kv, indices, indptr, scale, attn_sink, output
+    )
+    return True
 
 
 def combine_topk_swa_indices(
