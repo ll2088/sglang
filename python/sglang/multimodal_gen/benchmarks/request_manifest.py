@@ -144,7 +144,7 @@ def load_request_manifest(path: str | Path) -> LoadedRequestManifest:
                 )
             request_ids.add(request_id)
 
-            if "error" in record:
+            if record.get("error") is not None:
                 raise ValueError(
                     f"Manifest line {line_number}: request contains a stream error: "
                     f"{record['error']}"

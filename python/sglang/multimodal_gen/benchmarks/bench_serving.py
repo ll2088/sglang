@@ -174,6 +174,31 @@ def _extract_stream_error(payload: Any) -> Optional[str]:
     return json.dumps(error)
 
 
+def _classify_stream_payload(payload: Any) -> tuple[bool, Optional[str]]:
+    """Classify one streamed payload as (has_output, stream_error).
+
+    An ``error`` envelope wins over any output carried by the same payload:
+    the server's error is the root cause, while a partial result is only a
+    symptom. This mirrors the benchmark client rule that a stream which
+    delivered tokens and then failed must not be counted as successful.
+    """
+    stream_error = _extract_stream_error(payload)
+    if stream_error is not None:
+        return False, stream_error
+    if not isinstance(payload, dict):
+        return False, None
+    has_output = bool(
+        payload.get("choices")
+        or payload.get("data")
+        or payload.get("file_paths")
+        or payload.get("urls")
+        or payload.get("file_path")
+        or payload.get("url")
+        or payload.get("num_outputs")
+    )
+    return has_output, None
+
+
 async def async_request_image_sglang(
     input: RequestFuncInput,
     session: aiohttp.ClientSession,

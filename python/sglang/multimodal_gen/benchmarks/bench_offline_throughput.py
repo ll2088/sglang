@@ -335,6 +335,13 @@ def generate_batch(
             )
             if stream_error is not None:
                 raise RuntimeError(f"Generation stream error: {stream_error}")
+            # A result that carries no error but also no output is not a
+            # successful generation; keep it out of the success aggregates.
+            if not any(
+                getattr(item, "output_file_path", None) is not None
+                for item in results
+            ):
+                raise RuntimeError("Generation produced no output")
 
             output_paths = [
                 str(item.output_file_path)
