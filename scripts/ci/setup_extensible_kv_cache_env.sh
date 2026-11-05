@@ -12,71 +12,98 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-# Prepare a Python 3.12 virtualenv for the extensible KV cache tests.
+# Prepare an isolated Python 3.12 virtualenv for the extensible KV cache tests.
 #
-# The CI environment must call this script instead of a bare `pip install`:
-# the system interpreter may be newer than 3.12 and resolve wheels for the
-# wrong ABI tag (e.g. cp314), which then fails at import time.
+# Every pip invocation goes through "$VENV/bin/python -m pip --isolated" so the
+# install can never fall back to the system dist-packages or to a pip that is
+# bound to a different interpreter. The script fails loudly with diagnostics
+# instead of silently producing a broken environment.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "${REPO_ROOT}"
-
+VENV="${REPO_ROOT}/.venv"
 PYTHON_BIN="${PYTHON_BIN:-python3.12}"
-VENV_DIR="${VENV_DIR:-.venv}"
 
 log() { printf '[setup_extensible_kv_cache_env] %s\n' "$*" >&2; }
 
-fail() {
+die() {
   log "ERROR: $*"
   log "--- diagnostics ---"
-  command -v "${PYTHON_BIN}" || true
-  "${PYTHON_BIN}" -V 2>&1 || true
-  if [ -x "${VENV_DIR}/bin/python" ]; then
-    "${VENV_DIR}/bin/python" -V 2>&1 || true
-    "${VENV_DIR}/bin/python" -m pip debug --verbose 2>&1 | head -n 40 || true
+  log "which python3.12: $(command -v python3.12 || echo '<missing>')"
+  log "which pip: $(command -v pip || echo '<missing>')"
+  log "PIP_TARGET=${PIP_TARGET-<unset>}"
+  log "PIP_PREFIX=${PIP_PREFIX-<unset>}"
+  log "PIP_INDEX_URL=${PIP_INDEX_URL-<unset>}"
+  log "PYTHONPATH=${PYTHONPATH-<unset>}"
+  log "PYTHONHOME=${PYTHONHOME-<unset>}"
+  if [ -x "${VENV}/bin/python" ]; then
+    log "venv python: $("${VENV}/bin/python" -c 'import sys; print(sys.executable, sys.version)' 2>&1 || true)"
+    log "venv pip: $("${VENV}/bin/python" -m pip --version 2>&1 || true)"
   fi
   exit 1
 }
 
+# Drop environment variables that redirect installs away from the venv.
+unset PIP_TARGET PIP_PREFIX PIP_ROOT_USER_ACTION PYTHONPATH PYTHONHOME || true
+unset PIP_REQUIRE_VIRTUALENV || true
+
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  fail "${PYTHON_BIN} not found on PATH"
+  die "${PYTHON_BIN} not found on PATH"
 fi
 
-log "Using interpreter: $(command -v "${PYTHON_BIN}")"
-"${PYTHON_BIN}" -V
-
-if [ ! -x "${VENV_DIR}/bin/python" ]; then
-  log "Creating virtualenv at ${VENV_DIR}"
-  "${PYTHON_BIN}" -m venv "${VENV_DIR}" || fail "failed to create virtualenv"
+if [ ! -x "${VENV}/bin/python" ]; then
+  log "creating venv at ${VENV}"
+  "${PYTHON_BIN}" -m venv "${VENV}" || die "failed to create venv"
 fi
 
-VENV_PY="${VENV_DIR}/bin/python"
+VENV_PY="${VENV}/bin/python"
 
-# Hard gate: the venv must be 3.12 before any dependency is resolved.
-if ! "${VENV_PY}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version' 2>/dev/null; then
-  fail "virtualenv interpreter is not Python 3.12"
-fi
-log "Virtualenv interpreter: $("${VENV_PY}" -V 2>&1)"
-
-# Never resolve wheels for another ABI tag.
-export PIP_ONLY_BINARY="${PIP_ONLY_BINARY:-:all:}"
-export PIP_DISABLE_PIP_VERSION_CHECK=1
-
-log "Upgrading pip/setuptools/wheel"
-"${VENV_PY}" -m pip install --require-virtualenv --only-binary=:all: \
-  --upgrade pip setuptools wheel || fail "failed to bootstrap pip"
-
-log "Installing sglang (editable) into ${VENV_DIR}"
-"${VENV_PY}" -m pip install --require-virtualenv --only-binary=:all: \
-  -e python || fail "failed to install sglang"
-
-log "Installing test dependencies"
-"${VENV_PY}" -m pip install --require-virtualenv --only-binary=:all: \
-  pytest pytest-randomly || fail "failed to install test dependencies"
-
-# Final sanity check: imports must work under the pinned interpreter.
+# 1) The venv interpreter must be Python 3.12 and must be the one we invoke.
 "${VENV_PY}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version' \
-  || fail "post-install interpreter check failed"
+  || die "venv interpreter is not Python 3.12"
 
-log "Environment ready. Activate with: . ${VENV_DIR}/bin/activate"
+# 2) pip must resolve to the venv, not to system dist-packages.
+PIP_VERSION="$("${VENV_PY}" -m pip --version 2>&1)" || die "venv pip is not usable"
+log "${PIP_VERSION}"
+case "${PIP_VERSION}" in
+  *"${VENV}"*) ;;
+  *) die "pip does not belong to ${VENV}: ${PIP_VERSION}" ;;
+esac
+
+# 3) Make sure the venv site-packages is the only writable target.
+"${VENV_PY}" - <<'PY' || die "venv isolation check failed"
+import sys
+import sysconfig
+
+prefix = sys.prefix
+purelib = sysconfig.get_paths()["purelib"]
+assert purelib.startswith(prefix), (purelib, prefix)
+for entry in sys.path:
+    if "dist-packages" in entry and not entry.startswith(prefix):
+        raise SystemExit(f"system dist-packages leaked into sys.path: {entry}")
+print(f"isolated venv prefix={prefix} purelib={purelib}")
+PY
+
+# 4) Install with an explicit interpreter and --isolated so pip ignores
+#    user/global config and never falls back to a different ABI.
+log "upgrading pip/setuptools/wheel inside the venv"
+"${VENV_PY}" -m pip --isolated install --upgrade pip setuptools wheel \
+  || die "failed to upgrade pip/setuptools/wheel"
+
+log "installing sglang (editable) with --only-binary=:all:"
+"${VENV_PY}" -m pip --isolated install --only-binary=:all: -e "${REPO_ROOT}/python" \
+  || die "failed to install sglang into the venv"
+
+# 5) Smoke test imports and print a short freeze summary.
+"${VENV_PY}" - <<'PY' || die "import smoke test failed"
+import sys
+assert sys.version_info[:2] == (3, 12), sys.version
+import torch  # noqa: F401
+import sglang  # noqa: F401
+print(f"smoke ok: python={sys.version.split()[0]} torch={torch.__version__}")
+PY
+
+log "pip freeze (head):"
+"${VENV_PY}" -m pip --isolated freeze | head -n 40 >&2 || true
+
+log "environment ready at ${VENV}"
