@@ -177,21 +177,6 @@ def _extract_stream_error(payload: Any) -> Optional[str]:
         return str(error)
 
 
-def _extract_stream_error_from_chunk(chunk_bytes: bytes) -> Optional[str]:
-    """Return the first server error object carried by one SSE chunk.
-
-    The server may batch several ``data:`` events into a single chunk, so the
-    chunk is split and each payload is inspected. An ``error`` envelope wins
-    over any output carried by the same chunk: the server's error is the root
-    cause, while a partial result is only a symptom.
-    """
-    for payload in _iter_stream_payloads(chunk_bytes):
-        stream_error = _extract_stream_error(payload)
-        if stream_error is not None:
-            return stream_error
-    return None
-
-
 def _extract_stream_error_from_text(text: str) -> Optional[str]:
     """Return the first server error object carried by an SSE text body.
 
@@ -270,21 +255,6 @@ def _iter_stream_payloads(chunk_bytes: bytes):
             yield json.loads(data)
         except json.JSONDecodeError:
             continue
-
-
-def _stream_error_from_chunk(chunk_bytes: bytes) -> Optional[str]:
-    """Return the first server error object carried by one SSE chunk.
-
-    The server may batch several ``data:`` events into a single chunk, so the
-    chunk is split and each payload is inspected. An ``error`` envelope wins
-    over any output carried by the same chunk: the server's error is the root
-    cause, while a partial result is only a symptom.
-    """
-    for payload in _iter_stream_payloads(chunk_bytes):
-        stream_error = _extract_stream_error(payload)
-        if stream_error is not None:
-            return stream_error
-    return None
 
 
 def _classify_stream_payload(payload: Any) -> tuple[bool, Optional[str]]:
