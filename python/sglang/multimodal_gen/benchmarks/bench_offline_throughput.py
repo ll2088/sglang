@@ -286,6 +286,20 @@ def initialize_engine(server_args: ServerArgs) -> DiffGenerator:
     return engine
 
 
+def _first_result_error(results: List[Any]) -> Optional[str]:
+    """Return the first server error carried by a generation result.
+
+    A generation that fails after producing output reports the failure on the
+    result object instead of raising. The server's error is the root cause and
+    must win over any partial output, which is only a symptom.
+    """
+    for item in results:
+        error = getattr(item, "error", None)
+        if error is not None:
+            return str(error)
+    return None
+
+
 def generate_batch(
     engine: DiffGenerator,
     bench_args: BenchArgs,
@@ -325,14 +339,7 @@ def generate_batch(
             # A generation that fails after producing output reports the
             # failure on the result object instead of raising. Treat it as a
             # failed request so partial output never counts as success.
-            stream_error = next(
-                (
-                    getattr(item, "error", None)
-                    for item in results
-                    if getattr(item, "error", None)
-                ),
-                None,
-            )
+            stream_error = _first_result_error(results)
             if stream_error is not None:
                 # Keep the partial output for diagnostics, but never count
                 # this request as successful.

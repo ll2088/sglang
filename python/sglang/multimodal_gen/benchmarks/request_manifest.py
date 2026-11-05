@@ -69,6 +69,13 @@ def _is_url(value: str) -> bool:
     return urlparse(value).scheme in {"http", "https"}
 
 
+def _format_stream_error(error: Any) -> str:
+    """Render a server error object for a readable manifest failure message."""
+    if isinstance(error, str):
+        return error
+    return json.dumps(error)
+
+
 def _resolve_image_paths(value: Any, base_dir: Path, line_number: int) -> Any:
     if isinstance(value, str):
         image_paths = [value]
@@ -123,7 +130,7 @@ def load_request_manifest(path: str | Path) -> LoadedRequestManifest:
             if record.get("error") is not None:
                 raise ValueError(
                     f"Manifest line {line_number}: stream error: "
-                    f"{record['error']}"
+                    f"{_format_stream_error(record['error'])}"
                 )
 
             unknown_fields = set(record) - _ALLOWED_FIELDS
