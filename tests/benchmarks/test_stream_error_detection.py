@@ -23,9 +23,78 @@ def _load_module(name: str, path: Path):
     return module
 
 
+def _load_bench_serving_without_runtime():
+    """Load bench_serving.py without importing the sglang runtime.
+
+    The module imports ``sglang.multimodal_gen.benchmarks.datasets`` and
+    ``sglang.srt.utils.network`` at import time. Those pull in the full GPU
+    dependency tree, which is not available in the CPU-only CI job. The
+    stream-error helpers under test do not need them, so stub the imports
+    before loading the module by path.
+    """
+    import types
+
+    stubs = {
+        "sglang": types.ModuleType("sglang"),
+        "sglang.multimodal_gen": types.ModuleType("sglang.multimodal_gen"),
+        "sglang.multimodal_gen.benchmarks": types.ModuleType(
+            "sglang.multimodal_gen.benchmarks"
+        ),
+        "sglang.multimodal_gen.benchmarks.datasets": types.ModuleType(
+            "sglang.multimodal_gen.benchmarks.datasets"
+        ),
+        "sglang.multimodal_gen.runtime": types.ModuleType(
+            "sglang.multimodal_gen.runtime"
+        ),
+        "sglang.multimodal_gen.runtime.utils": types.ModuleType(
+            "sglang.multimodal_gen.runtime.utils"
+        ),
+        "sglang.multimodal_gen.runtime.utils.logging_utils": types.ModuleType(
+            "sglang.multimodal_gen.runtime.utils.logging_utils"
+        ),
+        "sglang.multimodal_gen.test": types.ModuleType(
+            "sglang.multimodal_gen.test"
+        ),
+        "sglang.multimodal_gen.test.test_utils": types.ModuleType(
+            "sglang.multimodal_gen.test.test_utils"
+        ),
+        "sglang.srt": types.ModuleType("sglang.srt"),
+        "sglang.srt.utils": types.ModuleType("sglang.srt.utils"),
+        "sglang.srt.utils.network": types.ModuleType(
+            "sglang.srt.utils.network"
+        ),
+    }
+    datasets = stubs["sglang.multimodal_gen.benchmarks.datasets"]
+    datasets.RequestFuncInput = object
+    datasets.RequestFuncOutput = object
+    datasets.RandomDataset = object
+    datasets.VBenchDataset = object
+    logging_utils = stubs["sglang.multimodal_gen.runtime.utils.logging_utils"]
+    logging_utils.configure_logger = lambda *a, **k: None
+    logging_utils.init_logger = lambda *a, **k: None
+    test_utils = stubs["sglang.multimodal_gen.test.test_utils"]
+    test_utils.print_divider = lambda *a, **k: None
+    test_utils.print_value_formatted = lambda *a, **k: None
+    network = stubs["sglang.srt.utils.network"]
+    network.NetworkAddress = object
+
+    saved = {name: sys.modules.get(name) for name in stubs}
+    sys.modules.update(stubs)
+    try:
+        return _load_module(
+            "bench_serving_under_test", _BENCH_DIR / "bench_serving.py"
+        )
+    finally:
+        for name, previous in saved.items():
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
+
+
 @pytest.fixture(scope="module")
 def bench_serving():
-    return _load_module("bench_serving_under_test", _BENCH_DIR / "bench_serving.py")
+    return _load_bench_serving_without_runtime()
 
 
 @pytest.fixture(scope="module")

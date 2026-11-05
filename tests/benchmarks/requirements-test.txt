@@ -1,0 +1,5 @@
+# CPU-only dependencies for the stream-error benchmark tests.
+# These tests load benchmark modules by path and must not require the full
+# sglang GPU dependency tree.
+pytest>=7.0
+numpy
