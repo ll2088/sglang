@@ -300,7 +300,12 @@ def _first_result_error(results: List[Any]) -> Optional[str]:
             continue
         if isinstance(error, str) and not error.strip():
             continue
-        return str(error)
+        if isinstance(error, str):
+            return error
+        try:
+            return json.dumps(error)
+        except (TypeError, ValueError):
+            return str(error)
     return None
 
 

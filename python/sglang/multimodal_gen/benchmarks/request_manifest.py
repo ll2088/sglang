@@ -79,6 +79,13 @@ def _format_stream_error(error: Any) -> str:
         return str(error)
 
 
+def _has_stream_error(container: Any) -> bool:
+    """Return whether a manifest record carries a server error envelope."""
+    if not isinstance(container, dict):
+        return False
+    return container.get("error") is not None
+
+
 def _resolve_image_paths(value: Any, base_dir: Path, line_number: int) -> Any:
     if isinstance(value, str):
         image_paths = [value]
@@ -130,16 +137,14 @@ def load_request_manifest(path: str | Path) -> LoadedRequestManifest:
                     f"Manifest line {line_number}: each line must be a JSON object"
                 )
 
-            if record.get("error") is not None:
+            if _has_stream_error(record):
                 raise ValueError(
                     f"Manifest line {line_number}: stream error: "
                     f"{_format_stream_error(record['error'])}"
                 )
 
             sampling_params = record.get("sampling_params", {})
-            if isinstance(sampling_params, dict) and (
-                sampling_params.get("error") is not None
-            ):
+            if _has_stream_error(sampling_params):
                 raise ValueError(
                     f"Manifest line {line_number}: stream error: "
                     f"{_format_stream_error(sampling_params['error'])}"

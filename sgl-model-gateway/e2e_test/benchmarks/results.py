@@ -52,6 +52,15 @@ class BenchmarkResult:
                         raise ValueError(
                             f"Benchmark stream error: {item['error']}"
                         )
+        for key in ("data", "results", "outputs"):
+            items = data.get(key)
+            if isinstance(items, dict):
+                items = [items]
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if isinstance(item, dict) and item.get("error") is not None:
+                    raise ValueError(f"Benchmark stream error: {item['error']}")
         return cls(
             ttft_mean=float(stats.get("ttft", {}).get("mean", float("inf"))),
             e2e_latency_mean=float(

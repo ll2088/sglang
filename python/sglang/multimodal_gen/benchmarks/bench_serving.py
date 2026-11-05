@@ -171,7 +171,10 @@ def _extract_stream_error(payload: Any) -> Optional[str]:
         return None
     if isinstance(error, str):
         return error
-    return json.dumps(error)
+    try:
+        return json.dumps(error)
+    except (TypeError, ValueError):
+        return str(error)
 
 
 def _extract_stream_error_from_text(text: str) -> Optional[str]:
@@ -182,6 +185,8 @@ def _extract_stream_error_from_text(text: str) -> Optional[str]:
     any output carried by the same body: the server's error is the root cause,
     while a partial result is only a symptom.
     """
+    if not isinstance(text, str):
+        return None
     for payload in _iter_stream_payloads(text.encode("utf-8")):
         stream_error = _extract_stream_error(payload)
         if stream_error is not None:
@@ -213,6 +218,23 @@ def _extract_stream_error_from_json_body(body: Any) -> Optional[str]:
             if stream_error is not None:
                 return stream_error
     return None
+
+
+def _extract_stream_error_from_response_body(body: Any) -> Optional[str]:
+    """Return the first server error object carried by a response body.
+
+    A response body may be a JSON object, a JSON list, or an SSE text body.
+    The server's error is the root cause and wins over any partial output.
+    """
+    if isinstance(body, str):
+        return _extract_stream_error_from_text(body)
+    if isinstance(body, list):
+        for item in body:
+            stream_error = _extract_stream_error_from_json_body(item)
+            if stream_error is not None:
+                return stream_error
+        return None
+    return _extract_stream_error_from_json_body(body)
 
 
 def _iter_stream_payloads(chunk_bytes: bytes):
@@ -342,14 +364,14 @@ async_request_image_sglang(
                 if response.status == 200:
                     resp_json = await response.json()
                     output.response_body = resp_json
-                    stream_error = _extract_stream_error_from_json_body(resp_json)
+                    stream_error = _extract_stream_error_from_response_body(resp_json)
                     if stream_error is not None:
                         output.error = stream_error
                         output.success = False
                     else:
                         output.success = True
                         output.output_count = _get_response_output_count(resp_json)
-                    if "peak_memory_mb" in resp_json:
+                    if isinstance(resp_json, dict) and "peak_memory_mb" in resp_json:
                         output.peak_memory_mb = resp_json["peak_memory_mb"]
                 else:
                     output.error = f"HTTP {response.status}: {await response.text()}"
@@ -379,14 +401,14 @@ async_request_image_sglang(
                 if response.status == 200:
                     resp_json = await response.json()
                     output.response_body = resp_json
-                    stream_error = _extract_stream_error_from_json_body(resp_json)
+                    stream_error = _extract_stream_error_from_response_body(resp_json)
                     if stream_error is not None:
                         output.error = stream_error
                         output.success = False
                     else:
                         output.success = True
                         output.output_count = _get_response_output_count(resp_json)
-                    if "peak_memory_mb" in resp_json:
+                    if isinstance(resp_json, dict) and "peak_memory_mb" in resp_json:
                         output.peak_memory_mb = resp_json["peak_memory_mb"]
                 else:
                     output.error = f"HTTP {response.status}: {await response.text()}"
@@ -533,11 +555,9 @@ async def async_request_video_sglang(
                     status_data = await response.json()
                     status = status_data.get("status")
                     if status == "completed":
-                        stream_error = _extract_stream_error_from_json_body(status_data)
-                        if stream_error is None:
-                            stream_error = _extract_stream_error_from_text(
-                                json.dumps(status_data)
-                            )
+                        stream_error = _extract_stream_error_from_response_body(
+                            status_data
+                        )
                         if stream_error is not None:
                             output.success = False
                             output.error = stream_error
@@ -545,7 +565,7 @@ async def async_request_video_sglang(
                             output.success = True
                             output.output_count = _get_response_output_count(status_data)
                         output.response_body = status_data
-                        if "peak_memory_mb" in status_data:
+                        if isinstance(status_data, dict) and "peak_memory_mb" in status_data:
                             output.peak_memory_mb = status_data["peak_memory_mb"]
                         break
                     elif status == "failed":
