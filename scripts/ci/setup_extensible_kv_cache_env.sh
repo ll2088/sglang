@@ -12,50 +12,81 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-# Single entry point for preparing the Python 3.12 environment used by the
-# extensible KV cache verification jobs. CI must call this script (and only
-# this script) so that the interpreter and pip always point at the venv.
-set -euxo pipefail
+# Single entry point for preparing the extensible KV cache check environment.
+#
+# The checks must run under Python 3.12. This script creates (or reuses) a
+# local .venv with python3.12, installs the project with the venv's own pip,
+# and refuses to continue if the interpreter or pip does not point into the
+# venv. It never invokes a bare `pip`.
+set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "${REPO_ROOT}"
+VENV_DIR="${REPO_ROOT}/.venv"
+PYTHON_BIN="${VENV_DIR}/bin/python"
+PIP_BIN="${VENV_DIR}/bin/pip"
 
-LOG_DIR="${REPO_ROOT}/.ci-logs"
-mkdir -p "${LOG_DIR}"
-LOG_FILE="${LOG_DIR}/setup_extensible_kv_cache_env.log"
-exec > >(tee -a "${LOG_FILE}") 2>&1
+log() {
+    printf '[setup_extensible_kv_cache_env] %s\n' "$*" >&2
+}
 
-PYTHON_BIN="${PYTHON_BIN:-python3.12}"
-VENV_DIR="${VENV_DIR:-${REPO_ROOT}/.venv}"
+fail() {
+    log "ERROR: $*"
+    exit 1
+}
 
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  echo "error: ${PYTHON_BIN} not found on PATH" >&2
-  exit 1
+# 1. Locate a python3.12 interpreter before touching any venv.
+if ! command -v python3.12 >/dev/null 2>&1; then
+    fail "python3.12 not found on PATH; install it before running this script"
 fi
 
-# Recreate the venv from scratch so a stale interpreter cannot leak in.
-rm -rf "${VENV_DIR}"
-"${PYTHON_BIN}" -m venv "${VENV_DIR}"
-# shellcheck disable=SC1091
-source "${VENV_DIR}/bin/activate"
+# 2. Create the venv if it is missing or was built with another interpreter.
+if [ ! -x "${PYTHON_BIN}" ]; then
+    log "creating venv at ${VENV_DIR} with python3.12"
+    python3.12 -m venv "${VENV_DIR}"
+fi
 
-# Fail loudly if the venv did not take over the shell.
-which python
-python -V
-pip -V
-python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+# 3. Assert the venv interpreter is exactly 3.12 and lives inside the venv.
+"${PYTHON_BIN}" - <<'PY' || exit 1
+import sys
 
-# Keep pip from resolving wheels for a different interpreter (e.g. cp314).
-export PIP_ONLY_BINARY="${PIP_ONLY_BINARY:-:all:}"
-export PIP_REQUIRE_VIRTUALENV="true"
-export PIP_DISABLE_PIP_VERSION_CHECK="1"
+if sys.version_info[:2] != (3, 12):
+    raise SystemExit(
+        f"expected Python 3.12, got {sys.version.split()[0]} at {sys.executable}"
+    )
+if ".venv" not in sys.executable:
+    raise SystemExit(f"interpreter is not inside .venv: {sys.executable}")
+print(f"interpreter ok: {sys.executable} ({sys.version.split()[0]})")
+PY
 
-python -m pip install --upgrade pip
-python -m pip install -e python
+# 4. Assert pip resolves to the venv interpreter, not a system pip.
+"${PYTHON_BIN}" -m pip --version >/dev/null 2>&1 \
+    || fail "venv pip is not usable; recreate ${VENV_DIR}"
+PIP_EXECUTABLE="$("${PYTHON_BIN}" -c 'import sys; print(sys.executable)')"
+case "${PIP_EXECUTABLE}" in
+    "${VENV_DIR}"/*) ;;
+    *) fail "pip would run under ${PIP_EXECUTABLE}, expected ${VENV_DIR}" ;;
+esac
 
-# Smoke checks before any pytest job runs.
-python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
-python -c 'import sglang; print("sglang import ok")'
-python -c 'from sglang.srt.mem_cache.vmm_allocator import vmm_unavailable_reason; print("vmm probe:", vmm_unavailable_reason())'
+# 5. Print diagnostics so CI logs show which interpreter is in use.
+log "which python: $(command -v python || true)"
+log "python -V: $(python -V 2>&1 || true)"
+log "venv python: ${PYTHON_BIN}"
+log "venv python -V: $("${PYTHON_BIN}" -V 2>&1)"
+log "venv pip: $("${PYTHON_BIN}" -m pip -V)"
 
-python -m pip list
+# 6. Install with the venv's pip only. PIP_* and PYTHONPATH from the CI image
+#    must not redirect resolution to another interpreter's wheels.
+unset PYTHONPATH || true
+unset PIP_TARGET PIP_PREFIX PIP_ROOT || true
+
+log "installing project into ${VENV_DIR}"
+"${PYTHON_BIN}" -m pip install --upgrade pip
+"${PYTHON_BIN}" -m pip install -e "${REPO_ROOT}/python"
+
+# 7. Smoke checks: the package imports and pytest is available.
+"${PYTHON_BIN}" -c 'import sglang' \
+    || fail "smoke check failed: import sglang"
+"${PYTHON_BIN}" -m pytest --version \
+    || fail "smoke check failed: pytest --version"
+
+log "environment ready: ${VENV_DIR}"
