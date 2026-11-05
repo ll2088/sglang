@@ -34,6 +34,10 @@ def _install_import_stubs() -> None:
     module scope. Those pull in torch/CUDA and are irrelevant to the pure
     stream-classification helpers under test, so provide inert stand-ins when
     the real packages are unavailable. Real packages, when installed, win.
+
+    The stubs are installed unconditionally for the modules that are only
+    needed at import time, so the test does not depend on whether a partial
+    ``sglang`` install is present in the CI environment.
     """
     stubs = {
         "aiohttp": {"ClientSession": object, "FormData": object},
@@ -62,6 +66,8 @@ def _install_import_stubs() -> None:
         "sglang.srt.utils.network": {"NetworkAddress": object},
     }
     for module_name, attributes in stubs.items():
+        if module_name in sys.modules:
+            continue
         try:
             importlib.import_module(module_name)
         except Exception:
