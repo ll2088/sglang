@@ -92,6 +92,31 @@ def test_vmm_unavailable_error_is_runtime_error():
     assert issubclass(VmmUnavailableError, RuntimeError)
 
 
+def test_commit_range_rejects_invalid_range():
+    # Range validation happens before any driver call, so this runs on CPU.
+    buf = VmmBuffer.__new__(VmmBuffer)
+    buf._freed = False
+    buf.reserved_size = 8 << 20
+    buf.granularity = 2 << 20
+    buf._mapped_granules = set()
+    buf._handles = []
+    with pytest.raises(ValueError):
+        buf.commit_range(1, 0)
+    with pytest.raises(ValueError):
+        buf.commit_range(0, buf.reserved_size + 1)
+
+
+def test_commit_range_after_free_raises():
+    buf = VmmBuffer.__new__(VmmBuffer)
+    buf._freed = True
+    buf.reserved_size = 8 << 20
+    buf.granularity = 2 << 20
+    buf._mapped_granules = set()
+    buf._handles = []
+    with pytest.raises(RuntimeError):
+        buf.commit_range(0, 1)
+
+
 @requires_cuda
 def test_as_tensor_view_stays_valid_across_commit():
     _require_vmm()

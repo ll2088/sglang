@@ -97,6 +97,8 @@ class ExtensibleKVCachePlan:
         """
         if free_bytes < 0:
             raise ValueError("free_bytes must be non-negative")
+        if self.bytes_per_block <= 0:
+            raise ValueError("bytes_per_block must be positive")
         margin = max(
             KV_CACHE_MARGIN_FLOOR_BYTES,
             int(self.transient_peak_bytes * KV_CACHE_MARGIN_FRACTION),
@@ -108,8 +110,9 @@ class ExtensibleKVCachePlan:
     def commit(self, num_blocks: int) -> int:
         """Commit physical pages for ``num_blocks`` blocks.
 
-        Returns the number of blocks actually backed. Idempotent: committing a
-        smaller count after a larger one is a no-op.
+        Returns the number of blocks actually backed. Idempotent and monotonic:
+        committing a smaller count after a larger one is a no-op, and a failed
+        commit leaves the plan at its previous committed count.
         """
         if num_blocks < 0:
             raise ValueError("num_blocks must be non-negative")
@@ -171,6 +174,27 @@ def commit_extensible_kv_cache(
         free_bytes, _ = torch.cuda.mem_get_info(plan.buffer.device_index)
     num_blocks = plan.final_num_blocks(free_bytes)
     return plan.commit(num_blocks)
+
+
+def fallback_num_blocks(
+    bytes_per_block: int,
+    free_bytes: int,
+    max_num_blocks: int,
+) -> int:
+    """Estimate-based block count used when the VMM path is unavailable.
+
+    This mirrors the pre-change sizing behaviour: the whole measured free
+    memory is divided by the per-block size, capped by the upper bound. It is
+    kept separate from :class:`ExtensibleKVCachePlan` so the fallback path can
+    be exercised without a driver or a reservation.
+    """
+    if bytes_per_block <= 0:
+        raise ValueError("bytes_per_block must be positive")
+    if free_bytes < 0:
+        raise ValueError("free_bytes must be non-negative")
+    if max_num_blocks < 0:
+        raise ValueError("max_num_blocks must be non-negative")
+    return min(free_bytes // bytes_per_block, max_num_blocks)
 
 
 def all_ranks_support_extensible_kv_cache(

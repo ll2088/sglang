@@ -380,6 +380,38 @@ class VmmBuffer:
             raise
         return self.committed_bytes
 
+    def commit_range(self, start: int, end: int) -> int:
+        """Map physical pages so that the byte range ``[start, end)`` is backed.
+
+        This is the range-oriented form used by callers that commit a prefix
+        of a segmented reservation. It validates the range against the
+        reservation, maps only the granules that are not yet backed, and rolls
+        back this call's mappings on failure. Returns the total committed
+        bytes after the call.
+        """
+        if self._freed:
+            raise RuntimeError("VmmBuffer has been freed")
+        if not 0 <= start <= end:
+            raise ValueError(f"Invalid range [{start}, {end}).")
+        if end > self.reserved_size:
+            raise ValueError(
+                f"Requested range end {end} exceeds reserved capacity "
+                f"{self.reserved_size}."
+            )
+        first = start // self.granularity
+        last = _round_up(end, self.granularity) // self.granularity
+        newly_mapped: list[int] = []
+        try:
+            for granule_index in range(first, last):
+                if granule_index not in self._mapped_granules:
+                    self._map_granule(granule_index)
+                    newly_mapped.append(granule_index)
+        except Exception:
+            for granule_index in reversed(newly_mapped):
+                self._unmap_granule(granule_index)
+            raise
+        return self.committed_bytes
+
     def as_tensor(self, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
         """Return a tensor viewing the reservation without taking ownership.
 
@@ -431,6 +463,11 @@ class VmmBuffer:
         if self.base_ptr:
             self._lib.cuMemAddressFree(self.base_ptr, self.reserved_size)
             self.base_ptr = 0
+
+    @property
+    def is_freed(self) -> bool:
+        """Whether :meth:`free` has released the reservation."""
+        return self._freed
 
     def __del__(self):  # pragma: no cover - best effort cleanup
         try:
