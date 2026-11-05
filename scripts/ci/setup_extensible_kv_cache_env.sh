@@ -14,46 +14,62 @@
 # ==============================================================================
 # Prepare a Python 3.12 virtualenv for the extensible KV cache tests.
 #
-# The CI runner may have a newer system Python (e.g. 3.14) as `python`/`pip`.
-# This script pins every step to python3.12 so that dependency resolution does
-# not download cp314 wheels into a 3.12 environment.
+# The CI environment must not rely on whatever `python`/`pip` happen to be on
+# PATH: a stray 3.14 interpreter would make pip resolve cp314 wheels and the
+# 3.12 assertions in the test commands would never run. This script creates
+# the venv explicitly with python3.12, activates it, and installs everything
+# through `python -m pip` so the interpreter is unambiguous.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "${REPO_ROOT}"
+VENV_DIR="${REPO_ROOT}/.venv"
 
+log() { printf '[setup_extensible_kv_cache_env] %s\n' "$*" >&2; }
+
+# 1) Require python3.12 before touching anything else.
 if ! command -v python3.12 >/dev/null 2>&1; then
-  echo "error: python3.12 not found on PATH" >&2
-  echo "       install python3.12 (e.g. apt-get install python3.12 python3.12-venv) and retry" >&2
+  log "ERROR: python3.12 not found on PATH."
+  log "Install Python 3.12 (e.g. apt-get install python3.12 python3.12-venv)"
+  log "or point PATH at a 3.12 interpreter before running this script."
   exit 1
 fi
+log "python3.12: $(command -v python3.12)"
 
-echo "python3.12: $(command -v python3.12)"
-python3.12 --version
-
-if [ -d .venv ]; then
-  rm -rf .venv
+# 2) Create the venv with python3.12 and activate it.
+if [ ! -x "${VENV_DIR}/bin/python" ]; then
+  log "Creating venv at ${VENV_DIR}"
+  python3.12 -m venv "${VENV_DIR}"
 fi
-python3.12 -m venv .venv
 # shellcheck disable=SC1091
-. .venv/bin/activate
+source "${VENV_DIR}/bin/activate"
 
-echo "which python: $(command -v python)"
-echo "which pip:    $(command -v pip || true)"
-python -V
-python -m pip --version
+# 3) Diagnostics so a wrong interpreter is obvious in CI logs.
+log "python -V: $(python -V 2>&1)"
+log "sys.executable: $(python -c 'import sys; print(sys.executable)')"
+log "sysconfig.get_platform(): $(python -c 'import sysconfig; print(sysconfig.get_platform())')"
+log "python -m pip -V: $(python -m pip -V 2>&1)"
 
+# 4) Hard assertions: interpreter is 3.12 and lives inside the venv.
 python - <<'PY'
+import os
 import sys
-assert sys.version_info[:2] == (3, 12), sys.version
-print("interpreter ok:", sys.executable)
+
+assert sys.version_info[:2] == (3, 12), f"expected Python 3.12, got {sys.version}"
+venv = os.environ.get("VIRTUAL_ENV")
+assert venv, "VIRTUAL_ENV is not set; venv activation failed"
+assert os.path.realpath(sys.executable).startswith(os.path.realpath(venv) + os.sep), (
+    f"sys.executable {sys.executable} is not inside VIRTUAL_ENV {venv}"
+)
 PY
 
+# 5) Install through `python -m pip` only, so PATH pip cannot leak in.
 python -m pip install --upgrade pip
-python -m pip install -e python
+python -m pip install -e "${REPO_ROOT}/python"
 
-python - <<'PY'
-import sys
-assert sys.version_info[:2] == (3, 12), sys.version
-print("venv ready:", sys.executable)
-PY
+# 6) Smoke checks: import and test collection must work before CI runs tests.
+python -c 'import sglang'
+python -m pytest --collect-only -q \
+  "${REPO_ROOT}/tests/srt/mem_cache" \
+  "${REPO_ROOT}/tests/srt/arg_groups"
+
+log "Environment ready: $(python -V 2>&1) at $(python -c 'import sys; print(sys.executable)')"
