@@ -174,6 +174,26 @@ def _extract_stream_error(payload: Any) -> Optional[str]:
     return json.dumps(error)
 
 
+def _iter_stream_payloads(chunk_bytes: bytes):
+    """Yield decoded JSON payloads from one SSE chunk.
+
+    The server may batch several ``data:`` events into a single chunk, so a
+    chunk is split on newlines and each ``data:`` line is decoded on its own.
+    Non-JSON payloads (for example the ``[DONE]`` sentinel) are skipped.
+    """
+    for line in chunk_bytes.splitlines():
+        line = line.strip()
+        if not line.startswith(b"data:"):
+            continue
+        data = line[len(b"data:") :].strip()
+        if not data or data == b"[DONE]":
+            continue
+        try:
+            yield json.loads(data)
+        except json.JSONDecodeError:
+            continue
+
+
 def _classify_stream_payload(payload: Any) -> tuple[bool, Optional[str]]:
     """Classify one streamed payload as (has_output, stream_error).
 
