@@ -144,10 +144,13 @@ def load_request_manifest(path: str | Path) -> LoadedRequestManifest:
                 )
             request_ids.add(request_id)
 
-            if record.get("error") is not None:
+            stream_error = record.get("error")
+            if stream_error is not None:
+                if not isinstance(stream_error, str):
+                    stream_error = json.dumps(stream_error)
                 raise ValueError(
                     f"Manifest line {line_number}: request contains a stream error: "
-                    f"{record['error']}"
+                    f"{stream_error}"
                 )
 
             sampling_params = record.get("sampling_params", {})
