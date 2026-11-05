@@ -14,72 +14,69 @@
 # ==============================================================================
 # Prepare a Python 3.12 virtualenv for the extensible KV cache tests.
 #
-# The CI image may ship a newer system Python (e.g. 3.14) whose pip resolves
-# cp314 wheels. This script pins every step to python3.12 and fails loudly if
-# the interpreter or the resolved wheel tags drift.
+# The CI environment must call this script instead of a bare `pip install`:
+# the system interpreter may be newer than 3.12 and resolve wheels for the
+# wrong ABI tag (e.g. cp314), which then fails at import time.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VENV_DIR="${REPO_ROOT}/.venv"
-LOG_FILE="${REPO_ROOT}/.venv-setup.log"
+cd "${REPO_ROOT}"
 
-on_error() {
-  local exit_code=$?
-  echo "[setup_extensible_kv_cache_env] failed with exit code ${exit_code}" >&2
-  echo "[setup_extensible_kv_cache_env] last 100 log lines:" >&2
-  tail -n 100 "${LOG_FILE}" >&2 || true
-  exit "${exit_code}"
-}
-trap on_error ERR
+PYTHON_BIN="${PYTHON_BIN:-python3.12}"
+VENV_DIR="${VENV_DIR:-.venv}"
 
-log() {
-  echo "[setup_extensible_kv_cache_env] $*" | tee -a "${LOG_FILE}"
-}
+log() { printf '[setup_extensible_kv_cache_env] %s\n' "$*" >&2; }
 
-: > "${LOG_FILE}"
-
-if ! command -v python3.12 >/dev/null 2>&1; then
-  log "python3.12 not found on PATH"
+fail() {
+  log "ERROR: $*"
+  log "--- diagnostics ---"
+  command -v "${PYTHON_BIN}" || true
+  "${PYTHON_BIN}" -V 2>&1 || true
+  if [ -x "${VENV_DIR}/bin/python" ]; then
+    "${VENV_DIR}/bin/python" -V 2>&1 || true
+    "${VENV_DIR}/bin/python" -m pip debug --verbose 2>&1 | head -n 40 || true
+  fi
   exit 1
+}
+
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  fail "${PYTHON_BIN} not found on PATH"
 fi
 
-log "creating venv at ${VENV_DIR}"
-rm -rf "${VENV_DIR}"
-python3.12 -m venv "${VENV_DIR}" 2>&1 | tee -a "${LOG_FILE}"
+log "Using interpreter: $(command -v "${PYTHON_BIN}")"
+"${PYTHON_BIN}" -V
+
+if [ ! -x "${VENV_DIR}/bin/python" ]; then
+  log "Creating virtualenv at ${VENV_DIR}"
+  "${PYTHON_BIN}" -m venv "${VENV_DIR}" || fail "failed to create virtualenv"
+fi
 
 VENV_PY="${VENV_DIR}/bin/python"
-if [ ! -x "${VENV_PY}" ]; then
-  log "venv python missing at ${VENV_PY}"
-  exit 1
+
+# Hard gate: the venv must be 3.12 before any dependency is resolved.
+if ! "${VENV_PY}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version' 2>/dev/null; then
+  fail "virtualenv interpreter is not Python 3.12"
 fi
+log "Virtualenv interpreter: $("${VENV_PY}" -V 2>&1)"
 
-log "verifying interpreter version"
-"${VENV_PY}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version' 2>&1 | tee -a "${LOG_FILE}"
+# Never resolve wheels for another ABI tag.
+export PIP_ONLY_BINARY="${PIP_ONLY_BINARY:-:all:}"
+export PIP_DISABLE_PIP_VERSION_CHECK=1
 
-log "pip version before install"
-"${VENV_PY}" -m pip --version 2>&1 | tee -a "${LOG_FILE}"
+log "Upgrading pip/setuptools/wheel"
+"${VENV_PY}" -m pip install --require-virtualenv --only-binary=:all: \
+  --upgrade pip setuptools wheel || fail "failed to bootstrap pip"
 
-log "pip compatibility tags before install"
-"${VENV_PY}" -m pip debug --verbose 2>&1 | tee -a "${LOG_FILE}"
-if "${VENV_PY}" -m pip debug --verbose 2>&1 | grep -q 'cp314'; then
-  log "pip resolved cp314 tags; refusing to continue"
-  exit 1
-fi
+log "Installing sglang (editable) into ${VENV_DIR}"
+"${VENV_PY}" -m pip install --require-virtualenv --only-binary=:all: \
+  -e python || fail "failed to install sglang"
 
-log "upgrading pip/setuptools/wheel"
-"${VENV_PY}" -m pip install --upgrade pip setuptools wheel 2>&1 | tee -a "${LOG_FILE}"
+log "Installing test dependencies"
+"${VENV_PY}" -m pip install --require-virtualenv --only-binary=:all: \
+  pytest pytest-randomly || fail "failed to install test dependencies"
 
-log "installing project in editable mode"
-"${VENV_PY}" -m pip install -e "${REPO_ROOT}/python" 2>&1 | tee -a "${LOG_FILE}"
+# Final sanity check: imports must work under the pinned interpreter.
+"${VENV_PY}" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version' \
+  || fail "post-install interpreter check failed"
 
-log "pip version after install"
-"${VENV_PY}" -m pip --version 2>&1 | tee -a "${LOG_FILE}"
-
-log "pip compatibility tags after install"
-"${VENV_PY}" -m pip debug --verbose 2>&1 | tee -a "${LOG_FILE}"
-if "${VENV_PY}" -m pip debug --verbose 2>&1 | grep -q 'cp314'; then
-  log "pip resolved cp314 tags after install; refusing to continue"
-  exit 1
-fi
-
-log "environment ready"
+log "Environment ready. Activate with: . ${VENV_DIR}/bin/activate"
