@@ -199,6 +199,28 @@ def _classify_stream_payload(payload: Any) -> tuple[bool, Optional[str]]:
     return has_output, None
 
 
+def _finalize_stream_output(
+    output: RequestFuncOutput,
+    stream_error: Optional[str],
+    first_chunk_received: bool,
+) -> None:
+    """Apply the stream outcome to ``output``.
+
+    A server error event takes precedence over the "no valid chunk" symptom:
+    the error is the root cause, and a request that streamed tokens before
+    failing must not be counted as successful. Partial output is kept for
+    detailed saving.
+    """
+    if stream_error is not None:
+        output.success = False
+        output.error = stream_error
+    elif first_chunk_received:
+        output.success = True
+    else:
+        output.success = False
+        output.error = "Never received a valid chunk to calculate TTFT."
+
+
 async def async_request_image_sglang(
     input: RequestFuncInput,
     session: aiohttp.ClientSession,

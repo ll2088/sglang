@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 from pathlib import Path
@@ -65,6 +66,17 @@ def generate_summary(base_dir: Path) -> str:
             lines.append(f"| {label} | ❌ Failed | - | - | - | - |")
             continue
         if getattr(result, "error", None):
+            lines.append(f"| {label} | ❌ Failed | - | - | - | - |")
+            continue
+        if not all(
+            math.isfinite(value)
+            for value in (
+                result.ttft_mean,
+                result.e2e_latency_mean,
+                result.input_throughput_mean,
+                result.output_throughput_mean,
+            )
+        ):
             lines.append(f"| {label} | ❌ Failed | - | - | - | - |")
             continue
 

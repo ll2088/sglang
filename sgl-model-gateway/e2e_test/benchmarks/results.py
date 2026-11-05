@@ -28,7 +28,12 @@ class BenchmarkResult:
             data = json.load(f)
         if data.get("error") is not None:
             raise ValueError(f"Benchmark stream error: {data['error']}")
-        stats = data.get("aggregated_metrics", {}).get("stats", {})
+        aggregated = data.get("aggregated_metrics", {})
+        if isinstance(aggregated, dict) and aggregated.get("error") is not None:
+            raise ValueError(
+                f"Benchmark stream error: {aggregated['error']}"
+            )
+        stats = aggregated.get("stats", {}) if isinstance(aggregated, dict) else {}
         return cls(
             ttft_mean=float(stats.get("ttft", {}).get("mean", float("inf"))),
             e2e_latency_mean=float(

@@ -334,7 +334,10 @@ def generate_batch(
                 None,
             )
             if stream_error is not None:
-                raise RuntimeError(f"Generation stream error: {stream_error}")
+                # Keep the partial output for diagnostics, but never count
+                # this request as successful.
+                output.error = f"Generation stream error: {stream_error}"
+                raise RuntimeError(output.error)
             # A result that carries no error but also no output is not a
             # successful generation; keep it out of the success aggregates.
             if not any(

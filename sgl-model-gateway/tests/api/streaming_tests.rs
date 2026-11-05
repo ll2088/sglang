@@ -372,6 +372,43 @@ mod tests {
     }
 
     #[test]
+    fn test_sse_error_event_after_tokens_is_failed_with_usage_and_done() {
+        // A usage-only chunk and [DONE] after the error must not mask it.
+        let parse_sse_chunk = |chunk: &[u8]| -> Vec<String> {
+            let text = String::from_utf8_lossy(chunk);
+            text.lines()
+                .filter(|line| line.starts_with("data: "))
+                .map(|line| line[6..].to_string())
+                .collect()
+        };
+
+        let sse_data = b"data: {\"choices\":[{\"text\":\"a\"}]}\n\n\
+                        data: {\"error\":{\"message\":\"boom\",\"code\":500}}\n\n\
+                        data: {\"usage\":{\"completion_tokens\":1}}\n\n\
+                        data: [DONE]\n\n";
+        let events = parse_sse_chunk(sse_data);
+
+        let mut saw_token = false;
+        let mut stream_error: Option<String> = None;
+        for event in &events {
+            if event == "[DONE]" {
+                continue;
+            }
+            let json: serde_json::Value = serde_json::from_str(event).unwrap();
+            if let Some(error) = json.get("error") {
+                stream_error = Some(error.to_string());
+            } else if json.get("choices").is_some() {
+                saw_token = true;
+            }
+        }
+
+        assert!(saw_token);
+        assert!(stream_error.is_some());
+        let success = stream_error.is_none() && saw_token;
+        assert!(!success);
+    }
+
+    #[test]
     fn test_sse_stream_without_error_is_successful() {
         // Guard against over-eager error detection: a clean token stream must
         // still be classified as successful.
