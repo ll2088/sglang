@@ -11,51 +11,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import argparse
-import dataclasses
-from typing import Annotated
+"""CLI parsing tests for the extensible KV cache opt-in switch.
 
-from sglang.srt.arg_groups.arg_utils import Arg, add_cli_args_from_dataclass
+The switch is exposed through the environment variable
+``SGLANG_ENABLE_EXTENSIBLE_KV_CACHE``; these tests pin the default (off) and
+the explicit opt-in/opt-out behaviour so the fallback path stays the default.
+"""
 
+import pytest
 
-@dataclasses.dataclass
-class _ExtensibleKVCacheArgs:
-    enable_extensible_kv_cache: Annotated[
-        bool,
-        Arg(help="Enable the VMM-backed extensible KV cache."),
-    ] = False
+from sglang.srt.mem_cache.extensible_kv_cache import extensible_kv_cache_enabled
 
 
-@dataclasses.dataclass
-class _ExtensibleKVCacheArgsDefaultOn:
-    enable_extensible_kv_cache: Annotated[
-        bool,
-        Arg(help="Enable the VMM-backed extensible KV cache."),
-    ] = True
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, False),
+        ("0", False),
+        ("1", True),
+        ("", False),
+        ("true", False),
+    ],
+)
+def test_env_switch_parsing(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", raising=False)
+    else:
+        monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", value)
+    assert extensible_kv_cache_enabled() is expected
 
 
-def _parse(cls, argv):
-    parser = argparse.ArgumentParser()
-    add_cli_args_from_dataclass(parser, cls)
-    return parser.parse_args(argv)
+def test_explicit_disable_keeps_fallback(monkeypatch):
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "0")
+    assert extensible_kv_cache_enabled() is False
 
 
-def test_extensible_kv_cache_flag_defaults_off():
-    args = _parse(_ExtensibleKVCacheArgs, [])
-    assert args.enable_extensible_kv_cache is False
-
-
-def test_extensible_kv_cache_flag_can_be_enabled():
-    args = _parse(_ExtensibleKVCacheArgs, ["--enable-extensible-kv-cache"])
-    assert args.enable_extensible_kv_cache is True
-
-
-def test_extensible_kv_cache_flag_default_on_can_be_disabled():
-    # The CLI only exposes store_true, so a default-on field stays on unless
-    # the caller constructs the dataclass directly. This documents the
-    # fallback contract: disabling happens through the dataclass/env, not a
-    # CLI negation flag.
-    args = _parse(_ExtensibleKVCacheArgsDefaultOn, [])
-    assert args.enable_extensible_kv_cache is True
-    direct = _ExtensibleKVCacheArgsDefaultOn(enable_extensible_kv_cache=False)
-    assert direct.enable_extensible_kv_cache is False
+def test_explicit_enable(monkeypatch):
+    monkeypatch.setenv("SGLANG_ENABLE_EXTENSIBLE_KV_CACHE", "1")
+    assert extensible_kv_cache_enabled() is True

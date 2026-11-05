@@ -108,6 +108,11 @@ class _CudaArrayInterface:
         }
 
 
+def _dtype_itemsize(dtype: torch.dtype) -> int:
+    """Element size of a torch dtype without allocating a tensor."""
+    return torch.empty(0, dtype=dtype).element_size()
+
+
 def _torch_dtype_to_typestr(dtype: torch.dtype) -> str:
     """Map a torch dtype to the NumPy-style typestr used by the interface."""
     mapping = {
@@ -364,7 +369,7 @@ class VmmBuffer:
         numel = 1
         for dim in shape:
             numel *= dim
-        nbytes = numel * torch.tensor([], dtype=dtype).element_size()
+        nbytes = numel * _dtype_itemsize(dtype)
         if nbytes > self.reserved_size:
             raise ValueError(
                 f"tensor needs {nbytes} bytes but only {self.reserved_size} reserved"
