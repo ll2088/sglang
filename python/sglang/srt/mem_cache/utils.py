@@ -84,6 +84,22 @@ def get_eviction_strategy(
     return factory(**config) if config else factory()
 
 
+def extensible_kv_cache_supported() -> bool:
+    """Whether the opt-in VMM-backed KV cache path can be used here.
+
+    Returns False when the feature is disabled or the driver VMM API is
+    unavailable, so callers can fall back to the existing allocation path.
+    """
+    from sglang.srt.mem_cache.extensible_kv_cache import (
+        extensible_kv_cache_enabled,
+    )
+    from sglang.srt.mem_cache.vmm_allocator import vmm_unavailable_reason
+
+    if not extensible_kv_cache_enabled():
+        return False
+    return vmm_unavailable_reason() is None
+
+
 def maybe_init_custom_mem_pool(
     device: str,
 ) -> Tuple[bool, Optional[Any], Optional[str]]:

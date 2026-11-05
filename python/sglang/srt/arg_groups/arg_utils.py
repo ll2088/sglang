@@ -290,6 +290,20 @@ def _field_to_cli_name(name: str) -> str:
     return "--" + name.replace("_", "-")
 
 
+def _env_flag_default(env_name: str, default: bool = False) -> bool:
+    """Read a boolean default from an environment variable.
+
+    Used by opt-in feature switches so the CLI default and the runtime check
+    agree without duplicating the environment variable name.
+    """
+    import os
+
+    value = os.environ.get(env_name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
