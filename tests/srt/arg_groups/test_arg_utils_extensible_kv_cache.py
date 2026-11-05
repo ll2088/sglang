@@ -10,21 +10,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# ==============================================================================
+"""CLI parsing for the opt-in extensible KV cache switch."""
 
 import argparse
 import dataclasses
 
-from sglang.srt.arg_groups.arg_utils import A, Arg, add_cli_args_from_dataclass
+from sglang.srt.arg_groups.arg_utils import A, add_cli_args_from_dataclass
 
 
 @dataclasses.dataclass
 class _ExtensibleKVCacheArgs:
     enable_extensible_kv_cache: A[
-        bool,
-        Arg(
-            help="Enable the VMM-backed extensible KV cache path.",
-            aliases=["--enable-extensible-kv-cache"],
-        ),
+        bool, "Enable the VMM-backed two-phase KV cache sizing path."
     ] = False
 
 
@@ -34,18 +32,18 @@ def _parse(argv):
     return parser.parse_args(argv)
 
 
-def test_extensible_kv_cache_flag_defaults_to_false():
+def test_default_is_disabled():
     args = _parse([])
     assert args.enable_extensible_kv_cache is False
 
 
-def test_extensible_kv_cache_flag_can_be_enabled():
+def test_explicit_enable():
     args = _parse(["--enable-extensible-kv-cache"])
     assert args.enable_extensible_kv_cache is True
 
 
-def test_extensible_kv_cache_flag_can_be_disabled_explicitly():
-    args = _parse(["--enable-extensible-kv-cache"])
-    assert args.enable_extensible_kv_cache is True
-    # The dataclass default is the explicit fallback path.
-    assert _ExtensibleKVCacheArgs().enable_extensible_kv_cache is False
+def test_explicit_disable_keeps_fallback():
+    # store_true cannot be negated on the CLI, so the default must stay False
+    # and the runtime env switch must be able to keep the fallback path.
+    args = _parse([])
+    assert args.enable_extensible_kv_cache is False

@@ -12,52 +12,67 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-# Prepare an isolated python3.12 virtualenv for the extensible KV cache tests.
+# Prepare an isolated python3.12 virtualenv for the extensible KV cache checks.
 #
-# The CI image may default to a newer interpreter (e.g. 3.14), which makes pip
-# resolve cp314 wheels that cannot be imported by the 3.12 venv. Every pip
-# invocation therefore goes through .venv/bin/python -m pip, and the script
-# asserts the interpreter version before and after installation.
+# The CI job previously ran a bare `pip install -e python`, which resolved
+# wheels for whatever interpreter happened to be first on PATH (cp314 in the
+# failing run) while the test steps activated a .venv that was never created.
+# This script makes the interpreter explicit and fails fast when it is wrong.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$REPO_ROOT"
-
-# Avoid leaking the system interpreter or user site-packages into the venv.
-unset PYTHONPATH || true
-unset PYTHONHOME || true
-export PIP_DISABLE_PIP_VERSION_CHECK=1
-export PIP_NO_INPUT=1
-
+VENV_DIR="${REPO_ROOT}/.venv"
 PYTHON_BIN="${PYTHON_BIN:-python3.12}"
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  echo "error: $PYTHON_BIN not found; install python3.12 first" >&2
+
+log() { printf '[setup-extensible-kv-cache] %s\n' "$*" >&2; }
+
+log "repo root: ${REPO_ROOT}"
+log "requested interpreter: ${PYTHON_BIN}"
+
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  log "ERROR: ${PYTHON_BIN} not found on PATH"
+  log "PATH=${PATH}"
   exit 1
 fi
 
-rm -rf .venv
-"$PYTHON_BIN" -m venv .venv
+log "which ${PYTHON_BIN}: $(command -v "${PYTHON_BIN}")"
+log "${PYTHON_BIN} -V: $(${PYTHON_BIN} -V 2>&1)"
 
-VENV_PYTHON=".venv/bin/python"
-VENV_PIP=("$VENV_PYTHON" -m pip)
-
-"$VENV_PYTHON" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
-
-"${VENV_PIP[@]}" install --upgrade pip setuptools wheel
-
-# Install the project in editable mode without pulling optional heavy extras.
-if ! "${VENV_PIP[@]}" install -e . ; then
-  echo "error: pip install failed" >&2
-  echo "--- python -V ---" >&2
-  "$VENV_PYTHON" -V >&2 || true
-  echo "--- which python ---" >&2
-  command -v "$VENV_PYTHON" >&2 || true
-  echo "--- pip -V ---" >&2
-  "${VENV_PIP[@]}" -V >&2 || true
-  exit 1
+# Recreate the venv when it is missing or built from another interpreter.
+if [ -d "${VENV_DIR}" ]; then
+  if ! "${VENV_DIR}/bin/python" -c 'import sys; assert sys.version_info[:2]==(3,12), sys.version' >/dev/null 2>&1; then
+    log "existing .venv is not python3.12, recreating"
+    rm -rf "${VENV_DIR}"
+  fi
 fi
 
-"$VENV_PYTHON" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
-"$VENV_PYTHON" -c 'import sglang; print("sglang import ok")'
+if [ ! -d "${VENV_DIR}" ]; then
+  log "creating venv at ${VENV_DIR}"
+  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+fi
 
-echo "extensible kv cache test environment ready: $("$VENV_PYTHON" -V 2>&1)"
+# Guard against an inherited PYTHONPATH or VIRTUAL_ENV pointing elsewhere.
+unset PYTHONPATH || true
+export VIRTUAL_ENV="${VENV_DIR}"
+export PATH="${VENV_DIR}/bin:${PATH}"
+
+VENV_PY="${VENV_DIR}/bin/python"
+
+log "which python: $(command -v python || true)"
+log "${VENV_PY} -V: $(${VENV_PY} -V 2>&1)"
+
+"${VENV_PY}" -c 'import sys; assert sys.version_info[:2]==(3,12), sys.version'
+
+log "upgrading pip"
+"${VENV_PY}" -m pip install --upgrade pip
+
+log "installing sglang editable"
+"${VENV_PY}" -m pip install -e "${REPO_ROOT}/python"
+
+log "installing test dependencies"
+"${VENV_PY}" -m pip install pytest pytest-randomly
+
+log "verifying sglang import"
+"${VENV_PY}" -c 'import sglang; print("sglang", sglang.__version__)'
+
+log "environment ready: ${VENV_PY}"
