@@ -141,7 +141,9 @@ def _find_loaded_library(lib_name: str) -> Optional[str]:
     """Return the path of an already-mapped shared object named lib_name.
 
     Preferring the copy already in the process avoids loading a second driver
-    runtime (e.g. the one bundled with a ROCm torch wheel).
+    runtime (e.g. the one bundled with a ROCm torch wheel). The lookup is
+    best-effort: on hosts without /proc (or without the library mapped) it
+    returns None so callers can fall back to loading by name.
     """
     try:
         with open("/proc/self/maps") as f:
@@ -165,13 +167,16 @@ def _load_driver() -> ctypes.CDLL:
     if not torch.cuda.is_available():
         _DRIVER_ERROR = "CUDA is not available"
         raise VmmUnavailableError(_DRIVER_ERROR)
-    if path := _find_loaded_library("libcuda"):
-        try:
-            _DRIVER = ctypes.CDLL(path)
-            return _DRIVER
-        except OSError:
-            pass
-    candidates = ("libcuda.so.1", "libcuda.so")
+    # Prefer the driver already mapped into this process. On ROCm hosts the
+    # HIP runtime is the one that exposes the VMM symbols, so try both names.
+    for lib_name in ("libcuda", "libamdhip64"):
+        if path := _find_loaded_library(lib_name):
+            try:
+                _DRIVER = ctypes.CDLL(path)
+                return _DRIVER
+            except OSError:
+                pass
+    candidates = ("libcuda.so.1", "libcuda.so", "libamdhip64.so")
     last_err: Optional[str] = None
     for name in candidates:
         try:
@@ -181,7 +186,7 @@ def _load_driver() -> ctypes.CDLL:
             continue
         _DRIVER = lib
         return lib
-    _DRIVER_ERROR = f"could not load CUDA driver: {last_err}"
+    _DRIVER_ERROR = f"could not load CUDA/HIP driver: {last_err}"
     raise VmmUnavailableError(_DRIVER_ERROR)
 
 
@@ -191,7 +196,11 @@ def _check(result: int, what: str) -> None:
 
 
 def vmm_unavailable_reason() -> Optional[str]:
-    """Return a human-readable reason when VMM cannot be used, else None."""
+    """Return a human-readable reason when VMM cannot be used, else None.
+
+    This probe is safe to call on CPU-only hosts and during import: it never
+    raises and never initializes a CUDA context beyond what torch already did.
+    """
     if os.environ.get("SGLANG_DISABLE_VMM", "0") == "1":
         return "SGLANG_DISABLE_VMM=1"
     if not torch.cuda.is_available():
@@ -206,6 +215,8 @@ def vmm_unavailable_reason() -> Optional[str]:
         lib = _load_driver()
     except VmmUnavailableError as exc:
         return str(exc)
+    except Exception as exc:  # pragma: no cover - defensive
+        return f"driver load failed: {exc}"
     for symbol in (
         "cuMemAddressReserve",
         "cuMemAddressFree",
