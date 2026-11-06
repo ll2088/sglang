@@ -48,6 +48,10 @@ def _run_python(code: str, timeout: float = 30.0) -> subprocess.CompletedProcess
         env["PYTHONPATH"] = os.pathsep.join(
             p for p in (python_dir, env.get("PYTHONPATH", "")) if p
         )
+    # Keep the smoke test fast and deterministic: never write bytecode, and
+    # never let a user site-packages shadow the in-repo package.
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONNOUSERSITE"] = "1"
     return subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
@@ -72,6 +76,18 @@ def test_import_sglang_top_level():
         "import sglang failed in a clean interpreter:\n"
         f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     )
+
+
+def test_import_smoke_is_collected():
+    """Self-check: the smoke module must be importable and collected by pytest
+    even when the sglang dependency tree is not installed.
+
+    This keeps the smoke test itself runnable in a minimal environment, so a
+    broken dependency install is reported as a dependency problem rather than
+    as a collection error that hides the real import failure.
+    """
+    assert callable(_first_failing_module)
+    assert callable(_run_python)
 
 
 def test_import_sglang_public_api_attributes():
@@ -101,6 +117,25 @@ def test_import_platform_stubs():
     # torch, so the smoke test remains fast even when torch is unavailable.
     assert "torch" not in sys.modules, (
         "importing sglang._platform_stubs must not import torch"
+    )
+
+
+def test_import_platform_stubs_in_clean_interpreter():
+    """Import the platform stub module in a fresh interpreter.
+
+    Running in a subprocess isolates the check from pytest plugins that may
+    have already imported torch, so the import-light guarantee is verified
+    from a clean ``sys.modules``.
+    """
+    proc = _run_python(
+        "import sglang._platform_stubs as stubs\n"
+        "assert callable(stubs.install_platform_stubs)\n"
+        "assert 'torch' not in __import__('sys').modules, "
+        "'importing sglang._platform_stubs must not import torch'\n"
+    )
+    assert proc.returncode == 0, (
+        "import sglang._platform_stubs failed in a clean interpreter:\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     )
 
 
