@@ -24,7 +24,12 @@ def _cuda_available() -> bool:
         return False
 
 
+# Resolved at import time but guarded: on a CPU-only runner every device test
+# is skipped instead of failing during collection.
 _CUDA_AVAILABLE = _cuda_available()
+_DEVICE_SKIP = unittest.skipUnless(
+    _CUDA_AVAILABLE, "requires a CUDA/HIP device"
+)
 
 
 class _LaunchCapture:
@@ -85,7 +90,7 @@ class TestPrefillAttentionSplitD(CustomTestCase):
         ref = _ref_attention(q, k, v, b_start_loc, b_seq_len, True, sm_scale)
         return o, ref
 
-    @unittest.skipUnless(_CUDA_AVAILABLE, "requires a CUDA/HIP device")
+    @_DEVICE_SKIP
     def test_split_d_matches_reference(self):
         # 72 -> 64 + 16 exercises the tail block; 128 stays single-block.
         for head_dim in (72, 80, 96, 128):
@@ -93,7 +98,19 @@ class TestPrefillAttentionSplitD(CustomTestCase):
                 out, ref = self._run(head_dim)
                 torch.testing.assert_close(out, ref, rtol=2e-2, atol=2e-2)
 
-    @unittest.skipUnless(_CUDA_AVAILABLE, "requires a CUDA/HIP device")
+    @_DEVICE_SKIP
+    def test_split_d_tail_offset_matches_reference(self):
+        # The tail block starts at BLOCK_DMODEL, not 0: 72 -> 64 + 16 and
+        # 96 -> 64 + 32 both read a non-zero tail offset.
+        for head_dim in (72, 96):
+            with self.subTest(head_dim=head_dim):
+                with mock.patch.object(
+                    prefill_ops, "_on_gfx1151", return_value=True
+                ):
+                    out, ref = self._run(head_dim)
+                torch.testing.assert_close(out, ref, rtol=2e-2, atol=2e-2)
+
+    @_DEVICE_SKIP
     def test_non_gfx1151_path_matches_reference(self):
         # With the guard off the kernel must take the stock single-block path
         # and still match the reference elementwise.
@@ -105,7 +122,7 @@ class TestPrefillAttentionSplitD(CustomTestCase):
                     out, ref = self._run(head_dim)
                 torch.testing.assert_close(out, ref, rtol=2e-2, atol=2e-2)
 
-    @unittest.skipUnless(_CUDA_AVAILABLE, "requires a CUDA/HIP device")
+    @_DEVICE_SKIP
     def test_non_contiguous_head_stride_falls_back(self):
         # A padded head axis gives a stride the alignment hint cannot claim.
         torch.manual_seed(1)
@@ -126,7 +143,15 @@ class TestPrefillAttentionSplitD(CustomTestCase):
         ref = _ref_attention(q, k, v, b_start_loc, b_seq_len, True, sm_scale)
         torch.testing.assert_close(o, ref, rtol=2e-2, atol=2e-2)
 
-    def _capture_launch(self, *, on_gfx1151, head_dim=72, head_stride_pad=0):
+    def _capture_launch(
+        self,
+        *,
+        on_gfx1151,
+        head_dim=72,
+        head_stride_pad=0,
+        dtype=torch.bfloat16,
+        max_input_len=64,
+    ):
         capture = _LaunchCapture()
         original = prefill_ops._fwd_kernel
         prefill_ops._fwd_kernel = capture
@@ -137,7 +162,7 @@ class TestPrefillAttentionSplitD(CustomTestCase):
                 def meta(tokens, heads, dim):
                     wide = torch.empty(
                         (tokens, heads, dim + head_stride_pad),
-                        dtype=torch.bfloat16,
+                        dtype=dtype,
                         device="meta",
                     )
                     return wide[..., :dim]
@@ -150,7 +175,7 @@ class TestPrefillAttentionSplitD(CustomTestCase):
                     meta(64, 8, head_dim),
                     seq_lens,
                     seq_lens,
-                    64,
+                    max_input_len,
                 )
         finally:
             prefill_ops._fwd_kernel = original
@@ -180,6 +205,45 @@ class TestPrefillAttentionSplitD(CustomTestCase):
         self.assertEqual(capture.kwargs["BLOCK_DMODEL_TAIL"], 16)
         self.assertFalse(capture.kwargs["HEAD_STRIDE_ALIGNED_8"])
         self.assertEqual(capture.kwargs["BLOCK_N"], 128)
+
+    def test_launch_config_power_of_two_head_dim_unchanged(self):
+        # 128 is already a power of two: no split, no narrow tile, even on
+        # gfx1151 with aligned strides.
+        capture = self._capture_launch(on_gfx1151=True, head_dim=128)
+        self.assertEqual(capture.kwargs["BLOCK_DMODEL"], 128)
+        self.assertEqual(capture.kwargs["BLOCK_DMODEL_TAIL"], 0)
+        self.assertTrue(capture.kwargs["HEAD_STRIDE_ALIGNED_8"])
+        self.assertEqual(capture.kwargs["BLOCK_N"], 128)
+
+    def test_launch_config_skips_non_narrowing_split(self):
+        # 112 would be 64 + 64 = 128 lanes, the same extent as next_pow2(112),
+        # so the split must be skipped and the stock tile kept.
+        capture = self._capture_launch(on_gfx1151=True, head_dim=112)
+        self.assertEqual(capture.kwargs["BLOCK_DMODEL"], 128)
+        self.assertEqual(capture.kwargs["BLOCK_DMODEL_TAIL"], 0)
+        self.assertEqual(capture.kwargs["BLOCK_N"], 128)
+
+    def test_launch_config_fp32_keeps_stock_path(self):
+        # The split-D path is gated on bf16/fp16; fp32 must stay single-block.
+        capture = self._capture_launch(
+            on_gfx1151=True, head_dim=72, dtype=torch.float32
+        )
+        self.assertEqual(capture.kwargs["BLOCK_DMODEL"], 128)
+        self.assertEqual(capture.kwargs["BLOCK_DMODEL_TAIL"], 0)
+        self.assertFalse(capture.kwargs["HEAD_STRIDE_ALIGNED_8"])
+        self.assertEqual(capture.kwargs["BLOCK_N"], 128)
+
+    def test_launch_config_grid_covers_max_seq_len(self):
+        # The grid must still be cdiv(max_input_len, BLOCK_M) for every
+        # batch/seq_len combination, independent of the split-D tile.
+        for max_input_len in (1, 63, 64, 65, 128, 1024):
+            with self.subTest(max_input_len=max_input_len):
+                capture = self._capture_launch(
+                    on_gfx1151=True, head_dim=72, max_input_len=max_input_len
+                )
+                self.assertEqual(
+                    capture.grid[2], (max_input_len + 127) // 128
+                )
 
 
 if __name__ == "__main__":
