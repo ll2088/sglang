@@ -16,22 +16,36 @@ import pytest
 PYTHON_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def _config_files_with_blobfile():
-    # setup.py does not declare runtime dependencies; only pyproject files do.
-    files = [os.path.join(PYTHON_DIR, "pyproject.toml")]
+BLOBFILE_RE = re.compile(r"blobfile\s*([=<>~!][^\s\"',]*)")
+
+
+def _all_config_files():
+    # setup.py does not declare runtime dependencies, but it is included so the
+    # consistency check can assert it does not silently declare blobfile.
+    files = [os.path.join(PYTHON_DIR, "setup.py"), os.path.join(PYTHON_DIR, "pyproject.toml")]
     files.extend(sorted(glob.glob(os.path.join(PYTHON_DIR, "pyproject_*.toml"))))
+    return [path for path in files if os.path.isfile(path)]
+
+
+def _blobfile_constraint(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        match = BLOBFILE_RE.search(f.read())
+    return match.group(1) if match else None
+
+
+def _config_files_with_blobfile():
     result = []
-    for path in files:
-        if not os.path.isfile(path):
-            continue
-        with open(path, encoding="utf-8", errors="replace") as f:
-            if re.search(r"blobfile\s*[=<>~!]", f.read()):
-                result.append(path)
+    for path in _all_config_files():
+        if _blobfile_constraint(path) is not None:
+            result.append(path)
     return result
 
 
 def test_blobfile_version_is_330():
-    bf = pytest.importorskip("blobfile")
+    try:
+        bf = importlib.import_module("blobfile")
+    except ImportError as exc:
+        pytest.fail(f"blobfile is not importable: {exc}")
     try:
         version = importlib.metadata.version("blobfile")
     except importlib.metadata.PackageNotFoundError:
@@ -43,21 +57,23 @@ def test_blobfile_version_is_330():
 def test_blobfile_constraints_consistent():
     files = _config_files_with_blobfile()
     assert files, "no config file declares blobfile"
-    bad = []
-    found = []
-    for path in files:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            text = f.read()
-        match = re.search(r"blobfile[^\n]*", text)
-        line = match.group(0) if match else "<no blobfile line>"
-        found.append((os.path.basename(path), line))
-        if not match or "3.3.0" not in line:
-            bad.append((path, line))
-    assert not bad, f"inconsistent blobfile constraints: {bad}; found: {found}"
+    constraints = {os.path.basename(path): _blobfile_constraint(path) for path in files}
+    distinct = set(constraints.values())
+    assert distinct == {"==3.3.0"}, (
+        f"blobfile constraints must all be '==3.3.0', found: {constraints}"
+    )
+    # setup.py must not declare a runtime blobfile dependency (it has none).
+    setup_py = os.path.join(PYTHON_DIR, "setup.py")
+    assert _blobfile_constraint(setup_py) is None, (
+        "python/setup.py unexpectedly declares a blobfile constraint"
+    )
 
 
 def test_blobfile_import_smoke():
-    bf = pytest.importorskip("blobfile")
+    try:
+        bf = importlib.import_module("blobfile")
+    except ImportError as exc:
+        pytest.fail(f"blobfile is not importable: {exc}")
     # Keep this check independent of torch: sglang/__init__ and check_env pull
     # in torch and FlashInfer, which are not installable in the minimal CI
     # environment used for the dependency-bump check. Importing blobfile and
@@ -69,7 +85,10 @@ def test_blobfile_import_smoke():
 
 
 def test_blobfile_read_write_roundtrip():
-    bf = pytest.importorskip("blobfile")
+    try:
+        bf = importlib.import_module("blobfile")
+    except ImportError as exc:
+        pytest.fail(f"blobfile is not importable: {exc}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         path = os.path.join(tmpdir, "sample.bin")
