@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 # Design port of upstream vLLM #60618 (single-launch fused scoring + top-k for
 # the sparse-indexer prefill). The kernel itself is NOT ported here: this module
@@ -20,6 +23,10 @@ from typing import Callable, Optional, Tuple
 #     rescanned exactly in fp32 instead of returning an approximate top-k.
 
 _ENV_FLAG = "SGLANG_DSA_FUSED_PREFILL_TOPK"
+# Accepted spellings for the opt-in flag. Anything else is treated as off: a
+# typo must never silently enable an unvalidated kernel.
+_ON_VALUES = ("1", "true", "on")
+_OFF_VALUES = ("", "0", "false", "off")
 
 # k values the fused kernel is specialised for.
 SUPPORTED_TOPKS: Tuple[int, ...] = (512, 1024, 2048)
@@ -39,22 +46,60 @@ SCORE_CODE_BYTES = 4
 
 
 @lru_cache(maxsize=1)
-def _kernel_present() -> bool:
-    """Whether the fused kernel binding is importable in this build.
+def _kernel_probe() -> Tuple[bool, str]:
+    """Probe the fused kernel binding once per process, reason included.
 
-    Cached: importability cannot change within a process, and the plan is
-    consulted on every prefill chunk.
+    Cached, negative result included: importability cannot change within a
+    process, and the plan is consulted on every prefill chunk. A broken build
+    (missing shared library, unresolved symbol) surfaces as a plain exception
+    rather than ``ImportError``, so it has to be caught here too -- otherwise a
+    failed probe escapes to the caller instead of falling back to dense.
     """
     try:
         from sglang.kernels.ops.attention.dsa import fused_mqa_topk_prefill  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    except Exception as exc:  # noqa: BLE001 - any load failure means "absent"
+        return False, f"{type(exc).__name__}: {exc}"
+    return True, "available"
+
+
+def _kernel_present() -> bool:
+    """Whether the fused kernel binding is importable in this build."""
+    return _kernel_probe()[0]
+
+
+def reset_fused_mqa_topk_cache() -> None:
+    """Drop the cached kernel probe.
+
+    The probe must stay cached for dispatch, but tests (or any caller that
+    changes what is importable) need a way to force a re-probe; otherwise a
+    stale negative would mask a kernel that did load.
+    """
+    _kernel_probe.cache_clear()
 
 
 def _env_enabled(flag: str) -> bool:
-    """Parse a boolean env flag, with one shared spelling of "on"."""
-    return os.environ.get(flag, "0").strip().lower() in ("1", "true", "on")
+    """Parse a boolean env flag, with one shared spelling of "on".
+
+    Unset means off, and an unrecognised value is reported and treated as off,
+    so the fused path fails closed. The flag is read on every call and never
+    cached, so flipping it takes effect immediately.
+    """
+    raw = os.environ.get(flag)
+    if raw is None:
+        return False
+    value = raw.strip().lower()
+    if value in _ON_VALUES:
+        return True
+    if value in _OFF_VALUES:
+        return False
+    logger.warning(
+        "Ignoring %s=%r: expected one of %s or %s; keeping the dense path.",
+        flag,
+        raw,
+        _ON_VALUES,
+        _OFF_VALUES,
+    )
+    return False
 
 
 def fused_mqa_topk_available(
@@ -65,10 +110,22 @@ def fused_mqa_topk_available(
     The kernel is not ported yet, so this needs both the binding to exist and an
     explicit opt-in flag; otherwise the caller keeps the dense path.
     """
-    probe = kernel_present or _kernel_present
-    if not probe():
+    if not fused_mqa_topk_kernel_present(kernel_present):
         return False
     return _env_enabled(_ENV_FLAG)
+
+
+def fused_mqa_topk_kernel_present(
+    kernel_present: Optional[Callable[[], bool]] = None,
+) -> bool:
+    """Whether the fused kernel binding is importable, ignoring the opt-in.
+
+    Split from :func:`fused_mqa_topk_available` so the two reasons a chunk
+    stays dense -- no kernel, or no opt-in -- are reported apart.
+    """
+    if kernel_present is not None:
+        return bool(kernel_present())
+    return _kernel_present()
 
 
 def fused_mqa_topk_min_keys() -> int:
@@ -90,6 +147,22 @@ class FusedMQATopKPlan:
     def dense_logits_bytes(self) -> int:
         """Bytes of the [rows, keys] logits the fused path never materializes."""
         return self.rows * self.keys * SCORE_CODE_BYTES
+
+
+def validate_workspace(workspace, plan: FusedMQATopKPlan) -> None:
+    """Check the caller-supplied scratch buffer for one fused launch.
+
+    The kernel never allocates: the caller sizes one buffer for the maximum
+    shape and reuses it across layers, which keeps the path CUDA-graph capture
+    safe. A bad buffer is a caller bug, so this raises instead of quietly
+    falling back to the dense path and hiding the misconfiguration.
+    """
+    nbytes = int(workspace.numel()) * int(workspace.element_size())
+    if nbytes < plan.workspace_bytes:
+        raise ValueError(
+            f"fused top-k workspace has {nbytes} bytes, "
+            f"plan needs {plan.workspace_bytes}"
+        )
 
 
 def fusion_eligible(rows: int, keys: int, topk: int) -> Tuple[bool, str]:
@@ -148,7 +221,9 @@ def resolve_prefill_plan(
     if available is None:
         available = fused_mqa_topk_available()
     if not available:
-        return None, "fused kernel unavailable or disabled"
+        if not fused_mqa_topk_kernel_present():
+            return None, "fused kernel binding not importable in this build"
+        return None, f"fused path disabled (set {_ENV_FLAG}=1 to opt in)"
     ok, reason = fusion_eligible(rows, keys, topk)
     if not ok:
         return None, reason
