@@ -478,7 +478,18 @@ class UnifiedTreeCoreInterface(ABC):
 
     @abstractmethod
     def match_prefix(self, params: MatchPrefixParams) -> MatchResult:
-        """Match a key; returns the device prefix length + boundary NodeIds."""
+        """Match a key; returns the device prefix length + boundary NodeIds.
+
+        Implementations also report the walk facts, so a caller behaves the
+        same on every backend:
+
+        * ``last_visited_node_id`` -- the deepest non-root node the walk stepped
+          into, whether or not a validator accepted it; ``None`` when the walk
+          never left the root.
+        * ``full_device_match_len`` -- the reusable prefix the FULL device-value
+          scan saw before node-boundary or auxiliary constraints; ``None`` when
+          no shorter prefix is reported.
+        """
         ...
 
     @abstractmethod
@@ -503,7 +514,11 @@ class UnifiedTreeCoreInterface(ABC):
     @property
     @abstractmethod
     def empty_match_result(self) -> MatchResult:
-        """A shared empty MatchResult (zero device prefix + boundary NodeIds)."""
+        """A shared empty MatchResult (zero device prefix + boundary NodeIds).
+
+        Both walk facts (``last_visited_node_id``, ``full_device_match_len``)
+        are ``None`` on it.
+        """
         ...
 
     @abstractmethod

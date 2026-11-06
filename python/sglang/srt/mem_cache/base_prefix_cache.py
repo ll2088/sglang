@@ -346,6 +346,21 @@ def zero_match_result(
     )
 
 
+def reusable_prefix_len(match_result: MatchResult) -> int:
+    """The prefix length a caller may actually reuse from a match.
+
+    ``device_prefix_len`` stops at node boundaries. A core whose FULL device
+    values are not laid out one pool row per token may report a shorter prefix
+    in ``full_device_match_len``; ``None`` means no shorter prefix was
+    reported, so the node-boundary length stands. Interpreting the field here
+    keeps callers identical across backends.
+    """
+    full_device_match_len = match_result.full_device_match_len
+    if full_device_match_len is None:
+        return match_result.device_prefix_len
+    return min(match_result.device_prefix_len, full_device_match_len)
+
+
 def _dfs_weight_order(
     root_node: Any,
     node_handles: Sequence[Any],
