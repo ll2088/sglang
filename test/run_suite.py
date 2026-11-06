@@ -419,8 +419,10 @@ def run_a_suite(args):
     sanity_check = True
 
     all_tests = collect_tests(files, sanity_check=sanity_check)
-    validate_all_suites(all_tests)
     ci_tests, skipped_tests = filter_tests(all_tests, hw, suites, nightly)
+    # Validate only the selected tests so a bad registration in an unrelated
+    # suite cannot abort this run before any selected test executes.
+    validate_all_suites(ci_tests + skipped_tests)
 
     # Precision-test mode: keep only the coverage-recommended files before
     # partitioning, so matrix jobs shard the filtered pool (balanced and
@@ -460,16 +462,22 @@ def run_a_suite(args):
     if timeout is not None and args.enable_retry:
         timeout += args.retry_timeout_increase
 
-    return run_unittest_files(
-        ci_tests,
-        timeout_per_file=timeout,
-        continue_on_error=args.continue_on_error,
-        enable_retry=args.enable_retry,
-        max_attempts=args.max_attempts,
-        retry_wait_seconds=args.retry_wait_seconds,
-        fork_worker_batch_size=args.fork_worker_batch_size,
-        timeout_overrides=dict(args.timeout_override),
-    )
+    try:
+        return run_unittest_files(
+            ci_tests,
+            timeout_per_file=timeout,
+            continue_on_error=args.continue_on_error,
+            enable_retry=args.enable_retry,
+            max_attempts=args.max_attempts,
+            retry_wait_seconds=args.retry_wait_seconds,
+            fork_worker_batch_size=args.fork_worker_batch_size,
+            timeout_overrides=dict(args.timeout_override),
+        )
+    except Exception as exc:
+        # Keep the runner failure visible without losing the already-printed
+        # per-file results; the suite still exits non-zero.
+        print(f"Suite execution failed: {exc}", file=sys.stderr, flush=True)
+        return 1
 
 
 def _parse_timeout_override(value: str) -> tuple[str, float]:
@@ -537,8 +545,14 @@ def main():
     parser.add_argument(
         "--continue-on-error",
         action="store_true",
-        default=False,
-        help="Continue running remaining tests even if one fails (default: False, useful for nightly tests).",
+        default=True,
+        help="Continue running remaining tests even if one fails (default: True).",
+    )
+    parser.add_argument(
+        "--fail-fast",
+        action="store_false",
+        dest="continue_on_error",
+        help="Stop after the first failing test file (overrides --continue-on-error).",
     )
     parser.add_argument(
         "--auto-partition-id",
