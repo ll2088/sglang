@@ -59,6 +59,17 @@ def test_import_sglang_top_level():
     assert "Runtime" in sglang.__all__
 
 
+def test_import_sglang_public_api_attributes():
+    """Every name in ``__all__`` must be resolvable on the package.
+
+    This keeps the smoke test focused on the import chain while still
+    catching a public API name that was dropped from ``__init__.py``.
+    """
+    sglang = importlib.import_module("sglang")
+    missing = [name for name in sglang.__all__ if not hasattr(sglang, name)]
+    assert not missing, f"missing public API attributes: {missing}"
+
+
 def test_import_platform_stubs():
     """The platform stub module must import cleanly on every platform."""
     try:
@@ -91,6 +102,20 @@ def test_install_platform_stubs_is_noop_off_apple_silicon(monkeypatch):
     # Must not raise and must not flip the installed flag on this platform.
     stubs.install_platform_stubs()
     assert stubs._platform_stubs_installed is False
+
+
+def test_install_platform_stubs_is_idempotent(monkeypatch):
+    """Calling the installer twice must be safe and keep the guard set.
+
+    The guard is what makes repeated imports cheap; this asserts the
+    second call short-circuits instead of re-patching torch.
+    """
+    stubs = importlib.import_module("sglang._platform_stubs")
+
+    monkeypatch.setattr(stubs, "_platform_stubs_installed", True)
+    # With the guard set, the function must return immediately.
+    stubs.install_platform_stubs()
+    assert stubs._platform_stubs_installed is True
 
 
 _FAILING_MODULE_RE = re.compile(r'File "[^"]*[\\/]([^\\/]+)\.py", line \d+')
@@ -176,3 +201,16 @@ def test_import_smoke_reports_first_failing_module_from_stderr():
     assert _first_failing_module_from_stderr(stderr) == "sglang"
 
     assert _first_failing_module_from_stderr("") == "<unknown>"
+
+
+def test_import_smoke_reports_non_sglang_frame_fallback():
+    """Without any sglang frame the helper falls back to the last file seen."""
+    stderr = textwrap.dedent(
+        """
+        Traceback (most recent call last):
+          File "/usr/lib/python3.14/site-packages/torch/__init__.py", line 1, in <module>
+            import _C
+        ImportError: cannot import name '_C'
+        """
+    )
+    assert _first_failing_module_from_stderr(stderr) == "__init__"
