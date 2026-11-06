@@ -6,6 +6,8 @@ submodule instead of surfacing as a slow integration-test failure.
 """
 
 import importlib
+import os
+import subprocess
 import sys
 
 import pytest
@@ -35,23 +37,41 @@ def _first_failing_module(exc: BaseException) -> str:
     return first_sglang or last_name
 
 
-def test_import_sglang_top_level():
-    """`import sglang` must succeed and expose the public API surface."""
-    try:
-        sglang = importlib.import_module("sglang")
-    except Exception as exc:  # noqa: BLE001 - report the failing submodule
-        pytest.fail(
-            f"import sglang failed in module {_first_failing_module(exc)!r}: "
-            f"{type(exc).__name__}: {exc}",
-            pytrace=True,
+def _run_python(code: str, timeout: float = 30.0) -> subprocess.CompletedProcess:
+    """Run ``code`` in a fresh interpreter so the import chain is exercised
+    from a clean ``sys.modules`` (pytest plugins may pre-import sglang)."""
+    env = dict(os.environ)
+    # Make the in-repo package importable without requiring an editable install.
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    python_dir = os.path.join(repo_root, "python")
+    if os.path.isdir(python_dir):
+        env["PYTHONPATH"] = os.pathsep.join(
+            p for p in (python_dir, env.get("PYTHONPATH", "")) if p
         )
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=env,
+    )
 
-    assert hasattr(sglang, "__version__")
-    assert hasattr(sglang, "__all__")
-    assert "Runtime" in sglang.__all__
-    # The public API surface must be non-trivial; an empty __all__ would make
-    # the attribute check below vacuously pass.
-    assert len(sglang.__all__) > 0
+
+def test_import_sglang_top_level():
+    """`import sglang` must succeed in a clean interpreter and expose the
+    public API surface. Runs in a subprocess so a broken import chain is
+    reported in seconds and points at the first failing submodule."""
+    proc = _run_python(
+        "import sglang\n"
+        "assert hasattr(sglang, '__version__'), 'missing __version__'\n"
+        "assert hasattr(sglang, '__all__'), 'missing __all__'\n"
+        "assert 'Runtime' in sglang.__all__, 'Runtime not in __all__'\n"
+        "assert len(sglang.__all__) > 0, 'empty __all__'\n"
+    )
+    assert proc.returncode == 0, (
+        "import sglang failed in a clean interpreter:\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
 
 
 def test_import_sglang_public_api_attributes():
@@ -79,7 +99,9 @@ def test_import_platform_stubs():
     assert callable(stubs.install_platform_stubs)
     # The stub module must stay import-light: importing it must not pull in
     # torch, so the smoke test remains fast even when torch is unavailable.
-    assert "torch" not in sys.modules or True
+    assert "torch" not in sys.modules, (
+        "importing sglang._platform_stubs must not import torch"
+    )
 
 
 def test_install_platform_stubs_is_noop_off_apple_silicon(monkeypatch):
