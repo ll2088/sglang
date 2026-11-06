@@ -22,6 +22,33 @@ from sglang.srt.managers.schedule_batch import Modality, MultimodalProcessorOutp
 from sglang.srt.models.gemma4_diffusion import DiffusionGemmaForBlockDiffusion
 from sglang.srt.multimodal.processors.base_processor import MultimodalSpecialTokens
 
+# Placeholder written into the prompt when the frontend renders multimodal
+# content (e.g. `--chat-template-content-format string`). It must be exactly
+# the token targeted by `IMAGE_TOKEN_REGEX` below, otherwise the prompt
+# replacement fails to find it in the prompt text.
+IMAGE_PLACEHOLDER = "<|image|>"
+
+
+def _build_image_token_regex() -> "re.Pattern[str]":
+    """Build the regex matching the raw and the HF-expanded image placeholder.
+
+    The HF expansion is `boi + soft tokens + eoi`, i.e. `<|image>` followed by
+    one or more placeholders and `<image|>`.
+    """
+    pattern = re.compile(
+        r"<\|image>(?:" + re.escape(IMAGE_PLACEHOLDER) + r")+<image\|>"
+        r"|" + re.escape(IMAGE_PLACEHOLDER)
+    )
+    if pattern.fullmatch(IMAGE_PLACEHOLDER) is None:
+        raise ValueError(
+            f"Image placeholder {IMAGE_PLACEHOLDER!r} is not targeted by the "
+            "prompt replacement regex"
+        )
+    return pattern
+
+
+IMAGE_TOKEN_REGEX = _build_image_token_regex()
+
 
 class DiffusionGemmaSGLangProcessor(SGLangBaseProcessor):
     """DiffusionGemma image processor."""
@@ -31,12 +58,10 @@ class DiffusionGemmaSGLangProcessor(SGLangBaseProcessor):
     def __init__(self, hf_config, server_args, _processor, *args, **kwargs):
         super().__init__(hf_config, server_args, _processor, *args, **kwargs)
         self.mm_tokens = MultimodalSpecialTokens(
-            image_token="<|image|>",
+            image_token=IMAGE_PLACEHOLDER,
             image_token_id=hf_config.image_token_id,
             # Also match the HF-expanded placeholder (boi + soft tokens + eoi).
-            image_token_regex=re.compile(
-                r"<\|image>(?:<\|image\|>)+<image\|>|<\|image\|>"
-            ),
+            image_token_regex=IMAGE_TOKEN_REGEX,
         ).build(_processor)
         self.ATTR_NAME_TO_MODALITY["image_position_ids"] = Modality.IMAGE
 
