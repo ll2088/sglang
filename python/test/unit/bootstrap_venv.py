@@ -91,6 +91,17 @@ def _supported_python():
     # wheels. The explicit failure below is preferable to that.
     if _is_supported(_current_version()):
         candidates.append(sys.executable)
+    # Deduplicate while preserving order so the same path is not probed twice
+    # (e.g. PYTHON and python3.12 pointing at the same binary).
+    seen = set()
+    deduped = []
+    for candidate in candidates:
+        key = os.path.realpath(os.fspath(candidate))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    candidates = deduped
     # Print every candidate and its detected version so CI logs show why a
     # particular interpreter was (or was not) selected.
     print("python interpreter candidates:", flush=True)
@@ -198,9 +209,14 @@ def _pip_install_args(python, args):
     # Constrain pip's resolver to the venv interpreter's own ABI so a stray
     # system Python 3.14 pip cannot download cp314 wheels. --only-binary
     # avoids source builds that would silently target the wrong interpreter.
+    # The tags are derived from the selected venv interpreter, never fixed to
+    # a single minor, so 3.11/3.12/3.13 all resolve their own wheels.
     version = _python_version(os.fspath(python))
     if version is None:
-        return list(args)
+        raise SystemExit(
+            f"cannot determine the Python version of {python}; refusing to "
+            "run pip without an ABI constraint"
+        )
     py_tag = f"{version[0]}.{version[1]}"
     abi_tag = f"cp{version[0]}{version[1]}"
     constrained = list(args)
@@ -235,6 +251,8 @@ def _run(python, args):
         _assert_no_cp314_wheels(python)
         args = _pip_install_args(python, args)
     cmd = [os.fspath(python), "-m", *args]
+    # Print the full command (including the ABI constraints) so CI logs show
+    # exactly which interpreter and wheel tags pip is using.
     print("+", " ".join(cmd), flush=True)
     result = subprocess.run(
         cmd, cwd=os.fspath(REPO_ROOT), capture_output=True, text=True
@@ -402,6 +420,18 @@ def main():
     _run(python, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
     # Fail fast right after the venv is populated: every later step assumes a
     # 3.11-3.13 interpreter, and a wrong one would resolve cp314 wheels.
+    # Also assert the venv's own pip reports the same interpreter, so a
+    # mismatched pip cannot silently resolve for another Python.
+    _run(
+        python,
+        [
+            "-c",
+            "import sys, subprocess; "
+            "out = subprocess.check_output([sys.executable, '-m', 'pip', '-V'], text=True); "
+            "assert sys.executable in out, (sys.executable, out); "
+            "print('pip interpreter ok:', out.strip())",
+        ],
+    )
     _run(
         python,
         [
@@ -447,6 +477,8 @@ def main():
             "-c",
             "import sys, compressed_tensors; "
             "assert (3, 11) <= sys.version_info[:2] < (3, 14), sys.version; "
+            "assert compressed_tensors.__version__ == '0.20.1', "
+            "compressed_tensors.__version__; "
             "print(sys.executable, compressed_tensors.__version__)",
         ],
     )
