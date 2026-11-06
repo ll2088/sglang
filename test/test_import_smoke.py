@@ -20,16 +20,27 @@ _CHILD_IMPORT_TIMEOUT_S = 20
 
 
 def _first_failing_module(exc: BaseException) -> str:
-    """Best-effort extraction of the first failing module name from a traceback."""
+    """Best-effort extraction of the first failing module name from a traceback.
+
+    Walks the traceback from the outermost frame inward and returns the first
+    frame that belongs to the ``sglang`` package, so the reported name points
+    at the submodule that actually broke rather than at the test harness.
+    Falls back to the innermost known module name when no sglang frame exists.
+    """
     tb = exc.__traceback__
+    first_sglang: str | None = None
     last_name = "<unknown>"
     while tb is not None:
         frame = tb.tb_frame
         module_name = frame.f_globals.get("__name__")
         if module_name:
             last_name = module_name
+            if first_sglang is None and (
+                module_name == "sglang" or module_name.startswith("sglang.")
+            ):
+                first_sglang = module_name
         tb = tb.tb_next
-    return last_name
+    return first_sglang or last_name
 
 
 def test_import_sglang_top_level():
@@ -66,10 +77,17 @@ _FAILING_MODULE_RE = re.compile(r'File "[^"]*[\\/]([^\\/]+)\.py", line \d+')
 
 
 def _first_failing_module_from_stderr(stderr: str) -> str:
-    """Extract the last module file mentioned in a subprocess traceback."""
+    """Extract the first sglang module file mentioned in a subprocess traceback.
+
+    Prefers the first ``sglang`` frame so the message names the submodule that
+    broke; falls back to the last file mentioned when no sglang frame is found.
+    """
     matches = _FAILING_MODULE_RE.findall(stderr or "")
     if not matches:
         return "<unknown>"
+    for name in matches:
+        if name == "sglang" or name.startswith("sglang"):
+            return name
     return matches[-1]
 
 
@@ -109,3 +127,15 @@ def test_import_sglang_in_fresh_interpreter():
             pytrace=False,
         )
     assert proc.stdout.strip(), "fresh interpreter produced no version output"
+
+
+def test_import_smoke_reports_first_failing_module():
+    """The failure helper must name the first broken sglang submodule."""
+    try:
+        importlib.import_module("sglang._nonexistent_smoke_probe")
+    except Exception as exc:  # noqa: BLE001 - exercising the reporting helper
+        failing = _first_failing_module(exc)
+    else:  # pragma: no cover - the probe module must not exist
+        pytest.fail("probe module unexpectedly importable")
+
+    assert failing == "sglang" or failing.startswith("sglang."), failing
