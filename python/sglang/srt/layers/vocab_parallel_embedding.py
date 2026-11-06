@@ -393,7 +393,7 @@ class VocabParallelEmbedding(torch.nn.Module):
 
         # If the parameter is a gguf weight, then load it directly.
         if getattr(param, "is_gguf_weight_type", None):
-            param.data.copy_(loaded_weight)
+            copy_weight_(param.data, loaded_weight)
             param.weight_type = loaded_weight.item()
             return
         elif isinstance(param, UninitializedParameter):
