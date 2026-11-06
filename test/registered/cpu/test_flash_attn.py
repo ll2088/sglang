@@ -308,6 +308,154 @@ class TestFlashAttn(CustomTestCase):
         atol = rtol = precision[dtype]
         torch.testing.assert_close(out_ref, out, atol=atol, rtol=rtol)
 
+    @parametrize(
+        batch=[3],
+        seqlen_q=[128, 256],
+        seqlen_k=[256, 512],
+        num_heads=[2],
+        num_heads_kv=[2],
+        head_dim=[64, 128],
+        is_causal=[True, False],
+    )
+    def test_flash_attn_leftpad_with_seqlens_consistency(
+        self,
+        batch,
+        seqlen_q,
+        seqlen_k,
+        num_heads,
+        num_heads_kv,
+        head_dim,
+        is_causal,
+    ):
+        # When both leftpad and seqlens are provided, the result must match the
+        # seqlens-only path (leftpad is already encoded in cu_seqlens_k).
+        dtype = torch.bfloat16
+        leftpad = torch.tensor([31, 0, 17][:batch], dtype=torch.int32)
+        seqlens_k = torch.tensor([seqlen_k - int(p) for p in leftpad], dtype=torch.int32)
+
+        q = torch.randn(batch, seqlen_q, num_heads, head_dim, dtype=dtype)
+        k = torch.randn(batch, seqlen_k, num_heads_kv, head_dim, dtype=dtype)
+        v = torch.randn(batch, seqlen_k, num_heads_kv, head_dim, dtype=dtype)
+
+        cu_seqlens_q = torch.arange(0, (batch + 1) * seqlen_q, seqlen_q, dtype=torch.int32)
+        cu_seqlens_k = torch.zeros(batch + 1, dtype=torch.int32)
+        cu_seqlens_k[1:] = torch.cumsum(seqlens_k, 0)
+
+        q_flat = q.reshape(batch * seqlen_q, num_heads, head_dim)
+        k_flat = torch.cat([k[b, int(leftpad[b].item()):] for b in range(batch)], dim=0)
+        v_flat = torch.cat([v[b, int(leftpad[b].item()):] for b in range(batch)], dim=0)
+
+        out = flash_attn_varlen_func(
+            q_flat,
+            k_flat,
+            v_flat,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            seqlen_q,
+            seqlen_k,
+            is_causal,
+        )
+        out = out.reshape(batch, seqlen_q, num_heads, head_dim)
+
+        # Reference computed with the same varlen layout but without leftpad.
+        out_ref = flash_attn_varlen_ref(
+            q_flat,
+            k_flat,
+            v_flat,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            is_causal=is_causal,
+            enable_gqa=num_heads != num_heads_kv,
+        )
+        out_ref = out_ref.reshape(batch, seqlen_q, num_heads, head_dim)
+
+        atol = rtol = precision[dtype]
+        torch.testing.assert_close(out_ref, out, atol=atol, rtol=rtol)
+
+    @parametrize(
+        batch=[2],
+        seqlen_q=[127, 255],
+        seqlen_k=[255, 511],
+        num_heads=[2],
+        num_heads_kv=[2],
+        head_dim=[64],
+        is_causal=[True, False],
+    )
+    def test_flash_attn_leftpad_no_seqlens_odd_shape(
+        self,
+        batch,
+        seqlen_q,
+        seqlen_k,
+        num_heads,
+        num_heads_kv,
+        head_dim,
+        is_causal,
+    ):
+        # Boundary shapes where seqlen is not a power of two and not block aligned.
+        dtype = torch.bfloat16
+        leftpad = torch.tensor([31, 0][:batch], dtype=torch.int32)
+
+        q = torch.randn(batch, seqlen_q, num_heads, head_dim, dtype=dtype)
+        k = torch.randn(batch, seqlen_k, num_heads_kv, head_dim, dtype=dtype)
+        v = torch.randn(batch, seqlen_k, num_heads_kv, head_dim, dtype=dtype)
+
+        out_ref = torch.empty(batch, seqlen_q, num_heads, head_dim, dtype=dtype)
+        for b in range(batch):
+            pad = int(leftpad[b].item())
+            q_b = q[b].transpose(0, 1).unsqueeze(0)
+            k_b = k[b, pad:].transpose(0, 1).unsqueeze(0)
+            v_b = v[b, pad:].transpose(0, 1).unsqueeze(0)
+            out_b = F.scaled_dot_product_attention(
+                q_b, k_b, v_b, is_causal=is_causal, enable_gqa=num_heads != num_heads_kv
+            )
+            out_ref[b] = out_b.squeeze(0).transpose(0, 1)
+
+        cu_seqlens_q = torch.arange(0, (batch + 1) * seqlen_q, seqlen_q, dtype=torch.int32)
+        cu_seqlens_k = torch.zeros(batch + 1, dtype=torch.int32)
+        for b in range(batch):
+            cu_seqlens_k[b + 1] = cu_seqlens_k[b] + seqlen_k - int(leftpad[b].item())
+
+        q_flat = q.reshape(batch * seqlen_q, num_heads, head_dim)
+        k_flat = torch.cat([k[b, int(leftpad[b].item()):] for b in range(batch)], dim=0)
+        v_flat = torch.cat([v[b, int(leftpad[b].item()):] for b in range(batch)], dim=0)
+
+        out = flash_attn_varlen_func(
+            q_flat,
+            k_flat,
+            v_flat,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            seqlen_q,
+            seqlen_k,
+            is_causal,
+        )
+        out = out.reshape(batch, seqlen_q, num_heads, head_dim)
+
+        atol = rtol = precision[dtype]
+        torch.testing.assert_close(out_ref, out, atol=atol, rtol=rtol)
+
+    def test_flash_attn_even_mn_branch_excludes_leftpad(self):
+        # Static assertion on the dispatch condition: the even-MN fast path must be
+        # disabled whenever leftpad_k or seqused_k is set, even if seqlen is block aligned.
+        # This mirrors the C++ condition in flash_fwd_launch_template.h.
+        def is_even_mn(cu_seqlens_q, cu_seqlens_k, leftpad_k, seqused_k, seqlen_k, seqlen_q, block_n, block_m):
+            return (
+                cu_seqlens_q is None
+                and cu_seqlens_k is None
+                and leftpad_k is None
+                and seqused_k is None
+                and seqlen_k % block_n == 0
+                and seqlen_q % block_m == 0
+            )
+
+        # Block-aligned shapes with leftpad must NOT take the even-MN path.
+        self.assertFalse(is_even_mn(None, None, object(), None, 256, 128, 128, 64))
+        self.assertFalse(is_even_mn(None, None, None, object(), 256, 128, 128, 64))
+        # Without leftpad/seqused, block-aligned shapes may take the fast path.
+        self.assertTrue(is_even_mn(None, None, None, None, 256, 128, 128, 64))
+        # Non-aligned shapes never take the fast path.
+        self.assertFalse(is_even_mn(None, None, None, None, 255, 128, 128, 64))
+
 
 if __name__ == "__main__":
     unittest.main()
