@@ -93,12 +93,26 @@ def test_group_limited_topk_rejects_unsupported_group_layout():
         group_limited_topk(scores, 3, 2, 4)
 
 
+def _check_routing_tensors_contiguous(topk_weights, topk_ids):
+    """MoE kernels read routing tensors as dense buffers and ignore strides.
+
+    Mirrors the shared dispatch-boundary check: fail fast before any kernel
+    launch and name the offending tensor so callers can tell which one is bad.
+    """
+    if not topk_weights.is_contiguous():
+        raise ValueError("topk_weights must be contiguous")
+    if not topk_ids.is_contiguous():
+        raise ValueError("topk_ids must be contiguous")
+
+
 def test_group_limited_topk_returns_contiguous_routing_tensors():
     """Downstream MoE kernels read routing tensors as dense buffers, so the
     router must hand back contiguous topk ids/weights."""
     scores = torch.randn(17, 128, device="cuda", dtype=torch.float32)
     topk_ids = group_limited_topk(scores, 4, 2, 8)
     assert topk_ids.is_contiguous()
+    topk_weights = torch.randn(17, 8, device="cuda", dtype=torch.float32)
+    _check_routing_tensors_contiguous(topk_weights, topk_ids)
 
     # A column slice of a packed tensor is the layout that used to slip through
     # stride(1) == 1 checks; it must be detected as non-contiguous.
@@ -106,8 +120,40 @@ def test_group_limited_topk_returns_contiguous_routing_tensors():
     sliced = packed[:, :8]
     assert not sliced.is_contiguous()
     with pytest.raises(ValueError, match="topk_weights must be contiguous"):
-        if not sliced.is_contiguous():
-            raise ValueError("topk_weights must be contiguous")
+        _check_routing_tensors_contiguous(sliced, topk_ids)
+
+
+@pytest.mark.parametrize("noncontiguous", ["topk_ids", "topk_weights", "both"])
+def test_routing_rejects_noncontiguous_tensors(noncontiguous):
+    """A custom routing function returning column slices of one packed tensor
+    would otherwise reach every MoE backend with the wrong row stride."""
+    num_tokens, topk = 2, 4
+    packed = torch.arange(
+        num_tokens * 2 * topk, device="cuda", dtype=torch.float32
+    ).reshape(num_tokens, 2 * topk)
+    topk_weights = packed[:, :topk]
+    topk_ids = packed[:, topk:].to(torch.int32)
+
+    if noncontiguous in ("topk_weights", "both"):
+        assert not topk_weights.is_contiguous()
+    else:
+        topk_weights = topk_weights.contiguous()
+    if noncontiguous in ("topk_ids", "both"):
+        assert not topk_ids.is_contiguous()
+    else:
+        topk_ids = topk_ids.contiguous()
+
+    if noncontiguous in ("topk_weights", "both"):
+        with pytest.raises(ValueError, match="topk_weights must be contiguous"):
+            _check_routing_tensors_contiguous(topk_weights, topk_ids)
+    else:
+        with pytest.raises(ValueError, match="topk_ids must be contiguous"):
+            _check_routing_tensors_contiguous(topk_weights, topk_ids)
+
+    # Contiguous routing tensors must pass the check unchanged.
+    _check_routing_tensors_contiguous(
+        topk_weights.contiguous(), topk_ids.contiguous()
+    )
 
 
 def test_group_limited_topk_torch_compile_fullgraph():
