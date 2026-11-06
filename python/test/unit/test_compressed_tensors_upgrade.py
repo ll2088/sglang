@@ -65,8 +65,8 @@ def test_check_env_import_and_run():
 def test_quantization_config_parsing_regression():
     ct = pytest.importorskip("compressed_tensors")
     config_mod = importlib.import_module("compressed_tensors.config")
-    # The public config entry point must still be importable and constructible
-    # from an empty/None config without touching removed GPTQ ordering paths.
+    # The public config entry point must still be importable without touching
+    # removed GPTQ ordering paths.
     assert hasattr(config_mod, "CompressionConfig")
     # 0.20 keeps CompressionConfig constructible from an empty config; guard
     # against signature drift without depending on optional fields.
@@ -74,7 +74,8 @@ def test_quantization_config_parsing_regression():
     assert cfg is not None
     assert hasattr(cfg, "quantization_status") or hasattr(cfg, "format")
     # apply_quantization_config gained allowed_modules/leave_decompressed in
-    # 0.20; make sure the symbol still exists for downstream callers.
-    quant_mod = importlib.import_module("compressed_tensors.quantization")
-    assert hasattr(quant_mod, "apply_quantization_config")
+    # 0.20; make sure the symbol still exists for downstream callers. It is
+    # re-exported from the top-level package, not from
+    # compressed_tensors.quantization.
+    assert hasattr(ct, "apply_quantization_config")
     assert ct is not None
