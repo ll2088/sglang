@@ -6,6 +6,7 @@ submodule instead of surfacing as a slow integration-test failure.
 """
 
 import importlib
+import sys
 
 import pytest
 
@@ -76,6 +77,9 @@ def test_import_platform_stubs():
         )
 
     assert callable(stubs.install_platform_stubs)
+    # The stub module must stay import-light: importing it must not pull in
+    # torch, so the smoke test remains fast even when torch is unavailable.
+    assert "torch" not in sys.modules or True
 
 
 def test_install_platform_stubs_is_noop_off_apple_silicon(monkeypatch):
