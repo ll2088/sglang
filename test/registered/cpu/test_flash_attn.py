@@ -20,7 +20,9 @@ except Exception:  # pragma: no cover - depends on build environment
     flash_attn_varlen_func = None
     _HAS_SGL_KERNEL = False
 
-_HAS_CUDA = torch.cuda.is_available()
+# Avoid initializing CUDA at import time on CPU-only CI runners; the kernel
+# tests are skipped unless both sgl_kernel and CUDA are available.
+_HAS_CUDA = _HAS_SGL_KERNEL and torch.cuda.is_available()
 
 
 def _requires_kernel(test_func):
