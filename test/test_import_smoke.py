@@ -73,6 +73,26 @@ def test_import_platform_stubs():
     assert callable(stubs.install_platform_stubs)
 
 
+def test_install_platform_stubs_is_noop_off_apple_silicon(monkeypatch):
+    """On non-Apple-Silicon hosts the installer must return without side effects.
+
+    This covers the early-return branch of ``install_platform_stubs`` so the
+    import-compat dimension exercises the platform gate on Linux CI as well.
+    """
+    stubs = importlib.import_module("sglang._platform_stubs")
+
+    # Force the platform gate to look like a non-Apple-Silicon host.
+    monkeypatch.setattr(stubs.sys, "platform", "linux")
+    monkeypatch.setattr(stubs.platform, "machine", lambda: "x86_64")
+
+    # Reset the module-level guard so the function actually runs its checks.
+    monkeypatch.setattr(stubs, "_platform_stubs_installed", False)
+
+    # Must not raise and must not flip the installed flag on this platform.
+    stubs.install_platform_stubs()
+    assert stubs._platform_stubs_installed is False
+
+
 _FAILING_MODULE_RE = re.compile(r'File "[^"]*[\\/]([^\\/]+)\.py", line \d+')
 
 
@@ -139,3 +159,20 @@ def test_import_smoke_reports_first_failing_module():
         pytest.fail("probe module unexpectedly importable")
 
     assert failing == "sglang" or failing.startswith("sglang."), failing
+
+
+def test_import_smoke_reports_first_failing_module_from_stderr():
+    """The subprocess helper must name the first sglang frame in a traceback."""
+    stderr = textwrap.dedent(
+        """
+        Traceback (most recent call last):
+          File "/repo/python/sglang/__init__.py", line 10, in <module>
+            from sglang.srt.environ import redirect_third_party_caches
+          File "/repo/python/sglang/srt/environ.py", line 3, in <module>
+            import torch
+        ModuleNotFoundError: No module named 'torch'
+        """
+    )
+    assert _first_failing_module_from_stderr(stderr) == "sglang"
+
+    assert _first_failing_module_from_stderr("") == "<unknown>"
