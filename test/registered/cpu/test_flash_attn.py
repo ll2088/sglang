@@ -475,7 +475,7 @@ class TestFlashAttn(CustomTestCase):
     def test_flash_attn_even_mn_branch_excludes_leftpad(self):
         # Static assertion on the dispatch condition: the even-MN fast path must be
         # disabled whenever leftpad_k or seqused_k is set, even if seqlen is block aligned.
-        # This mirrors the C++ condition in flash_fwd_launch_template.h.
+        # This mirrors the C++ condition in flash_fwd_launch_template.h and runs on CPU.
         is_even_mn = _is_even_mn
 
         # Block-aligned shapes with leftpad must NOT take the even-MN path.
@@ -487,6 +487,62 @@ class TestFlashAttn(CustomTestCase):
         self.assertFalse(is_even_mn(None, None, None, None, 255, 128, 128, 64))
         # Both leftpad and seqused set: still must not take the fast path.
         self.assertFalse(is_even_mn(None, None, object(), object(), 256, 128, 128, 64))
+        # cu_seqlens present: never even-MN regardless of alignment.
+        self.assertFalse(is_even_mn(object(), None, None, None, 256, 128, 128, 64))
+        self.assertFalse(is_even_mn(None, object(), None, None, 256, 128, 128, 64))
+
+    def test_flash_attn_leftpad_reference_semantics_cpu(self):
+        # CPU-only semantic check of the leftpad reference used by the kernel tests:
+        # keys before leftpad[b] must be excluded from the softmax, and the result
+        # must match attention over the sliced valid key range.
+        torch.manual_seed(0)
+        dtype = torch.float32
+        batch, seqlen_q, seqlen_k, num_heads, head_dim = 3, 8, 16, 2, 8
+        leftpad = [31 % seqlen_k, 0, 17 % seqlen_k]
+        q = torch.randn(batch, seqlen_q, num_heads, head_dim, dtype=dtype)
+        k = torch.randn(batch, seqlen_k, num_heads, head_dim, dtype=dtype)
+        v = torch.randn(batch, seqlen_k, num_heads, head_dim, dtype=dtype)
+
+        for b in range(batch):
+            pad = leftpad[b]
+            q_b = q[b].transpose(0, 1).unsqueeze(0)
+            k_b = k[b, pad:].transpose(0, 1).unsqueeze(0)
+            v_b = v[b, pad:].transpose(0, 1).unsqueeze(0)
+            out_sliced = F.scaled_dot_product_attention(q_b, k_b, v_b)
+
+            # Equivalent masked full-length computation.
+            mask = torch.zeros(seqlen_k, dtype=torch.bool)
+            mask[pad:] = True
+            out_masked = F.scaled_dot_product_attention(
+                q_b, k[b].transpose(0, 1).unsqueeze(0), v[b].transpose(0, 1).unsqueeze(0),
+                attn_mask=mask.view(1, 1, 1, seqlen_k),
+            )
+            torch.testing.assert_close(out_sliced, out_masked, atol=1e-5, rtol=1e-5)
+
+    def test_flash_attn_leftpad_with_seqlens_equivalence_cpu(self):
+        # When both leftpad and seqlens are provided, the valid key range is the
+        # same as slicing off leftpad; verify the reference construction agrees.
+        torch.manual_seed(1)
+        dtype = torch.float32
+        batch, seqlen_q, seqlen_k, num_heads, head_dim = 2, 8, 16, 2, 8
+        leftpad = [5, 0]
+        q = torch.randn(batch, seqlen_q, num_heads, head_dim, dtype=dtype)
+        k = torch.randn(batch, seqlen_k, num_heads, head_dim, dtype=dtype)
+        v = torch.randn(batch, seqlen_k, num_heads, head_dim, dtype=dtype)
+
+        for b in range(batch):
+            pad = leftpad[b]
+            q_b = q[b].transpose(0, 1).unsqueeze(0)
+            k_b = k[b, pad:].transpose(0, 1).unsqueeze(0)
+            v_b = v[b, pad:].transpose(0, 1).unsqueeze(0)
+            out_sliced = F.scaled_dot_product_attention(q_b, k_b, v_b)
+
+            # seqlens-only path: cu_seqlens_k encodes seqlen_k - leftpad.
+            seqlen_valid = seqlen_k - pad
+            k_valid = k[b, seqlen_k - seqlen_valid:].transpose(0, 1).unsqueeze(0)
+            v_valid = v[b, seqlen_k - seqlen_valid:].transpose(0, 1).unsqueeze(0)
+            out_seqlens = F.scaled_dot_product_attention(q_b, k_valid, v_valid)
+            torch.testing.assert_close(out_sliced, out_seqlens, atol=1e-5, rtol=1e-5)
 
 
 if __name__ == "__main__":
