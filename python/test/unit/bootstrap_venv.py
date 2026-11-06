@@ -77,10 +77,17 @@ def _supported_python():
     env_python = os.environ.get("PYTHON")
     if env_python:
         candidates.append(env_python)
+    # Probe PATH for a supported interpreter. shutil.which returns the first
+    # match, so probe each minor explicitly and keep the first supported one.
     for minor in (13, 12, 11):
         found = shutil.which(f"python3.{minor}")
         if found:
             candidates.append(found)
+    # Also consider the unversioned python3 only if it is in range; this is
+    # validated below like every other candidate.
+    found_python3 = shutil.which("python3")
+    if found_python3:
+        candidates.append(found_python3)
     # Only fall back to the current interpreter when it is itself supported;
     # otherwise a system Python 3.14 would be selected and resolve cp314
     # wheels. The explicit failure below is preferable to that.
@@ -115,11 +122,15 @@ def _ensure_venv():
         # (e.g. a system Python 3.14); rebuild it instead of reusing it.
         # Check both the venv interpreter and the base interpreter recorded in
         # pyvenv.cfg, since a venv can report a supported version while its
-        # base (and thus pip's wheel tags) is not.
+        # base (and thus pip's wheel tags) is not. Also resolve the venv
+        # interpreter symlink target so a link to system Python 3.14 is caught.
         venv_version = _python_version(os.fspath(python))
         base_version = _venv_base_version()
-        if _is_supported(venv_version) and (
-            base_version is None or _is_supported(base_version)
+        resolved_version = _python_version(os.path.realpath(os.fspath(python)))
+        if (
+            _is_supported(venv_version)
+            and (base_version is None or _is_supported(base_version))
+            and (resolved_version is None or _is_supported(resolved_version))
         ):
             print(
                 f"reusing virtualenv at {VENV_DIR} with {python} "
@@ -130,7 +141,8 @@ def _ensure_venv():
             return python
         print(
             f"existing virtualenv at {VENV_DIR} uses an unsupported Python "
-            f"(venv={venv_version}, base={base_version}); recreating it",
+            f"(venv={venv_version}, base={base_version}, "
+            f"resolved={resolved_version}); recreating it",
             flush=True,
         )
         shutil.rmtree(VENV_DIR)
@@ -145,6 +157,20 @@ def _ensure_venv():
     )
     if not python.exists():
         raise SystemExit(f"virtualenv creation did not produce {python}")
+    # Validate the freshly created venv interpreter before returning it, so a
+    # broken symlink or an unexpected base interpreter fails here rather than
+    # during pip resolution.
+    created_version = _python_version(os.fspath(python))
+    if not _is_supported(created_version):
+        shown = (
+            "unknown"
+            if created_version is None
+            else f"{created_version[0]}.{created_version[1]}"
+        )
+        raise SystemExit(
+            f"virtualenv at {VENV_DIR} was created with an unsupported "
+            f"Python ({shown}); expected 3.11-3.13"
+        )
     return python
 
 
@@ -286,6 +312,16 @@ def main():
             "-c",
             "import sys; assert (3, 11) <= sys.version_info[:2] < (3, 14), "
             "sys.version; print(sys.executable, sys.version.split()[0])",
+        ],
+    )
+    # Print the interpreter that will receive the editable install, so CI logs
+    # make it obvious that the system Python 3.14 did not leak in.
+    _run(
+        python,
+        [
+            "-c",
+            "import sys; print('install interpreter:', sys.executable, "
+            "sys.version.split()[0])",
         ],
     )
     # Editable install of the project; the pin in python/pyproject.toml decides
