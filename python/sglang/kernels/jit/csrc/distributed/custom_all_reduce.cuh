@@ -77,6 +77,11 @@ struct LoadStoreImpl {
   static constexpr uint32_t size() {
     return kWorldSize;
   }
+  // Read the rank pointers in absolute rank order (0..kWorldSize-1), the same
+  // order the 1-stage kernels accumulate in. The 2-stage reduce-scatter still
+  // assigns chunk c to rank c via `vec_offset`, so only the accumulation order
+  // is fixed here; rotating the pointers would make the partial sums depend on
+  // the owning rank and break bitwise agreement with the 1-stage kernels.
   SGL_DEVICE LoadStoreImpl(const AllReducePullParams<kWorldSize>& params, uint32_t vec_offset = 0) {
     if constexpr (kUseGraph) {
 #pragma unroll
