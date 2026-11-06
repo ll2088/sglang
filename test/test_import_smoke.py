@@ -286,7 +286,22 @@ def test_import_smoke_reports_nested_sglang_submodule():
         ModuleNotFoundError: No module named 'torch'
         """
     )
+    # The first sglang frame is the package __init__; the helper must not
+    # skip past it to a deeper frame, so the reported name stays stable.
     assert _first_failing_module_from_stderr(stderr) == "sglang"
+
+    nested = textwrap.dedent(
+        """
+        Traceback (most recent call last):
+          File "/repo/python/sglang/srt/utils/hf_transformers_patches.py", line 5, in <module>
+            import transformers
+        ModuleNotFoundError: No module named 'transformers'
+        """
+    )
+    assert (
+        _first_failing_module_from_stderr(nested)
+        == "sglang.srt.utils.hf_transformers_patches"
+    )
 
 
 def test_import_smoke_reports_non_sglang_frame_fallback():
@@ -299,4 +314,5 @@ def test_import_smoke_reports_non_sglang_frame_fallback():
         ImportError: cannot import name '_C'
         """
     )
+    # No sglang frame exists, so the helper falls back to the last file seen.
     assert _first_failing_module_from_stderr(stderr) == "__init__"
