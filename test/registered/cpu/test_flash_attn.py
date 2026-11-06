@@ -493,7 +493,8 @@ class TestFlashAttn(CustomTestCase):
     def test_flash_attn_even_mn_branch_excludes_leftpad(self):
         # Static assertion on the dispatch condition: the even-MN fast path must be
         # disabled whenever leftpad_k or seqused_k is set, even if seqlen is block aligned.
-        # This mirrors the C++ condition in flash_fwd_launch_template.h and runs on CPU.
+        # This mirrors the C++ condition in flash_fwd_launch_template.h and runs on CPU
+        # without requiring sgl_kernel or CUDA.
         is_even_mn = _is_even_mn
 
         # Block-aligned shapes with leftpad must NOT take the even-MN path.
