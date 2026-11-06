@@ -13,6 +13,7 @@ It is intentionally dependency-free and does not import sglang or torch.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import venv
@@ -29,33 +30,52 @@ def _venv_python():
     return VENV_DIR / "bin" / "python"
 
 
+def _python_version(candidate):
+    """Return (major, minor) for an interpreter, or None if unusable."""
+    try:
+        result = subprocess.run(
+            [
+                candidate,
+                "-c",
+                "import sys; print('%d.%d' % sys.version_info[:2])",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    try:
+        major, minor = (int(part) for part in result.stdout.strip().split("."))
+    except ValueError:
+        return None
+    return major, minor
+
+
+def _is_supported(version):
+    return version is not None and (3, 11) <= version < (3, 14)
+
+
 def _supported_python():
     # The interpreter running this script may be too new (e.g. 3.14) for the
-    # pinned torch/transformers wheels. Prefer an explicit override, then the
-    # current interpreter if supported, then any supported python3.x on PATH.
+    # pinned torch/transformers wheels. Prefer an explicit override, then any
+    # supported python3.x on PATH, and only then the current interpreter.
     override = os.environ.get("SGLANG_BOOTSTRAP_PYTHON")
     candidates = []
     if override:
         candidates.append(override)
-    candidates.append(sys.executable)
     for minor in (13, 12, 11):
-        candidates.append(f"python3.{minor}")
+        found = shutil.which(f"python3.{minor}")
+        if found:
+            candidates.append(found)
+    candidates.append(sys.executable)
     for candidate in candidates:
-        try:
-            result = subprocess.run(
-                [
-                    candidate,
-                    "-c",
-                    "import sys; print('%d.%d' % sys.version_info[:2])",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
+        version = _python_version(candidate)
+        if _is_supported(version):
+            print(
+                f"selected {candidate} (Python {version[0]}.{version[1]})",
+                flush=True,
             )
-        except (OSError, subprocess.CalledProcessError):
-            continue
-        major, minor = (int(part) for part in result.stdout.strip().split("."))
-        if (major, minor) >= (3, 11) and (major, minor) < (3, 14):
             return candidate
     raise SystemExit(
         "no supported Python (3.11-3.13) found for the venv; install one "
@@ -66,7 +86,16 @@ def _supported_python():
 def _ensure_venv():
     python = _venv_python()
     if python.exists():
-        return python
+        # A stale .venv may have been created from an unsupported interpreter
+        # (e.g. a system Python 3.14); rebuild it instead of reusing it.
+        if _is_supported(_python_version(os.fspath(python))):
+            return python
+        print(
+            f"existing virtualenv at {VENV_DIR} uses an unsupported Python; "
+            "recreating it",
+            flush=True,
+        )
+        shutil.rmtree(VENV_DIR)
     base_python = _supported_python()
     print(f"creating virtualenv at {VENV_DIR} with {base_python}", flush=True)
     # Use the supported interpreter explicitly instead of the one running this
@@ -104,21 +133,16 @@ def _check_python_version(python):
     # clear message instead of letting pip resolve against an older runtime.
     # Upper bound: the pinned torch/transformers wheels in this repo are not
     # published for Python 3.14, so reject it before pip starts resolving.
-    result = subprocess.run(
-        [os.fspath(python), "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    major, minor = (int(part) for part in result.stdout.strip().split("."))
-    if (major, minor) < (3, 11) or (major, minor) >= (3, 14):
+    version = _python_version(os.fspath(python))
+    if not _is_supported(version):
+        shown = "unknown" if version is None else f"{version[0]}.{version[1]}"
         raise SystemExit(
             f"compressed-tensors 0.20.x requires Python >= 3.11 and the "
             f"pinned torch/transformers wheels require Python < 3.14, "
-            f"but {python} is {major}.{minor}; create the venv with a "
+            f"but {python} is {shown}; create the venv with a "
             "Python 3.11-3.13 interpreter (e.g. python3.12 -m venv .venv)"
         )
-    print(f"using Python {major}.{minor} at {python}", flush=True)
+    print(f"using Python {version[0]}.{version[1]} at {python}", flush=True)
 
 
 def _check_compressed_tensors_version(python):
