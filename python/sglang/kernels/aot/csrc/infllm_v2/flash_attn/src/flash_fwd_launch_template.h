@@ -122,7 +122,9 @@ void run_flash_fwd(Flash_fwd_params& params, cudaStream_t stream) {
 
   const int num_m_block = (params.seqlen_q + Kernel_traits::kBlockM - 1) / Kernel_traits::kBlockM;
   dim3 grid(num_m_block, params.b, params.h);
+  // leftpad_k and seqused_k change each batch's actual_seqlen_k (see BlockInfo) even without cu_seqlens_k.
   const bool is_even_MN = params.cu_seqlens_q == nullptr && params.cu_seqlens_k == nullptr &&
+                          params.leftpad_k == nullptr && params.seqused_k == nullptr &&
                           params.seqlen_k % Kernel_traits::kBlockN == 0 &&
                           params.seqlen_q % Kernel_traits::kBlockM == 0;
   const bool is_even_K = params.d == Kernel_traits::kHeadDim;
@@ -182,7 +184,9 @@ void run_flash_splitkv_fwd(Flash_fwd_params& params, cudaStream_t stream) {
       num_m_block,
       params.num_splits > 1 ? params.num_splits : params.b,
       params.num_splits > 1 ? params.b * params.h : params.h);
+  // leftpad_k and seqused_k change each batch's actual_seqlen_k (see BlockInfo) even without cu_seqlens_k.
   const bool is_even_MN = params.cu_seqlens_q == nullptr && params.cu_seqlens_k == nullptr &&
+                          params.leftpad_k == nullptr && params.seqused_k == nullptr &&
                           params.seqlen_k % Kernel_traits::kBlockN == 0 &&
                           params.seqlen_q % Kernel_traits::kBlockM == 0;
   const bool is_even_K = params.d == Kernel_traits::kHeadDim;
@@ -264,7 +268,9 @@ void run_flash_splitkv_fwd_stage1(Flash_fwd_params& params, cudaStream_t stream)
       num_m_block,
       params.num_splits > 1 ? params.num_splits : params.b,
       params.num_splits > 1 ? params.b * params.h : params.h);
+  // leftpad_k and seqused_k change each batch's actual_seqlen_k (see BlockInfo) even without cu_seqlens_k.
   const bool is_even_MN = params.cu_seqlens_q == nullptr && params.cu_seqlens_k == nullptr &&
+                          params.leftpad_k == nullptr && params.seqused_k == nullptr &&
                           params.seqlen_k % Kernel_traits::kBlockN == 0 &&
                           params.seqlen_q % Kernel_traits::kBlockM == 0;
   const bool is_even_K = params.d == Kernel_traits::kHeadDim;

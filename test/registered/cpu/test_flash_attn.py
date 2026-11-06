@@ -239,6 +239,75 @@ class TestFlashAttn(CustomTestCase):
         # returns True → dispatches to flash_attn_varlen_kernel_impl
         self._test_flash_attn_large_seq_causal_mask_once([5000, 4999])
 
+    @parametrize(
+        batch=[3],
+        seqlen_q=[128, 256],
+        seqlen_k=[256, 512],
+        num_heads=[2],
+        num_heads_kv=[2],
+        head_dim=[64, 128],
+        is_causal=[True, False],
+    )
+    def test_flash_attn_leftpad_no_seqlens(
+        self,
+        batch,
+        seqlen_q,
+        seqlen_k,
+        num_heads,
+        num_heads_kv,
+        head_dim,
+        is_causal,
+    ):
+        # Regression test for the even-MN fast path: when only leftpad is given
+        # (no per-sequence seqlens), seqlen_k - leftpad[b] need not be block aligned,
+        # so the kernel must not skip masking the last key block.
+        dtype = torch.bfloat16
+        leftpad = torch.tensor([31, 0, 17][:batch], dtype=torch.int32)
+
+        q = torch.randn(batch, seqlen_q, num_heads, head_dim, dtype=dtype)
+        k = torch.randn(batch, seqlen_k, num_heads_kv, head_dim, dtype=dtype)
+        v = torch.randn(batch, seqlen_k, num_heads_kv, head_dim, dtype=dtype)
+
+        # Reference: per-sequence attention over the valid (non-leftpad) key range.
+        out_ref = torch.empty(batch, seqlen_q, num_heads, head_dim, dtype=dtype)
+        for b in range(batch):
+            pad = int(leftpad[b].item())
+            k_b = k[b, pad:]
+            v_b = v[b, pad:]
+            q_b = q[b].transpose(0, 1).unsqueeze(0)  # [1, H, Sq, D]
+            k_b = k_b.transpose(0, 1).unsqueeze(0)  # [1, H, Sk, D]
+            v_b = v_b.transpose(0, 1).unsqueeze(0)
+            out_b = F.scaled_dot_product_attention(
+                q_b, k_b, v_b, is_causal=is_causal, enable_gqa=num_heads != num_heads_kv
+            )
+            out_ref[b] = out_b.squeeze(0).transpose(0, 1)
+
+        # Flatten to varlen layout with cu_seqlens_k encoding the leftpad offset,
+        # which exercises the same BlockInfo actual_seqlen_k path as leftpad_k.
+        cu_seqlens_q = torch.arange(0, (batch + 1) * seqlen_q, seqlen_q, dtype=torch.int32)
+        cu_seqlens_k = torch.zeros(batch + 1, dtype=torch.int32)
+        for b in range(batch):
+            cu_seqlens_k[b + 1] = cu_seqlens_k[b] + seqlen_k - int(leftpad[b].item())
+
+        q_flat = q.reshape(batch * seqlen_q, num_heads, head_dim)
+        k_flat = torch.cat([k[b, int(leftpad[b].item()):] for b in range(batch)], dim=0)
+        v_flat = torch.cat([v[b, int(leftpad[b].item()):] for b in range(batch)], dim=0)
+
+        out = flash_attn_varlen_func(
+            q_flat,
+            k_flat,
+            v_flat,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            seqlen_q,
+            seqlen_k,
+            is_causal,
+        )
+        out = out.reshape(batch, seqlen_q, num_heads, head_dim)
+
+        atol = rtol = precision[dtype]
+        torch.testing.assert_close(out_ref, out, atol=atol, rtol=rtol)
+
 
 if __name__ == "__main__":
     unittest.main()
