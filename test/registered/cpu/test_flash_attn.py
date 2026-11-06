@@ -20,6 +20,13 @@ except Exception:  # pragma: no cover - depends on build environment
     flash_attn_varlen_func = None
     _HAS_SGL_KERNEL = False
 
+# Keep the module importable on CPU-only CI runners: never touch CUDA at import
+# time, and only resolve the kernel op lazily inside tests that need it.
+def _get_flash_attn_varlen_func():
+    if not _HAS_SGL_KERNEL:
+        raise unittest.SkipTest("requires sgl_kernel with CUDA support")
+    return flash_attn_varlen_func
+
 # The even-MN dispatch condition is a pure-Python predicate mirroring
 # flash_fwd_launch_template.h; it must stay importable without sgl_kernel/CUDA.
 def _is_even_mn(cu_seqlens_q, cu_seqlens_k, leftpad_k, seqused_k, seqlen_k, seqlen_q, block_n, block_m):
@@ -161,7 +168,7 @@ class TestFlashAttn(CustomTestCase):
             enable_gqa=num_heads != num_heads_kv,
         )
 
-        out = flash_attn_varlen_func(
+        out = _get_flash_attn_varlen_func()(
             q,
             k,
             v,
@@ -225,7 +232,7 @@ class TestFlashAttn(CustomTestCase):
             enable_gqa=num_heads != num_heads_kv,
         )
 
-        out = flash_attn_varlen_func(
+        out = _get_flash_attn_varlen_func()(
             q,
             k,
             v,
@@ -258,7 +265,7 @@ class TestFlashAttn(CustomTestCase):
         out_ref = flash_attn_varlen_ref(
             q, k, v, cu_seqlens, cu_seqlens, is_causal=True, enable_gqa=True
         )
-        out = flash_attn_varlen_func(
+        out = _get_flash_attn_varlen_func()(
             q, k, v, cu_seqlens, cu_seqlens, max_seqlen, max_seqlen, True
         )
 
@@ -329,7 +336,7 @@ class TestFlashAttn(CustomTestCase):
         k_flat = torch.cat([k[b, int(leftpad[b].item()):] for b in range(batch)], dim=0)
         v_flat = torch.cat([v[b, int(leftpad[b].item()):] for b in range(batch)], dim=0)
 
-        out = flash_attn_varlen_func(
+        out = _get_flash_attn_varlen_func()(
             q_flat,
             k_flat,
             v_flat,
@@ -382,7 +389,7 @@ class TestFlashAttn(CustomTestCase):
         k_flat = torch.cat([k[b, int(leftpad[b].item()):] for b in range(batch)], dim=0)
         v_flat = torch.cat([v[b, int(leftpad[b].item()):] for b in range(batch)], dim=0)
 
-        out = flash_attn_varlen_func(
+        out = _get_flash_attn_varlen_func()(
             q_flat,
             k_flat,
             v_flat,
@@ -457,7 +464,7 @@ class TestFlashAttn(CustomTestCase):
         k_flat = torch.cat([k[b, int(leftpad[b].item()):] for b in range(batch)], dim=0)
         v_flat = torch.cat([v[b, int(leftpad[b].item()):] for b in range(batch)], dim=0)
 
-        out = flash_attn_varlen_func(
+        out = _get_flash_attn_varlen_func()(
             q_flat,
             k_flat,
             v_flat,
