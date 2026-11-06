@@ -75,16 +75,3 @@ def test_blobfile_read_write_roundtrip():
         with bf.BlobFile(path, "rb") as f:
             assert f.read() == payload
         assert bf.exists(path)
-
-
-def test_blobfile_read_write_roundtrip():
-    bf = pytest.importorskip("blobfile")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        path = os.path.join(tmpdir, "sample.bin")
-        payload = b"blobfile-compat-check"
-        with bf.BlobFile(path, "wb") as f:
-            f.write(payload)
-        with bf.BlobFile(path, "rb") as f:
-            assert f.read() == payload
-        assert bf.exists(path)
