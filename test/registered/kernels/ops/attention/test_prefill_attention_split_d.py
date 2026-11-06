@@ -7,12 +7,15 @@ The non-gfx1151 path must stay bit-identical to the single-block kernel.
 """
 
 import unittest
+from unittest import mock
 
 import torch
 
 from sglang.kernels.ops.attention import prefill_attention as prefill_ops
 from sglang.kernels.ops.attention.prefill_attention import context_attention_fwd
 from sglang.test.test_utils import CustomTestCase
+
+_CUDA_AVAILABLE = torch.cuda.is_available()
 
 
 class _LaunchCapture:
@@ -73,6 +76,7 @@ class TestPrefillAttentionSplitD(CustomTestCase):
         ref = _ref_attention(q, k, v, b_start_loc, b_seq_len, True, sm_scale)
         return o, ref
 
+    @unittest.skipUnless(_CUDA_AVAILABLE, "requires a CUDA/HIP device")
     def test_split_d_matches_reference(self):
         # 72 -> 64 + 16 exercises the tail block; 128 stays single-block.
         for head_dim in (72, 80, 96, 128):
@@ -80,6 +84,7 @@ class TestPrefillAttentionSplitD(CustomTestCase):
                 out, ref = self._run(head_dim)
                 torch.testing.assert_close(out, ref, rtol=2e-2, atol=2e-2)
 
+    @unittest.skipUnless(_CUDA_AVAILABLE, "requires a CUDA/HIP device")
     def test_non_contiguous_head_stride_falls_back(self):
         # A padded head axis gives a stride the alignment hint cannot claim.
         torch.manual_seed(1)
@@ -100,23 +105,60 @@ class TestPrefillAttentionSplitD(CustomTestCase):
         ref = _ref_attention(q, k, v, b_start_loc, b_seq_len, True, sm_scale)
         torch.testing.assert_close(o, ref, rtol=2e-2, atol=2e-2)
 
-    def test_launch_config_guarded(self):
-        # Without the gfx1151 guard the launch must be the stock single block.
+    def _capture_launch(self, *, on_gfx1151, head_dim=72, head_stride_pad=0):
         capture = _LaunchCapture()
         original = prefill_ops._fwd_kernel
         prefill_ops._fwd_kernel = capture
         try:
-            q = torch.empty((64, 8, 72), dtype=torch.bfloat16, device="meta")
-            k = torch.empty((64, 2, 72), dtype=torch.bfloat16, device="meta")
-            v = torch.empty((64, 2, 72), dtype=torch.bfloat16, device="meta")
-            o = torch.empty((64, 8, 72), dtype=torch.bfloat16, device="meta")
-            seq_lens = torch.empty(2, dtype=torch.int32, device="meta")
-            context_attention_fwd(q, k, v, o, seq_lens, seq_lens, 64)
+            with mock.patch.object(
+                prefill_ops, "_on_gfx1151", return_value=on_gfx1151
+            ):
+                def meta(tokens, heads, dim):
+                    wide = torch.empty(
+                        (tokens, heads, dim + head_stride_pad),
+                        dtype=torch.bfloat16,
+                        device="meta",
+                    )
+                    return wide[..., :dim]
+
+                seq_lens = torch.empty(2, dtype=torch.int32, device="meta")
+                context_attention_fwd(
+                    meta(64, 8, head_dim),
+                    meta(64, 2, head_dim),
+                    meta(64, 2, head_dim),
+                    meta(64, 8, head_dim),
+                    seq_lens,
+                    seq_lens,
+                    64,
+                )
         finally:
             prefill_ops._fwd_kernel = original
+        return capture
+
+    def test_launch_config_guarded(self):
+        # Without the gfx1151 guard the launch must be the stock single block.
+        capture = self._capture_launch(on_gfx1151=False)
         self.assertEqual(capture.kwargs["BLOCK_DMODEL"], 128)
         self.assertEqual(capture.kwargs["BLOCK_DMODEL_TAIL"], 0)
         self.assertFalse(capture.kwargs["HEAD_STRIDE_ALIGNED_8"])
+        self.assertEqual(capture.kwargs["BLOCK_N"], 128)
+
+    def test_launch_config_split_d_on_gfx1151(self):
+        # With the guard on and aligned strides, 72 -> 64 + 16 and BLOCK_N=16.
+        capture = self._capture_launch(on_gfx1151=True)
+        self.assertEqual(capture.kwargs["BLOCK_DMODEL"], 64)
+        self.assertEqual(capture.kwargs["BLOCK_DMODEL_TAIL"], 16)
+        self.assertTrue(capture.kwargs["HEAD_STRIDE_ALIGNED_8"])
+        self.assertEqual(capture.kwargs["BLOCK_N"], 16)
+        self.assertEqual(capture.kwargs["num_warps"], 4)
+
+    def test_launch_config_unaligned_stride_falls_back(self):
+        # A padded head axis must disable the hint and the narrow tile.
+        capture = self._capture_launch(on_gfx1151=True, head_stride_pad=8)
+        self.assertEqual(capture.kwargs["BLOCK_DMODEL"], 64)
+        self.assertEqual(capture.kwargs["BLOCK_DMODEL_TAIL"], 16)
+        self.assertFalse(capture.kwargs["HEAD_STRIDE_ALIGNED_8"])
+        self.assertEqual(capture.kwargs["BLOCK_N"], 128)
 
 
 if __name__ == "__main__":
