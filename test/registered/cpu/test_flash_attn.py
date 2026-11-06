@@ -51,6 +51,14 @@ def _requires_kernel(test_func):
         "requires sgl_kernel with CUDA support",
     )(test_func)
 
+
+def _requires_cuda(test_func):
+    """Skip tests that need CUDA tensors, independent of sgl_kernel availability."""
+    return unittest.skipUnless(
+        torch.cuda.is_available(),
+        "requires CUDA",
+    )(test_func)
+
 torch.manual_seed(1234)
 
 
@@ -282,6 +290,7 @@ class TestFlashAttn(CustomTestCase):
         self._test_flash_attn_large_seq_causal_mask_once([5000, 4999])
 
     @_requires_kernel
+    @_requires_cuda
     @parametrize(
         batch=[3],
         seqlen_q=[128, 256],
@@ -352,6 +361,7 @@ class TestFlashAttn(CustomTestCase):
         torch.testing.assert_close(out_ref, out, atol=atol, rtol=rtol)
 
     @_requires_kernel
+    @_requires_cuda
     @parametrize(
         batch=[3],
         seqlen_q=[128, 256],
@@ -417,6 +427,7 @@ class TestFlashAttn(CustomTestCase):
         torch.testing.assert_close(out_ref, out, atol=atol, rtol=rtol)
 
     @_requires_kernel
+    @_requires_cuda
     @parametrize(
         batch=[2],
         seqlen_q=[127, 255],
