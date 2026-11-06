@@ -61,6 +61,9 @@ def _supported_python():
     # The interpreter running this script may be too new (e.g. 3.14) for the
     # pinned torch/transformers wheels. Prefer an explicit override, then any
     # supported python3.x on PATH, and only then the current interpreter.
+    # The current interpreter is only a last resort: if it is outside the
+    # supported range the loop below rejects it and we fail loudly instead of
+    # letting pip resolve cp314 wheels.
     override = os.environ.get("SGLANG_BOOTSTRAP_PYTHON")
     candidates = []
     if override:
@@ -98,6 +101,12 @@ def _ensure_venv():
         # A stale .venv may have been created from an unsupported interpreter
         # (e.g. a system Python 3.14); rebuild it instead of reusing it.
         if _is_supported(_python_version(os.fspath(python))):
+            print(
+                f"reusing virtualenv at {VENV_DIR} with {python} "
+                f"(Python {_python_version(os.fspath(python))[0]}."
+                f"{_python_version(os.fspath(python))[1]})",
+                flush=True,
+            )
             return python
         print(
             f"existing virtualenv at {VENV_DIR} uses an unsupported Python; "
@@ -217,6 +226,10 @@ def main():
     # Re-check the venv interpreter: a venv created from a different base
     # interpreter (e.g. a stale .venv) must not bypass the version gate.
     _check_python_version(python)
+    # Print the interpreter that will receive the install before any pip
+    # command runs, so CI logs make it obvious that the system Python 3.14
+    # did not leak in.
+    print(f"venv interpreter: {python}", flush=True)
     # Print the interpreter that will receive the install so CI logs make it
     # obvious whether the system interpreter leaked in.
     _run(python, ["-c", "import sys; print(sys.executable)"])
