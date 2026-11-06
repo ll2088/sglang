@@ -19,7 +19,14 @@ PYTHON_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 def _config_files_with_blobfile():
     files = [os.path.join(PYTHON_DIR, "setup.py"), os.path.join(PYTHON_DIR, "pyproject.toml")]
     files.extend(sorted(glob.glob(os.path.join(PYTHON_DIR, "pyproject_*.toml"))))
-    return [f for f in files if os.path.isfile(f) and "blobfile" in open(f, encoding="utf-8").read()]
+    result = []
+    for path in files:
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            if "blobfile" in f.read():
+                result.append(path)
+    return result
 
 
 def test_blobfile_version_is_330():
@@ -31,7 +38,8 @@ def test_blobfile_constraints_consistent():
     assert files, "no config file declares blobfile"
     bad = []
     for path in files:
-        text = open(path, encoding="utf-8").read()
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
         if not re.search(r"blobfile[^\n]*3\.3\.0", text):
             bad.append(path)
     assert not bad, f"inconsistent blobfile constraints: {bad}"
