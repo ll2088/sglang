@@ -233,18 +233,27 @@ def _assert_no_cp314_wheels(python):
             os.fspath(python),
             "-c",
             "import sysconfig; print(sysconfig.get_platform()); "
-            "print(sysconfig.get_config_var('SOABI') or '')",
+            "print(sysconfig.get_config_var('SOABI') or ''); "
+            "print(sysconfig.get_config_var('EXT_SUFFIX') or '')",
         ],
         check=True,
         capture_output=True,
         text=True,
     )
-    soabi = result.stdout.strip().splitlines()[-1]
-    if "cp314" in soabi:
-        raise SystemExit(
-            f"refusing to install with {python}: interpreter reports {soabi}, "
-            "which would resolve cp314 wheels; use Python 3.11-3.13"
-        )
+    lines = result.stdout.strip().splitlines()
+    soabi = lines[-2] if len(lines) >= 2 else ""
+    ext_suffix = lines[-1] if lines else ""
+    # Reject any interpreter whose ABI tag is cp314 or newer: the pinned
+    # torch/transformers wheels stop at cp313, so resolving under cp314 would
+    # download incompatible artifacts (e.g. pybase64-*-cp314, regex-*-cp314).
+    for tag in (soabi, ext_suffix):
+        match = re.search(r"cp3(\d+)", tag)
+        if match and int(match.group(1)) >= 14:
+            raise SystemExit(
+                f"refusing to install with {python}: interpreter reports "
+                f"{tag}, which would resolve cp3{match.group(1)} wheels; "
+                "use Python 3.11-3.13"
+            )
 
 
 def _check_python_version(python):
@@ -326,6 +335,11 @@ def main():
             "selected for the venv",
             flush=True,
         )
+    # Refuse to run the install with an interpreter whose ABI tag would
+    # resolve cp314 wheels. This is checked on the invoking interpreter too,
+    # so a CI setup that bypasses the venv still fails loudly instead of
+    # silently downloading incompatible wheels.
+    _assert_no_cp314_wheels(sys.executable)
     python = _ensure_venv()
     # Re-check the venv interpreter: a venv created from a different base
     # interpreter (e.g. a stale .venv) must not bypass the version gate.

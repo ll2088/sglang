@@ -24,6 +24,14 @@ EXTRA_FILES = ["setup.py"]
 PIN_RE = re.compile(r'"compressed-tensors==([0-9][^"]*)"')
 
 
+def _line_numbers(text, needle):
+    return [
+        index
+        for index, line in enumerate(text.splitlines(), start=1)
+        if needle in line
+    ]
+
+
 def main():
     failures = []
     for name in VARIANT_FILES:
@@ -35,19 +43,20 @@ def main():
         pins = set(PIN_RE.findall(text))
         if pins != {EXPECTED}:
             failures.append(f"{name}: pins {sorted(pins)} != ['{EXPECTED}']")
-        if "compressed-tensors==0.18.0" in text:
-            failures.append(f"{name}: stale 0.18.0 pin")
+        for line_no in _line_numbers(text, "compressed-tensors==0.18.0"):
+            failures.append(f"{name}:{line_no}: stale 0.18.0 pin")
     for path in PYTHON_DIR.glob("pyproject*.toml"):
-        if "compressed-tensors==0.18.0" in path.read_text(encoding="utf-8"):
-            failures.append(f"{path.name}: stale 0.18.0 pin")
+        text = path.read_text(encoding="utf-8")
+        for line_no in _line_numbers(text, "compressed-tensors==0.18.0"):
+            failures.append(f"{path.name}:{line_no}: stale 0.18.0 pin")
     for name in EXTRA_FILES:
         path = PYTHON_DIR / name
         if not path.is_file():
             failures.append(f"{name}: missing")
             continue
         text = path.read_text(encoding="utf-8")
-        if "compressed-tensors==0.18.0" in text:
-            failures.append(f"{name}: stale 0.18.0 pin")
+        for line_no in _line_numbers(text, "compressed-tensors==0.18.0"):
+            failures.append(f"{name}:{line_no}: stale 0.18.0 pin")
         pins = set(PIN_RE.findall(text))
         if pins and pins != {EXPECTED}:
             failures.append(f"{name}: pins {sorted(pins)} != ['{EXPECTED}']")
