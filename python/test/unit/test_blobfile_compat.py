@@ -30,11 +30,13 @@ def _config_files_with_blobfile():
 
 
 def test_blobfile_version_is_330():
+    bf = pytest.importorskip("blobfile")
     try:
         version = importlib.metadata.version("blobfile")
     except importlib.metadata.PackageNotFoundError:
-        pytest.skip("blobfile is not installed in this environment")
-    assert version == "3.3.0"
+        version = getattr(bf, "__version__", None)
+    assert version is not None, "cannot determine installed blobfile version"
+    assert version == "3.3.0", f"expected blobfile 3.3.0, found {version}"
 
 
 def test_blobfile_constraints_consistent():
@@ -47,6 +49,12 @@ def test_blobfile_constraints_consistent():
         if not re.search(r"blobfile[^\n]*3\.3\.0", text):
             bad.append(path)
     assert not bad, f"inconsistent blobfile constraints: {bad}"
+
+
+def test_blobfile_import_smoke():
+    pytest.importorskip("blobfile")
+    import sglang  # noqa: F401
+    import sglang.check_env  # noqa: F401
 
 
 def test_blobfile_read_write_roundtrip():
