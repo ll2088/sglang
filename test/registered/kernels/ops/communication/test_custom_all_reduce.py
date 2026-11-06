@@ -322,6 +322,26 @@ def test_two_stage_matches_one_stage_bitwise(
     )
 
 
+def test_aot_two_stage_reads_absolute_rank_order() -> None:
+    """Static guard: the AOT 2-stage kernel must read peer pointers in
+    absolute rank order, matching the JIT kernel and the 1-stage kernel.
+
+    This is a source-level check because the AOT kernel is compiled into the
+    extension and cannot be selected at runtime from this test process.
+    """
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[5]
+    aot = root / "python/sglang/kernels/aot/csrc/allreduce/custom_all_reduce.cuh"
+    jit = root / "python/sglang/kernels/jit/csrc/distributed/custom_all_reduce.cuh"
+    for path in (aot, jit):
+        src = path.read_text()
+        assert "ptrs[i] = (const P*)_dp->ptrs[i];" in src, path
+        assert "ptrs[i] = (const P*)_dp->ptrs[target];" not in src, path
+        # tmps must keep the rotation for stage 2.
+        assert "tmps[i] = get_tmp_buf<P>(sg.signals[target]);" in src, path
+
+
 def _eager_all_reduce(comm: CustomAllReduceV2, x: torch.Tensor) -> torch.Tensor:
     outs = []
     for row in x.clone():
