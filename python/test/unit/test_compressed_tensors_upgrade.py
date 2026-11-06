@@ -14,9 +14,10 @@ import pytest
 PYTHON_DIR = Path(__file__).resolve().parents[2]
 
 # Files that declare the compressed-tensors pin for an install variant.
-# python/pyproject.toml is intentionally excluded from the consistency check
-# below because it is managed separately; it is still scanned for stale pins.
+# Every variant, including the default python/pyproject.toml, must agree on
+# the exact pin so that no install path silently resolves an older release.
 VARIANT_FILES = [
+    "pyproject.toml",
     "pyproject_cpu.toml",
     "pyproject_npu.toml",
     "pyproject_xpu.toml",
@@ -57,6 +58,8 @@ def test_variant_pins_are_consistent():
         matches = PIN_RE.findall(_read(name))
         assert matches, f"{name} does not pin compressed-tensors"
         pins[name] = set(matches)
+    # Strict equality: every variant must pin exactly 0.20.1, no ranges and no
+    # leftover 0.18.0 entries.
     assert all(p == {"0.20.1"} for p in pins.values()), pins
 
 
