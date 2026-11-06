@@ -1,12 +1,12 @@
 {
   "version": 2,
   "generatedBy": "autojump",
-  "setup": "python3.12 -m venv .venv && .venv/bin/python -m pip install -U pip setuptools wheel && PIP_DEFAULT_TIMEOUT=120 .venv/bin/python -m pip install --retries 5 -e python",
+  "setup": "PY=$(command -v python3.12 || command -v python3) && echo \"using $PY\" && \"$PY\" --version && \"$PY\" -m venv .venv && .venv/bin/python -m pip install -U pip setuptools wheel && PIP_DEFAULT_TIMEOUT=120 .venv/bin/python -m pip install --retries 5 -e python",
   "dimensions": [
     {
       "key": "effect",
       "label": "效果",
-      "command": ".venv/bin/python -m pytest -q test/srt/test_dsa_fused_mqa_topk_plan.py",
+      "command": ".venv/bin/python -m pytest -q python/sglang/kernels/ops/attention/flash_attn/cute/tests/test_fwd_config.py test/srt/test_dsa_fused_mqa_topk_plan.py",
       "timeout_minutes": 20
     },
     {
@@ -33,7 +33,7 @@
     }
   ],
   "effect": {
-    "command": ".venv/bin/python -m pytest -q test/srt/test_dsa_fused_mqa_topk_plan.py",
+    "command": ".venv/bin/python -m pytest -q python/sglang/kernels/ops/attention/flash_attn/cute/tests/test_fwd_config.py test/srt/test_dsa_fused_mqa_topk_plan.py",
     "timeout_minutes": 20
   },
   "performance": {
