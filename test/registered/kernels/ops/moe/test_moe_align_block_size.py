@@ -139,6 +139,24 @@ def test_moe_align_block_size_compare_implementations(
     )
 
 
+def _make_align_buffers(num_experts, block_size, numel):
+    max_num_tokens_padded = numel + (num_experts + 1) * (block_size - 1)
+    if numel < num_experts + 1:
+        max_num_tokens_padded = numel * block_size
+    max_num_tokens_padded = (max_num_tokens_padded + 3) // 4 * 4
+    sorted_ids = torch.empty(
+        (max_num_tokens_padded,), dtype=torch.int32, device="cuda"
+    )
+    expert_ids = torch.zeros(
+        (max_num_tokens_padded // block_size,), dtype=torch.int32, device="cuda"
+    )
+    num_tokens_post_pad = torch.empty((1,), dtype=torch.int32, device="cuda")
+    cumsum_buffer = torch.empty(
+        num_experts + 2, dtype=torch.int32, device="cuda"
+    )
+    return sorted_ids, expert_ids, num_tokens_post_pad, cumsum_buffer
+
+
 def test_moe_align_block_size_rejects_noncontiguous_topk_ids():
     wide_topk_ids = torch.arange(16, device="cuda", dtype=torch.int32).reshape(2, 8) % 4
     topk_ids = wide_topk_ids[:, :4]
@@ -159,6 +177,107 @@ def test_moe_align_block_size_rejects_noncontiguous_topk_ids():
             num_tokens_post_pad,
             cumsum_buffer,
             True,
+        )
+
+
+@pytest.mark.parametrize("noncontiguous", ["topk_ids", "topk_weights", "both"])
+def test_moe_align_block_size_rejects_noncontiguous_routing_tensors(noncontiguous):
+    """Non-contiguous routing tensors must fail before any kernel launch.
+
+    The kernel reads topk_ids as a dense linear buffer and ignores row strides,
+    so a column slice such as wide[:, :topk] would silently read wrong data.
+    """
+    num_tokens, topk, num_experts, block_size = 2, 4, 4, 4
+    wide = torch.arange(
+        num_tokens * 2 * topk, device="cuda", dtype=torch.int32
+    ).reshape(num_tokens, 2 * topk)
+    topk_ids = wide[:, :topk] % num_experts
+    topk_weights = wide[:, topk:].to(torch.float32)
+
+    if noncontiguous in ("topk_ids", "both"):
+        assert not topk_ids.is_contiguous()
+    else:
+        topk_ids = topk_ids.contiguous()
+    if noncontiguous in ("topk_weights", "both"):
+        assert not topk_weights.is_contiguous()
+    else:
+        topk_weights = topk_weights.contiguous()
+
+    sorted_ids, expert_ids, num_tokens_post_pad, cumsum_buffer = (
+        _make_align_buffers(num_experts + 1, block_size, topk_ids.numel())
+    )
+
+    if noncontiguous in ("topk_ids", "both"):
+        with pytest.raises(RuntimeError, match="topk_ids must be contiguous"):
+            moe_align_block_size(
+                topk_ids,
+                num_experts + 1,
+                block_size,
+                sorted_ids,
+                expert_ids,
+                num_tokens_post_pad,
+                cumsum_buffer,
+                True,
+            )
+    else:
+        # topk_weights is not consumed by this kernel; the check must not fire
+        # on a contiguous topk_ids even when weights are non-contiguous.
+        moe_align_block_size(
+            topk_ids,
+            num_experts + 1,
+            block_size,
+            sorted_ids,
+            expert_ids,
+            num_tokens_post_pad,
+            cumsum_buffer,
+            True,
+        )
+        torch.cuda.synchronize()
+
+
+def test_moe_align_block_size_contiguous_matches_triton():
+    """Contiguous inputs keep producing the same result as the Triton reference."""
+    num_tokens, topk, num_experts, block_size = 16, 4, 8, 32
+    topk_ids = torch.randint(
+        0, num_experts, (num_tokens, topk), dtype=torch.int32, device="cuda"
+    )
+    assert topk_ids.is_contiguous()
+
+    sorted_ids, expert_ids, num_tokens_post_pad, cumsum_buffer = (
+        _make_align_buffers(num_experts + 1, block_size, topk_ids.numel())
+    )
+    sorted_ids_triton = torch.empty_like(sorted_ids)
+    sorted_ids_triton.fill_(topk_ids.numel())
+    expert_ids_triton = torch.zeros_like(expert_ids)
+    num_tokens_post_pad_triton = torch.empty_like(num_tokens_post_pad)
+
+    moe_align_block_size(
+        topk_ids,
+        num_experts + 1,
+        block_size,
+        sorted_ids,
+        expert_ids,
+        num_tokens_post_pad,
+        cumsum_buffer,
+        True,
+    )
+    moe_align_block_size_triton(
+        topk_ids,
+        num_experts + 1,
+        block_size,
+        sorted_ids_triton,
+        expert_ids_triton,
+        num_tokens_post_pad_triton,
+    )
+
+    assert torch.equal(num_tokens_post_pad, num_tokens_post_pad_triton)
+    ntp = num_tokens_post_pad.item()
+    num_blocks = ntp // block_size
+    assert torch.equal(expert_ids[:num_blocks], expert_ids_triton[:num_blocks])
+    for b in range(num_blocks):
+        s, e = b * block_size, (b + 1) * block_size
+        assert torch.equal(
+            sorted_ids[s:e].sort().values, sorted_ids_triton[s:e].sort().values
         )
 
 

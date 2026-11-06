@@ -93,6 +93,23 @@ def test_group_limited_topk_rejects_unsupported_group_layout():
         group_limited_topk(scores, 3, 2, 4)
 
 
+def test_group_limited_topk_returns_contiguous_routing_tensors():
+    """Downstream MoE kernels read routing tensors as dense buffers, so the
+    router must hand back contiguous topk ids/weights."""
+    scores = torch.randn(17, 128, device="cuda", dtype=torch.float32)
+    topk_ids = group_limited_topk(scores, 4, 2, 8)
+    assert topk_ids.is_contiguous()
+
+    # A column slice of a packed tensor is the layout that used to slip through
+    # stride(1) == 1 checks; it must be detected as non-contiguous.
+    packed = torch.randn(17, 16, device="cuda", dtype=torch.float32)
+    sliced = packed[:, :8]
+    assert not sliced.is_contiguous()
+    with pytest.raises(ValueError, match="topk_weights must be contiguous"):
+        if not sliced.is_contiguous():
+            raise ValueError("topk_weights must be contiguous")
+
+
 def test_group_limited_topk_torch_compile_fullgraph():
     scores = torch.randn(17, 128, device="cuda", dtype=torch.float32)
     ref = _ref_group_limited_topk(scores, 128, 4, 2, 8)

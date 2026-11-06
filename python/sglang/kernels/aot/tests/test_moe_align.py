@@ -151,6 +151,56 @@ def test_moe_align_block_size_rejects_noncontiguous_topk_ids():
         )
 
 
+@pytest.mark.parametrize("noncontiguous", ["topk_ids", "topk_weights", "both"])
+def test_moe_align_block_size_rejects_noncontiguous_routing_tensors(noncontiguous):
+    """AOT entry must reject non-contiguous routing tensors before launch."""
+    num_tokens, topk, num_experts, block_size = 2, 4, 4, 4
+    wide = torch.arange(
+        num_tokens * 2 * topk, device="cuda", dtype=torch.int32
+    ).reshape(num_tokens, 2 * topk)
+    topk_ids = wide[:, :topk] % num_experts
+    topk_weights = wide[:, topk:].to(torch.float32)
+
+    if noncontiguous in ("topk_ids", "both"):
+        assert not topk_ids.is_contiguous()
+    else:
+        topk_ids = topk_ids.contiguous()
+    if noncontiguous in ("topk_weights", "both"):
+        assert not topk_weights.is_contiguous()
+    else:
+        topk_weights = topk_weights.contiguous()
+
+    sorted_ids = torch.empty((64,), dtype=torch.int32, device="cuda")
+    expert_ids = torch.zeros((1,), dtype=torch.int32, device="cuda")
+    num_tokens_post_pad = torch.empty((1,), dtype=torch.int32, device="cuda")
+    cumsum_buffer = torch.empty((6,), dtype=torch.int32, device="cuda")
+
+    if noncontiguous in ("topk_ids", "both"):
+        with pytest.raises(RuntimeError, match="topk_ids must be contiguous"):
+            moe_align_block_size(
+                topk_ids,
+                num_experts + 1,
+                block_size,
+                sorted_ids,
+                expert_ids,
+                num_tokens_post_pad,
+                cumsum_buffer,
+                True,
+            )
+    else:
+        moe_align_block_size(
+            topk_ids,
+            num_experts + 1,
+            block_size,
+            sorted_ids,
+            expert_ids,
+            num_tokens_post_pad,
+            cumsum_buffer,
+            True,
+        )
+        torch.cuda.synchronize()
+
+
 @pytest.mark.parametrize("m", [1, 33, 64, 222])
 @pytest.mark.parametrize("topk", [2, 6])
 @pytest.mark.parametrize("k", [128, 511, 1024])
