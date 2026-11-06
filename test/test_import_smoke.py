@@ -57,6 +57,9 @@ def test_import_sglang_top_level():
     assert hasattr(sglang, "__version__")
     assert hasattr(sglang, "__all__")
     assert "Runtime" in sglang.__all__
+    # The public API surface must be non-trivial; an empty __all__ would make
+    # the attribute check below vacuously pass.
+    assert len(sglang.__all__) > 0
 
 
 def test_import_sglang_public_api_attributes():
