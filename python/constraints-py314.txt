@@ -1,0 +1,18 @@
+# Constraints for Python 3.14 environments where several sglang runtime
+# dependencies have no cp314 wheels yet. Consumed via
+#   PIP_CONSTRAINT=python/constraints-py314.txt pip install -e python
+# so that dependency resolution fails fast with a clear message instead of
+# downloading many wheels and then exiting 1.
+#
+# Only pins that are known to lack cp314 wheels are listed; everything else
+# is left to the normal resolver.
+
+# py-spy ships abi3 wheels only up to cp312; no cp314 wheel exists.
+py-spy==0.4.3; python_version >= "3.14"
+
+# pyzmq 27.x publishes cp312-abi3 wheels; 3.14 needs a newer release.
+pyzmq>=27.3.0; python_version >= "3.14"
+
+# quack-kernels is a pure-python wheel but pins torch builds that have no
+# cp314 wheels; keep it out of the 3.14 resolution entirely.
+quack-kernels==0.6.5; python_version < "3.14"

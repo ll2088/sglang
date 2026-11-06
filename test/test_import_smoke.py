@@ -55,6 +55,24 @@ def _ensure_repo_on_path() -> None:
         sys.path.insert(0, python_dir)
 
 
+def _is_missing_third_party_dep(stderr: str) -> bool:
+    """Return True only when the failure is a missing non-sglang dependency.
+
+    A ``ModuleNotFoundError`` for ``sglang.*`` means the in-repo import chain
+    is broken and must surface as a test failure; a missing third-party
+    package (torch, flashinfer, ...) is an environment-setup problem that the
+    smoke test cannot fix and should skip on.
+    """
+    if "ModuleNotFoundError" not in stderr and "ImportError" not in stderr:
+        return False
+    for line in stderr.splitlines():
+        if "ModuleNotFoundError" in line or "ImportError" in line:
+            # e.g. "ModuleNotFoundError: No module named 'torch'"
+            if "'sglang" in line or '"sglang' in line:
+                return False
+    return True
+
+
 def _run_python(code: str, timeout: float = 5.0) -> subprocess.CompletedProcess:
     """Run ``code`` in a fresh interpreter so the import chain is exercised
     from a clean ``sys.modules`` (pytest plugins may pre-import sglang).
@@ -93,9 +111,10 @@ def test_import_sglang_top_level():
         "assert 'Runtime' in sglang.__all__, 'Runtime not in __all__'\n"
         "assert len(sglang.__all__) > 0, 'empty __all__'\n"
     )
-    if proc.returncode != 0 and (
-        "ModuleNotFoundError" in proc.stderr or "ImportError" in proc.stderr
-    ):
+    # Only skip when a *third-party* dependency is missing. A missing
+    # ``sglang.*`` submodule is a real import-chain failure and must be
+    # reported, not skipped, so the smoke test keeps its diagnostic value.
+    if proc.returncode != 0 and _is_missing_third_party_dep(proc.stderr):
         pytest.skip(
             "sglang dependency tree is not installed in this environment; "
             "import smoke test skipped instead of masking an env-setup "
@@ -168,9 +187,7 @@ def test_import_platform_stubs_in_clean_interpreter():
         "assert 'torch' not in __import__('sys').modules, "
         "'importing sglang._platform_stubs must not import torch'\n"
     )
-    if proc.returncode != 0 and (
-        "ModuleNotFoundError" in proc.stderr or "ImportError" in proc.stderr
-    ):
+    if proc.returncode != 0 and _is_missing_third_party_dep(proc.stderr):
         pytest.skip(
             "sglang dependency tree is not installed in this environment; "
             "platform-stub import smoke test skipped instead of masking an "
