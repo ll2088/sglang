@@ -60,6 +60,13 @@ def main():
         pins = set(PIN_RE.findall(text))
         if pins and pins != {EXPECTED}:
             failures.append(f"{name}: pins {sorted(pins)} != ['{EXPECTED}']")
+        # setup.py does not declare the pin, but it must not hard-code a
+        # different compressed-tensors version either.
+        for line_no in _line_numbers(text, "compressed-tensors"):
+            if "compressed-tensors==" in text.splitlines()[line_no - 1]:
+                failures.append(
+                    f"{name}:{line_no}: unexpected compressed-tensors pin in setup.py"
+                )
     if failures:
         for failure in failures:
             print(f"FAIL: {failure}", file=sys.stderr)

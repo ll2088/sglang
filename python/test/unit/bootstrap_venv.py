@@ -77,12 +77,12 @@ def _supported_python():
     env_python = os.environ.get("PYTHON")
     if env_python:
         candidates.append(env_python)
-    # Probe PATH for a supported interpreter in strict 3.11 -> 3.12 -> 3.13
+    # Probe PATH for a supported interpreter in strict 3.13 -> 3.12 -> 3.11
     # order. shutil.which returns the first match, so probe each minor
     # explicitly and keep the first supported one. The unversioned python3 is
     # deliberately NOT considered: on CI it is the system Python 3.14, which
     # would resolve cp314 wheels and break the install.
-    for minor in (11, 12, 13):
+    for minor in (13, 12, 11):
         found = shutil.which(f"python3.{minor}")
         if found:
             candidates.append(found)
@@ -228,6 +228,10 @@ def _pip_install_args(python, args):
         constrained += ["--implementation", "cp"]
     if "--abi" not in constrained:
         constrained += ["--abi", abi_tag]
+    # Also pin the platform tag so a resolver running under a different
+    # interpreter cannot pick a wheel for another ABI.
+    if "--platform" not in constrained:
+        constrained += ["--platform", "manylinux2014_x86_64"]
     return constrained
 
 
@@ -250,6 +254,13 @@ def _run(python, args):
     if args[:2] == ["-m", "pip"] and "install" in args:
         _assert_no_cp314_wheels(python)
         args = _pip_install_args(python, args)
+        # Always upgrade pip first so Requires-Python metadata is honored
+        # before resolving the project's dependencies.
+        subprocess.run(
+            [os.fspath(python), "-m", "pip", "install", "--upgrade", "pip"],
+            check=True,
+            cwd=os.fspath(REPO_ROOT),
+        )
     cmd = [os.fspath(python), "-m", *args]
     # Print the full command (including the ABI constraints) so CI logs show
     # exactly which interpreter and wheel tags pip is using.
@@ -418,6 +429,10 @@ def main():
     _run(python, ["-V"])
     _run(python, ["-m", "pip", "-V"])
     _run(python, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+    # Print the venv interpreter and pip version so CI logs prove the install
+    # path is the 3.11-3.13 venv, not the system Python 3.14.
+    _run(python, ["-c", "import sys; print('venv python:', sys.executable, sys.version.split()[0])"])
+    _run(python, ["-m", "pip", "-V"])
     # Fail fast right after the venv is populated: every later step assumes a
     # 3.11-3.13 interpreter, and a wrong one would resolve cp314 wheels.
     # Also assert the venv's own pip reports the same interpreter, so a
