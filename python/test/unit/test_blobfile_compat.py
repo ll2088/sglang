@@ -65,11 +65,11 @@ def test_blobfile_import_smoke():
     # sglang/__init__ and check_env both import torch, so skip cleanly when
     # torch is unavailable instead of failing the dependency-bump check.
     pytest.importorskip("torch")
-    try:
-        import sglang  # noqa: F401
-        import sglang.check_env  # noqa: F401
-    except ImportError as exc:
-        pytest.skip(f"sglang import unavailable in this environment: {exc}")
+    # Only a missing torch is a legitimate skip; any other ImportError from
+    # sglang itself must surface as a real failure so the dependency bump is
+    # not silently masked.
+    import sglang  # noqa: F401
+    import sglang.check_env  # noqa: F401
 
 
 def test_blobfile_read_write_roundtrip():
