@@ -123,3 +123,38 @@ def test_resolve_prefill_plan_reports_reason():
         plan_mod.MAX_ROWS, plan_mod.MAX_KEYS, 2048, available=False
     )
     assert plan is None and reason == "fused kernel unavailable or disabled"
+
+
+def test_prefill_plan_hook_degrades_to_dense_on_failure(monkeypatch):
+    """A failing probe/plan must return None, never raise into the prefill."""
+    from sglang.srt.layers.attention.dsa.dsa_topk_backend import DSATopKBackend
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("kernel probe failed")
+
+    monkeypatch.setattr(plan_mod, "plan_fused_mqa_topk_prefill", _boom)
+    plan = DSATopKBackend.SGL_KERNEL.fused_prefill_plan(
+        plan_mod.MAX_ROWS, plan_mod.MAX_KEYS, 2048
+    )
+    assert plan is None
+
+
+def test_prefill_plan_hook_matches_plan_module(monkeypatch):
+    """The hook is a thin pass-through: same shape in, same plan out."""
+    from sglang.srt.layers.attention.dsa.dsa_topk_backend import DSATopKBackend
+
+    expected = plan_mod.plan_fused_mqa_topk_prefill(
+        plan_mod.MAX_ROWS, plan_mod.MAX_KEYS, 2048, available=True
+    )
+    got = DSATopKBackend.SGL_KERNEL.fused_prefill_plan(
+        plan_mod.MAX_ROWS, plan_mod.MAX_KEYS, 2048
+    )
+    assert got == expected
+
+
+if __name__ == "__main__":
+    # Run with the interpreter that is actually on PATH (`python <file>`)
+    # instead of relying on a hard-coded interpreter name.
+    import sys
+
+    raise SystemExit(pytest.main([__file__, "-q"]))

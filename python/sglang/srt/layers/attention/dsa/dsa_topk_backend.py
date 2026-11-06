@@ -71,11 +71,19 @@ class DSATopKBackend(Enum):
         The fused kernel is not wired in yet, so this reports eligibility and
         scratch sizing without changing dispatch.
         """
-        from sglang.srt.layers.attention.dsa.fused_mqa_topk_plan import (
-            plan_fused_mqa_topk_prefill,
-        )
+        try:
+            from sglang.srt.layers.attention.dsa.fused_mqa_topk_plan import (
+                plan_fused_mqa_topk_prefill,
+            )
 
-        return plan_fused_mqa_topk_prefill(num_rows, num_keys, topk)
+            return plan_fused_mqa_topk_prefill(num_rows, num_keys, topk)
+        except Exception:
+            # The fused kernel is a performance option only, and the dense
+            # two-phase path (logits + top-k) is the exact reference. Any
+            # import/probe failure -- missing extension build, unsupported
+            # arch, or a bad scratch plan -- must therefore degrade to dense
+            # instead of failing the prefill.
+            return None
 
     def topk_func(
         self,
