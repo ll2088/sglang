@@ -13,6 +13,7 @@ It is intentionally dependency-free and does not import sglang or torch.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -121,6 +122,16 @@ def _ensure_venv():
 def _run(python, args):
     # Always invoke pip as `<venv python> -m pip` so the install cannot land in
     # the system interpreter (PEP 668) or a different environment.
+    # Guard every invocation with the supported-range assertion so a stray
+    # Python 3.14 can never start resolving dependencies (cp314 wheels).
+    version = _python_version(os.fspath(python))
+    if not _is_supported(version):
+        shown = "unknown" if version is None else f"{version[0]}.{version[1]}"
+        raise SystemExit(
+            f"refusing to run {python} (Python {shown}): compressed-tensors "
+            "0.20.x requires Python >= 3.11 and the pinned torch/transformers "
+            "wheels require Python < 3.14"
+        )
     cmd = [os.fspath(python), "-m", *args]
     print("+", " ".join(cmd), flush=True)
     result = subprocess.run(
@@ -200,6 +211,8 @@ def main():
     # Do not require the interpreter running this script to be supported: it
     # may be a system Python 3.14. _ensure_venv picks a supported interpreter
     # to create the venv, and the venv interpreter is validated below.
+    print(f"bootstrap invoked with {sys.executable} (Python "
+          f"{sys.version_info[0]}.{sys.version_info[1]})", flush=True)
     python = _ensure_venv()
     # Re-check the venv interpreter: a venv created from a different base
     # interpreter (e.g. a stale .venv) must not bypass the version gate.
@@ -210,6 +223,16 @@ def main():
     _run(python, ["-V"])
     _run(python, ["-m", "pip", "-V"])
     _run(python, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+    # Fail fast before pip resolves anything if the venv interpreter drifted
+    # out of the supported range (e.g. a stale .venv from Python 3.14).
+    _run(
+        python,
+        [
+            "-c",
+            "import sys; assert (3, 11) <= sys.version_info[:2] < (3, 14), "
+            "sys.version; print(sys.executable, sys.version.split()[0])",
+        ],
+    )
     # Editable install of the project; the pin in python/pyproject.toml decides
     # the compressed-tensors version, so no version is passed here.
     _run(python, ["-m", "pip", "install", "-e", os.fspath(PYTHON_DIR)])
@@ -224,6 +247,28 @@ def main():
         ],
     )
     _report_environment(python)
+    # Surface the compressed-tensors pin from every install variant so CI logs
+    # make it obvious that no 0.18.0 entry remains.
+    for name in (
+        "pyproject.toml",
+        "pyproject_cpu.toml",
+        "pyproject_npu.toml",
+        "pyproject_xpu.toml",
+        "pyproject_other.toml",
+    ):
+        path = PYTHON_DIR / name
+        if not path.is_file():
+            print(f"{name}: missing", flush=True)
+            continue
+        pins = sorted(
+            set(
+                re.findall(
+                    r'"compressed-tensors==([0-9][^"]*)"',
+                    path.read_text(encoding="utf-8"),
+                )
+            )
+        )
+        print(f"{name}: compressed-tensors pins {pins}", flush=True)
     print(
         f"bootstrap complete (compressed-tensors {version}); "
         f"activate with: . {VENV_DIR}/bin/activate",
