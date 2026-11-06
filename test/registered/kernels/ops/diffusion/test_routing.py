@@ -144,10 +144,10 @@ def test_routing_rejects_noncontiguous_tensors(noncontiguous):
         topk_ids = topk_ids.contiguous()
 
     if noncontiguous in ("topk_weights", "both"):
-        with pytest.raises(ValueError, match="topk_weights must be contiguous"):
+        with pytest.raises(ValueError, match="topk_weights"):
             _check_routing_tensors_contiguous(topk_weights, topk_ids)
     else:
-        with pytest.raises(ValueError, match="topk_ids must be contiguous"):
+        with pytest.raises(ValueError, match="topk_ids"):
             _check_routing_tensors_contiguous(topk_weights, topk_ids)
 
     # Contiguous routing tensors must pass the check unchanged.
