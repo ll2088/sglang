@@ -106,10 +106,16 @@ def _supported_python():
                 flush=True,
             )
             return candidate
+    available = []
+    for minor in (11, 12, 13, 14):
+        found = shutil.which(f"python3.{minor}")
+        if found:
+            available.append(f"python3.{minor} -> {found}")
     raise SystemExit(
         "no supported Python (3.11-3.13) found for the venv; install one "
         "(e.g. python3.12) or set SGLANG_BOOTSTRAP_PYTHON to its path. "
-        "Refusing to fall back to an unsupported interpreter."
+        "Refusing to fall back to an unsupported interpreter. "
+        f"Available interpreters: {available or 'none'}"
     )
 
 
@@ -196,11 +202,16 @@ def _pip_install_args(python, args):
     if version is None:
         return list(args)
     py_tag = f"{version[0]}.{version[1]}"
+    abi_tag = f"cp{version[0]}{version[1]}"
     constrained = list(args)
     if "--only-binary" not in constrained:
         constrained += ["--only-binary", ":all:"]
     if "--python-version" not in constrained:
         constrained += ["--python-version", py_tag]
+    if "--implementation" not in constrained:
+        constrained += ["--implementation", "cp"]
+    if "--abi" not in constrained:
+        constrained += ["--abi", abi_tag]
     return constrained
 
 
@@ -238,7 +249,9 @@ def _run(python, args):
         # Print interpreter diagnostics so a wrong-Python failure is obvious.
         for diag in (
             ["-c", "import sys; print(sys.executable, sys.version)"],
+            ["-V"],
             ["-m", "pip", "-V"],
+            ["-m", "pip", "debug", "--verbose"],
         ):
             subprocess.run(
                 [os.fspath(python), *diag],
@@ -387,6 +400,16 @@ def main():
     _run(python, ["-V"])
     _run(python, ["-m", "pip", "-V"])
     _run(python, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+    # Fail fast right after the venv is populated: every later step assumes a
+    # 3.11-3.13 interpreter, and a wrong one would resolve cp314 wheels.
+    _run(
+        python,
+        [
+            "-c",
+            "import sys; assert (3, 11) <= sys.version_info[:2] < (3, 14), "
+            "sys.version; print('venv python ok:', sys.version.split()[0])",
+        ],
+    )
     # Run the pin consistency gate before resolving the project so a stale
     # 0.18.0 entry fails fast with a clear message instead of a resolver error.
     # Invoke it with the venv interpreter so the gate runs in the same
