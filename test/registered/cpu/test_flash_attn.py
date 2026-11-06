@@ -30,7 +30,8 @@ def _get_flash_attn_varlen_func():
 # The even-MN dispatch condition is a pure-Python predicate mirroring
 # flash_fwd_launch_template.h; it must stay importable without sgl_kernel/CUDA.
 def _is_even_mn(cu_seqlens_q, cu_seqlens_k, leftpad_k, seqused_k, seqlen_k, seqlen_q, block_n, block_m):
-    # Mirrors the C++ condition in flash_fwd_launch_template.h. leftpad_k and
+    # Mirrors the C++ condition in flash_fwd_launch_template.h (run_flash_fwd,
+    # run_flash_splitkv_fwd and run_flash_splitkv_fwd_stage1). leftpad_k and
     # seqused_k change each batch's actual_seqlen_k (see BlockInfo), so they must
     # disable the unmasked even-MN fast path even when cu_seqlens_k is null.
     return (
@@ -530,6 +531,9 @@ class TestFlashAttn(CustomTestCase):
         # Non-aligned shapes never take the fast path.
         self.assertFalse(is_even_mn(None, None, None, None, 255, 128, block_n, block_m))
         self.assertFalse(is_even_mn(None, None, None, None, 256, 127, block_n, block_m))
+        # cu_seqlens present: never even-MN regardless of alignment.
+        self.assertFalse(is_even_mn(object(), None, None, None, 256, 128, block_n, block_m))
+        self.assertFalse(is_even_mn(None, object(), None, None, 256, 128, block_n, block_m))
 
     def test_flash_attn_leftpad_reference_semantics_cpu(self):
         # CPU-only semantic check of the leftpad reference used by the kernel tests:
