@@ -61,8 +61,31 @@ def _check_python_version(python):
     if (major, minor) < (3, 11):
         raise SystemExit(
             f"compressed-tensors 0.20.x requires Python >= 3.11, "
-            f"but {python} is {major}.{minor}"
+            f"but {python} is {major}.{minor}; create the venv with a "
+            "Python >= 3.11 interpreter (e.g. python3.11 -m venv .venv)"
         )
+
+
+def _check_compressed_tensors_version(python):
+    # The pin in python/pyproject.toml is the source of truth; assert the
+    # installed distribution matches it so a stale system install cannot
+    # silently satisfy the import check.
+    result = subprocess.run(
+        [
+            os.fspath(python),
+            "-c",
+            "import importlib.metadata as m; print(m.version('compressed-tensors'))",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    version = result.stdout.strip()
+    if not version.startswith("0.20."):
+        raise SystemExit(
+            f"expected compressed-tensors 0.20.x, but {python} has {version}"
+        )
+    return version
 
 
 def _report_environment(python):
@@ -79,13 +102,30 @@ def _report_environment(python):
 def main():
     python = _ensure_venv()
     _check_python_version(python)
+    # Print the interpreter that will receive the install so CI logs make it
+    # obvious whether the system interpreter leaked in.
+    _run(python, ["-c", "import sys; print(sys.executable)"])
+    _run(python, ["-V"])
+    _run(python, ["-m", "pip", "-V"])
     _run(python, ["pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
     # Editable install of the project; the pin in python/pyproject.toml decides
     # the compressed-tensors version, so no version is passed here.
     _run(python, ["pip", "install", "-e", os.fspath(PYTHON_DIR)])
-    _run(python, ["-c", "import compressed_tensors; print(compressed_tensors.__version__)"])
+    version = _check_compressed_tensors_version(python)
+    _run(
+        python,
+        [
+            "-c",
+            "import sys, compressed_tensors; "
+            "print(sys.executable, compressed_tensors.__version__)",
+        ],
+    )
     _report_environment(python)
-    print(f"bootstrap complete; activate with: . {VENV_DIR}/bin/activate", flush=True)
+    print(
+        f"bootstrap complete (compressed-tensors {version}); "
+        f"activate with: . {VENV_DIR}/bin/activate",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
