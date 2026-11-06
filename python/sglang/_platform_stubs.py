@@ -109,6 +109,51 @@ def _triton_key() -> str:
     return "triton-stub"
 
 
+def _tvm_ffi_version():
+    """Installed apache-tvm-ffi version, or ``None`` when not installed."""
+    try:
+        import importlib.metadata
+
+        return importlib.metadata.version("apache-tvm-ffi")
+    except Exception:
+        return None
+
+
+def _parse_tvm_ffi_version(version: str):
+    """Parse a PEP 440-ish version, including ``post`` suffixes."""
+    import re
+
+    match = re.match(
+        r"^\s*v?(\d+(?:\.\d+)*)(?:[.-]?(?:post|rev|r)(\d+))?", version
+    )
+    if match is None:
+        raise ValueError(f"unparsable apache-tvm-ffi version: {version!r}")
+    release = tuple(int(part) for part in match.group(1).split("."))
+    post = int(match.group(2)) if match.group(2) is not None else 0
+    return release, post
+
+
+def require_tvm_ffi_version(minimum: str) -> str:
+    """Return the installed apache-tvm-ffi version, or raise a clear error.
+
+    Used by platform-specific code paths that need a recent tvm-ffi; a
+    missing or too-old install must fail loudly instead of silently
+    degrading.
+    """
+    version = _tvm_ffi_version()
+    if version is None:
+        raise RuntimeError(
+            "apache-tvm-ffi is required but not installed; "
+            f"install apache-tvm-ffi>={minimum}"
+        )
+    if _parse_tvm_ffi_version(version) < _parse_tvm_ffi_version(minimum):
+        raise RuntimeError(
+            f"apache-tvm-ffi {version} is older than the required {minimum}; "
+            f"upgrade apache-tvm-ffi to >={minimum}"
+        )
+    return version
+
+
 class _Config:
     """Minimal stand-in for ``triton.Config`` used in ``@triton.autotune``."""
 
