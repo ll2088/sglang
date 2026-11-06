@@ -44,13 +44,16 @@ def test_blobfile_constraints_consistent():
     files = _config_files_with_blobfile()
     assert files, "no config file declares blobfile"
     bad = []
+    found = []
     for path in files:
         with open(path, encoding="utf-8") as f:
             text = f.read()
         match = re.search(r"blobfile[^\n]*", text)
-        if not match or "3.3.0" not in match.group(0):
-            bad.append((path, match.group(0) if match else "<no blobfile line>"))
-    assert not bad, f"inconsistent blobfile constraints: {bad}"
+        line = match.group(0) if match else "<no blobfile line>"
+        found.append((os.path.basename(path), line))
+        if not match or "3.3.0" not in line:
+            bad.append((path, line))
+    assert not bad, f"inconsistent blobfile constraints: {bad}; found: {found}"
 
 
 def test_blobfile_import_smoke():
