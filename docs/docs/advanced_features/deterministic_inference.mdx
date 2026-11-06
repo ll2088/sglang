@@ -12,6 +12,8 @@ Deterministic inference ensures consistent LLM outputs across runs, which is cri
 
 Even with `temperature=0`, standard LLM inference can produce different outputs due to dynamic batching and varying reduction orders in GPU kernels.
 
+Under tensor parallelism, SGLang's custom all-reduce kernels (both the 1-stage and 2-stage variants) sum the ranks in the same absolute rank order `0..N-1`, so they produce bitwise identical results whichever kernel the size heuristic selects. This keeps the reduction order independent of the tensor size and of the rank that owns each partition.
+
 ## The Root Cause of Non-Determinism
 
 The main source is **varying batch sizes**. Different batch sizes cause GPU kernels to split reduction operations differently, leading to different addition orders. Due to floating-point non-associativity (`(a + b) + c ≠ a + (b + c)`), this produces different results even for identical inputs.

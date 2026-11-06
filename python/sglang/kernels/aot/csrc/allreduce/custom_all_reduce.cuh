@@ -489,7 +489,11 @@ __global__ void __launch_bounds__(kMaxThreadsPerBlock, 1) cross_device_reduce_2s
 #pragma unroll
   for (int i = 0; i < ngpus; i++) {
     int target = (rank + i) % ngpus;
-    ptrs[i] = (const P*)_dp->ptrs[target];
+    // Absolute rank order (same as 1-stage) so both kernels accumulate in the
+    // same order and produce bitwise identical results. tmps keeps the
+    // (rank + i) rotation: tmp_out must be this rank's own scratch buffer and
+    // the stage-2 gather indexes tmps with the same rotation.
+    ptrs[i] = (const P*)_dp->ptrs[i];
     tmps[i] = get_tmp_buf<P>(sg.signals[target]);
   }
   auto tmp_out = tmps[0];
