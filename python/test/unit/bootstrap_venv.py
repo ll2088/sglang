@@ -29,13 +29,52 @@ def _venv_python():
     return VENV_DIR / "bin" / "python"
 
 
+def _supported_python():
+    # The interpreter running this script may be too new (e.g. 3.14) for the
+    # pinned torch/transformers wheels. Prefer an explicit override, then the
+    # current interpreter if supported, then any supported python3.x on PATH.
+    override = os.environ.get("SGLANG_BOOTSTRAP_PYTHON")
+    candidates = []
+    if override:
+        candidates.append(override)
+    candidates.append(sys.executable)
+    for minor in (13, 12, 11):
+        candidates.append(f"python3.{minor}")
+    for candidate in candidates:
+        try:
+            result = subprocess.run(
+                [
+                    candidate,
+                    "-c",
+                    "import sys; print('%d.%d' % sys.version_info[:2])",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        major, minor = (int(part) for part in result.stdout.strip().split("."))
+        if (major, minor) >= (3, 11) and (major, minor) < (3, 14):
+            return candidate
+    raise SystemExit(
+        "no supported Python (3.11-3.13) found for the venv; install one "
+        "(e.g. python3.12) or set SGLANG_BOOTSTRAP_PYTHON to its path"
+    )
+
+
 def _ensure_venv():
     python = _venv_python()
     if python.exists():
         return python
-    print(f"creating virtualenv at {VENV_DIR}", flush=True)
-    venv.EnvBuilder(with_pip=True, clear=False, symlinks=os.name != "nt").create(
-        os.fspath(VENV_DIR)
+    base_python = _supported_python()
+    print(f"creating virtualenv at {VENV_DIR} with {base_python}", flush=True)
+    # Use the supported interpreter explicitly instead of the one running this
+    # script, so a system Python 3.14 cannot leak into the venv.
+    subprocess.run(
+        [base_python, "-m", "venv", os.fspath(VENV_DIR)],
+        check=True,
+        cwd=os.fspath(REPO_ROOT),
     )
     if not python.exists():
         raise SystemExit(f"virtualenv creation did not produce {python}")
@@ -124,10 +163,9 @@ def _report_environment(python):
 
 
 def main():
-    # Validate the interpreter that will create the venv before doing any
-    # work, so a system Python 3.14 fails fast instead of resolving cp314
-    # wheels and leaving .venv absent for the verification commands.
-    _check_python_version(sys.executable)
+    # Do not require the interpreter running this script to be supported: it
+    # may be a system Python 3.14. _ensure_venv picks a supported interpreter
+    # to create the venv, and the venv interpreter is validated below.
     python = _ensure_venv()
     # Re-check the venv interpreter: a venv created from a different base
     # interpreter (e.g. a stale .venv) must not bypass the version gate.
