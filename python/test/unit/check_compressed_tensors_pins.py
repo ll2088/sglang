@@ -18,6 +18,9 @@ VARIANT_FILES = [
     "pyproject_xpu.toml",
     "pyproject_other.toml",
 ]
+# setup.py does not declare the pin itself, but it is part of the install
+# surface; keep it in the scan so a future edit cannot reintroduce 0.18.0.
+EXTRA_FILES = ["setup.py"]
 PIN_RE = re.compile(r'"compressed-tensors==([0-9][^"]*)"')
 
 
@@ -37,6 +40,17 @@ def main():
     for path in PYTHON_DIR.glob("pyproject*.toml"):
         if "compressed-tensors==0.18.0" in path.read_text(encoding="utf-8"):
             failures.append(f"{path.name}: stale 0.18.0 pin")
+    for name in EXTRA_FILES:
+        path = PYTHON_DIR / name
+        if not path.is_file():
+            failures.append(f"{name}: missing")
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "compressed-tensors==0.18.0" in text:
+            failures.append(f"{name}: stale 0.18.0 pin")
+        pins = set(PIN_RE.findall(text))
+        if pins and pins != {EXPECTED}:
+            failures.append(f"{name}: pins {sorted(pins)} != ['{EXPECTED}']")
     if failures:
         for failure in failures:
             print(f"FAIL: {failure}", file=sys.stderr)

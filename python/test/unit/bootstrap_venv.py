@@ -261,6 +261,9 @@ def _check_python_version(python):
             f"but {python} is {shown}; create the venv with a "
             "Python 3.11-3.13 interpreter (e.g. python3.12 -m venv .venv)"
         )
+    # Also assert the interpreter's own ABI tag is not cp314, so a venv that
+    # reports 3.13 but links a 3.14 base cannot slip through.
+    _assert_no_cp314_wheels(python)
     print(f"using Python {version[0]}.{version[1]} at {python}", flush=True)
 
 
@@ -311,6 +314,18 @@ def main():
     # to create the venv, and the venv interpreter is validated below.
     print(f"bootstrap invoked with {sys.executable} (Python "
           f"{sys.version_info[0]}.{sys.version_info[1]})", flush=True)
+    # Fail fast when the invoking interpreter is outside [3.11, 3.14) AND no
+    # supported interpreter can be found; _ensure_venv already raises in that
+    # case, but print the actual interpreter path/version first so CI logs
+    # make the cause obvious.
+    if not _is_supported(_current_version()):
+        print(
+            f"warning: invoking interpreter {sys.executable} is Python "
+            f"{sys.version_info[0]}.{sys.version_info[1]}, outside the "
+            "supported 3.11-3.13 range; a supported interpreter will be "
+            "selected for the venv",
+            flush=True,
+        )
     python = _ensure_venv()
     # Re-check the venv interpreter: a venv created from a different base
     # interpreter (e.g. a stale .venv) must not bypass the version gate.
