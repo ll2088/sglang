@@ -57,6 +57,10 @@ def _is_supported(version):
     return version is not None and (3, 11) <= version < (3, 14)
 
 
+def _current_version():
+    return (sys.version_info[0], sys.version_info[1])
+
+
 def _supported_python():
     # The interpreter running this script may be too new (e.g. 3.14) for the
     # pinned torch/transformers wheels. Prefer an explicit override, then any
@@ -68,11 +72,20 @@ def _supported_python():
     candidates = []
     if override:
         candidates.append(override)
+    # Prefer an explicit PYTHON (e.g. set by actions/setup-python) before
+    # probing PATH, so CI pins the interpreter deterministically.
+    env_python = os.environ.get("PYTHON")
+    if env_python:
+        candidates.append(env_python)
     for minor in (13, 12, 11):
         found = shutil.which(f"python3.{minor}")
         if found:
             candidates.append(found)
-    candidates.append(sys.executable)
+    # Only fall back to the current interpreter when it is itself supported;
+    # otherwise a system Python 3.14 would be selected and resolve cp314
+    # wheels. The explicit failure below is preferable to that.
+    if _is_supported(_current_version()):
+        candidates.append(sys.executable)
     # Print every candidate and its detected version so CI logs show why a
     # particular interpreter was (or was not) selected.
     print("python interpreter candidates:", flush=True)
@@ -100,7 +113,14 @@ def _ensure_venv():
     if python.exists():
         # A stale .venv may have been created from an unsupported interpreter
         # (e.g. a system Python 3.14); rebuild it instead of reusing it.
-        if _is_supported(_python_version(os.fspath(python))):
+        # Check both the venv interpreter and the base interpreter recorded in
+        # pyvenv.cfg, since a venv can report a supported version while its
+        # base (and thus pip's wheel tags) is not.
+        venv_version = _python_version(os.fspath(python))
+        base_version = _venv_base_version()
+        if _is_supported(venv_version) and (
+            base_version is None or _is_supported(base_version)
+        ):
             print(
                 f"reusing virtualenv at {VENV_DIR} with {python} "
                 f"(Python {_python_version(os.fspath(python))[0]}."
@@ -109,8 +129,8 @@ def _ensure_venv():
             )
             return python
         print(
-            f"existing virtualenv at {VENV_DIR} uses an unsupported Python; "
-            "recreating it",
+            f"existing virtualenv at {VENV_DIR} uses an unsupported Python "
+            f"(venv={venv_version}, base={base_version}); recreating it",
             flush=True,
         )
         shutil.rmtree(VENV_DIR)
@@ -126,6 +146,22 @@ def _ensure_venv():
     if not python.exists():
         raise SystemExit(f"virtualenv creation did not produce {python}")
     return python
+
+
+def _venv_base_version():
+    """Return (major, minor) of the base interpreter from pyvenv.cfg."""
+    cfg = VENV_DIR / "pyvenv.cfg"
+    if not cfg.is_file():
+        return None
+    for line in cfg.read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "version":
+            parts = value.strip().split(".")
+            try:
+                return (int(parts[0]), int(parts[1]))
+            except (IndexError, ValueError):
+                return None
+    return None
 
 
 def _run(python, args):
@@ -232,7 +268,13 @@ def main():
     print(f"venv interpreter: {python}", flush=True)
     # Print the interpreter that will receive the install so CI logs make it
     # obvious whether the system interpreter leaked in.
-    _run(python, ["-c", "import sys; print(sys.executable)"])
+    _run(
+        python,
+        [
+            "-c",
+            "import sys; print(sys.executable, sys.version.split()[0])",
+        ],
+    )
     _run(python, ["-V"])
     _run(python, ["-m", "pip", "-V"])
     _run(python, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
