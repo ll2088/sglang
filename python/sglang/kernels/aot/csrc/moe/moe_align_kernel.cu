@@ -335,6 +335,7 @@ void moe_align_block_size(
     torch::Tensor cumsum_buffer,
     bool pad_sorted_token_ids,
     bool ignore_invalid_expert) {
+  TORCH_CHECK(topk_ids.is_contiguous(), "topk_ids must be contiguous");
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
   int threads = 1024;

@@ -459,6 +459,8 @@ struct MoeAlignBlockSizeKernel {
       bool pad_sorted_token_ids) {
     using namespace host;
 
+    RuntimeCheck(topk_ids.is_contiguous(), "topk_ids must be contiguous");
+
     auto device = topk_ids.device();
     const cudaStream_t stream = LaunchKernel::resolve_device(device);
 
