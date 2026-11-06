@@ -30,6 +30,9 @@ def _get_flash_attn_varlen_func():
 # The even-MN dispatch condition is a pure-Python predicate mirroring
 # flash_fwd_launch_template.h; it must stay importable without sgl_kernel/CUDA.
 def _is_even_mn(cu_seqlens_q, cu_seqlens_k, leftpad_k, seqused_k, seqlen_k, seqlen_q, block_n, block_m):
+    # Mirrors the C++ condition in flash_fwd_launch_template.h. leftpad_k and
+    # seqused_k change each batch's actual_seqlen_k (see BlockInfo), so they must
+    # disable the unmasked even-MN fast path even when cu_seqlens_k is null.
     return (
         cu_seqlens_q is None
         and cu_seqlens_k is None
