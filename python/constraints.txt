@@ -20,3 +20,10 @@ regex>=2025.9.1
 
 # pybase64 ships cp314 wheels from 1.4.2 onwards.
 pybase64>=1.4.2
+
+# py-spy publishes abi3 wheels; 0.4.3 ships cp314-compatible wheels.
+py-spy>=0.4.3
+
+# quack-kernels is a pure-Python wheel; pin to the version resolved by the
+# sglang metadata so pip does not need to build it from source on 3.14.
+quack-kernels==0.6.5
