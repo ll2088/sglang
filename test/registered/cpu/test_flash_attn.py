@@ -20,6 +20,18 @@ except Exception:  # pragma: no cover - depends on build environment
     flash_attn_varlen_func = None
     _HAS_SGL_KERNEL = False
 
+# The even-MN dispatch condition is a pure-Python predicate mirroring
+# flash_fwd_launch_template.h; it must stay importable without sgl_kernel/CUDA.
+def _is_even_mn(cu_seqlens_q, cu_seqlens_k, leftpad_k, seqused_k, seqlen_k, seqlen_q, block_n, block_m):
+    return (
+        cu_seqlens_q is None
+        and cu_seqlens_k is None
+        and leftpad_k is None
+        and seqused_k is None
+        and seqlen_k % block_n == 0
+        and seqlen_q % block_m == 0
+    )
+
 # Avoid initializing CUDA at import time on CPU-only CI runners; the kernel
 # tests are skipped unless both sgl_kernel and CUDA are available.
 _HAS_CUDA = _HAS_SGL_KERNEL and torch.cuda.is_available()
@@ -464,15 +476,7 @@ class TestFlashAttn(CustomTestCase):
         # Static assertion on the dispatch condition: the even-MN fast path must be
         # disabled whenever leftpad_k or seqused_k is set, even if seqlen is block aligned.
         # This mirrors the C++ condition in flash_fwd_launch_template.h.
-        def is_even_mn(cu_seqlens_q, cu_seqlens_k, leftpad_k, seqused_k, seqlen_k, seqlen_q, block_n, block_m):
-            return (
-                cu_seqlens_q is None
-                and cu_seqlens_k is None
-                and leftpad_k is None
-                and seqused_k is None
-                and seqlen_k % block_n == 0
-                and seqlen_q % block_m == 0
-            )
+        is_even_mn = _is_even_mn
 
         # Block-aligned shapes with leftpad must NOT take the even-MN path.
         self.assertFalse(is_even_mn(None, None, object(), None, 256, 128, 128, 64))
