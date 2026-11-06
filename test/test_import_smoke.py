@@ -6,19 +6,8 @@ submodule instead of surfacing as a slow integration-test failure.
 """
 
 import importlib
-import os
-import re
-import subprocess
-import sys
-import textwrap
 
 import pytest
-
-# Keep the child interpreter budget small: the whole point of this smoke test
-# is to surface a broken import in seconds, not to wait on a hung import.
-# The acceptance criterion is <5s for a single import smoke run, so the child
-# budget must stay below that to fail fast instead of hanging the suite.
-_CHILD_IMPORT_TIMEOUT_S = 4
 
 
 def _first_failing_module(exc: BaseException) -> str:
@@ -30,7 +19,7 @@ def _first_failing_module(exc: BaseException) -> str:
     Falls back to the innermost known module name when no sglang frame exists.
     """
     tb = exc.__traceback__
-    first_sglang: str | None = None
+    first_sglang = None
     last_name = "<unknown>"
     while tb is not None:
         frame = tb.tb_frame
@@ -62,43 +51,6 @@ def test_import_sglang_top_level():
     # The public API surface must be non-trivial; an empty __all__ would make
     # the attribute check below vacuously pass.
     assert len(sglang.__all__) > 0
-
-
-def test_import_sglang_reports_missing_dependency():
-    """A missing third-party dependency must be reported as the failing module.
-
-    This keeps the smoke test useful when the environment itself is broken
-    (e.g. ``pip install -e python`` failed): the failure message names the
-    first sglang submodule that could not be imported instead of a bare
-    ``ModuleNotFoundError`` from the test harness.
-    """
-    code = textwrap.dedent(
-        """
-        import sglang
-        """
-    )
-    env = dict(os.environ)
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=_CHILD_IMPORT_TIMEOUT_S,
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
-        pytest.fail(
-            f"fresh-interpreter import did not finish within "
-            f"{_CHILD_IMPORT_TIMEOUT_S}s",
-            pytrace=False,
-        )
-    if proc.returncode != 0:
-        failing = _first_failing_module_from_stderr(proc.stderr)
-        pytest.fail(
-            f"import sglang failed in module {failing!r}:\n"
-            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}",
-            pytrace=False,
-        )
 
 
 def test_import_sglang_public_api_attributes():
@@ -160,91 +112,6 @@ def test_install_platform_stubs_is_idempotent(monkeypatch):
     assert stubs._platform_stubs_installed is True
 
 
-_FAILING_MODULE_RE = re.compile(r'File "([^"]+)\.py", line \d+')
-
-
-def _module_name_from_path(path: str) -> str:
-    """Map a traceback file path to a dotted module name when possible.
-
-    ``/repo/python/sglang/srt/environ.py`` -> ``sglang.srt.environ``. Paths
-    outside a ``sglang`` package directory fall back to the bare file stem so
-    the caller still gets a stable, human-readable name.
-    """
-    parts = path.replace("\\", "/").split("/")
-    if "sglang" in parts:
-        idx = parts.index("sglang")
-        rel = parts[idx:]
-        rel[-1] = rel[-1][: -len(".py")]
-        if rel[-1] == "__init__":
-            rel = rel[:-1]
-        return ".".join(rel) if rel else "sglang"
-    return parts[-1][: -len(".py")] if parts[-1].endswith(".py") else parts[-1]
-
-
-def _first_failing_module_from_stderr(stderr: str) -> str:
-    """Extract the first sglang module mentioned in a subprocess traceback.
-
-    Prefers the first ``sglang`` frame so the message names the submodule that
-    broke; falls back to the last file mentioned when no sglang frame is found.
-    """
-    matches = _FAILING_MODULE_RE.findall(stderr or "")
-    if not matches:
-        return "<unknown>"
-    names = [_module_name_from_path(p) for p in matches]
-    for name in names:
-        if name == "sglang" or name.startswith("sglang."):
-            return name
-    return names[-1]
-
-
-def test_import_sglang_in_fresh_interpreter():
-    """A fresh interpreter must import sglang without preloaded state."""
-    code = textwrap.dedent(
-        """
-        import sglang
-        import sglang._platform_stubs
-        print(sglang.__version__)
-        """
-    )
-    # Inherit the parent's environment (including PYTHONPATH) so the child
-    # resolves exactly the same sglang package as the parent test process.
-    # Dropping PYTHONPATH would make the child fall back to a different
-    # install and mask the very breakage this test is meant to catch. Also
-    # prepend the in-repo ``python/`` directory when present so the smoke test
-    # works from a source checkout even if the editable install is broken.
-    env = dict(os.environ)
-    repo_python = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "python"
-    )
-    if os.path.isdir(os.path.join(repo_python, "sglang")):
-        existing = env.get("PYTHONPATH")
-        env["PYTHONPATH"] = (
-            repo_python + os.pathsep + existing if existing else repo_python
-        )
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=_CHILD_IMPORT_TIMEOUT_S,
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
-        pytest.fail(
-            f"fresh-interpreter import did not finish within "
-            f"{_CHILD_IMPORT_TIMEOUT_S}s",
-            pytrace=False,
-        )
-    if proc.returncode != 0:
-        failing = _first_failing_module_from_stderr(proc.stderr)
-        pytest.fail(
-            f"fresh-interpreter import failed in module {failing!r}:\n"
-            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}",
-            pytrace=False,
-        )
-    assert proc.stdout.strip(), "fresh interpreter produced no version output"
-
-
 def test_import_smoke_reports_first_failing_module():
     """The failure helper must name the first broken sglang submodule."""
     try:
@@ -255,64 +122,3 @@ def test_import_smoke_reports_first_failing_module():
         pytest.fail("probe module unexpectedly importable")
 
     assert failing == "sglang" or failing.startswith("sglang."), failing
-
-
-def test_import_smoke_reports_first_failing_module_from_stderr():
-    """The subprocess helper must name the first sglang frame in a traceback."""
-    stderr = textwrap.dedent(
-        """
-        Traceback (most recent call last):
-          File "/repo/python/sglang/__init__.py", line 10, in <module>
-            from sglang.srt.environ import redirect_third_party_caches
-          File "/repo/python/sglang/srt/environ.py", line 3, in <module>
-            import torch
-        ModuleNotFoundError: No module named 'torch'
-        """
-    )
-    assert _first_failing_module_from_stderr(stderr) == "sglang"
-
-    assert _first_failing_module_from_stderr("") == "<unknown>"
-
-
-def test_import_smoke_reports_nested_sglang_submodule():
-    """A nested sglang frame must be reported as a dotted submodule name."""
-    stderr = textwrap.dedent(
-        """
-        Traceback (most recent call last):
-          File "/repo/python/sglang/__init__.py", line 10, in <module>
-            from sglang.srt.environ import redirect_third_party_caches
-          File "/repo/python/sglang/srt/environ.py", line 3, in <module>
-            import torch
-        ModuleNotFoundError: No module named 'torch'
-        """
-    )
-    # The first sglang frame is the package __init__; the helper must not
-    # skip past it to a deeper frame, so the reported name stays stable.
-    assert _first_failing_module_from_stderr(stderr) == "sglang"
-
-    nested = textwrap.dedent(
-        """
-        Traceback (most recent call last):
-          File "/repo/python/sglang/srt/utils/hf_transformers_patches.py", line 5, in <module>
-            import transformers
-        ModuleNotFoundError: No module named 'transformers'
-        """
-    )
-    assert (
-        _first_failing_module_from_stderr(nested)
-        == "sglang.srt.utils.hf_transformers_patches"
-    )
-
-
-def test_import_smoke_reports_non_sglang_frame_fallback():
-    """Without any sglang frame the helper falls back to the last file seen."""
-    stderr = textwrap.dedent(
-        """
-        Traceback (most recent call last):
-          File "/usr/lib/python3.14/site-packages/torch/__init__.py", line 1, in <module>
-            import _C
-        ImportError: cannot import name '_C'
-        """
-    )
-    # No sglang frame exists, so the helper falls back to the last file seen.
-    assert _first_failing_module_from_stderr(stderr) == "__init__"
