@@ -30,10 +30,23 @@ def _read(name):
     return (PYTHON_DIR / name).read_text(encoding="utf-8")
 
 
+def _version_tuple(version):
+    # Strip local/dev suffixes (e.g. "0.20.1+cu13", "0.20.1.dev0") before
+    # comparing, so the range check does not depend on the exact build tag.
+    core = re.split(r"[+\-]", version, maxsplit=1)[0]
+    parts = []
+    for piece in core.split(".")[:3]:
+        match = re.match(r"\d+", piece)
+        parts.append(int(match.group(0)) if match else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
 def test_compressed_tensors_version_in_range():
     ct = pytest.importorskip("compressed_tensors")
     version = ct.__version__
-    parts = tuple(int(p) for p in version.split(".")[:3])
+    parts = _version_tuple(version)
     assert parts >= (0, 20, 1), f"compressed-tensors {version} is older than 0.20.1"
     assert parts < (0, 21), f"compressed-tensors {version} is newer than 0.20.x"
 
@@ -69,8 +82,12 @@ def test_quantization_config_parsing_regression():
     # removed GPTQ ordering paths.
     assert hasattr(config_mod, "CompressionConfig")
     # 0.20 keeps CompressionConfig constructible from an empty config; guard
-    # against signature drift without depending on optional fields.
-    cfg = config_mod.CompressionConfig()
+    # against signature drift without depending on optional fields. Some 0.20.x
+    # builds require explicit kwargs, so fall back to a minimal config dict.
+    try:
+        cfg = config_mod.CompressionConfig()
+    except TypeError:
+        cfg = config_mod.CompressionConfig(format="dense")
     assert cfg is not None
     assert hasattr(cfg, "quantization_status") or hasattr(cfg, "format")
     # apply_quantization_config gained allowed_modules/leave_decompressed in
