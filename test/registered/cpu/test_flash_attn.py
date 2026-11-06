@@ -9,23 +9,27 @@ from sglang.test.test_utils import CustomTestCase
 
 register_cpu_ci(est_time=54, suite="stage-a-test-cpu-intel")
 
-# Importing sgl_kernel may initialize CUDA; keep module import side-effect free so
-# that pytest collection works on CPU-only CI runners.
-try:
-    import sgl_kernel  # noqa: F401
+# Keep module import side-effect free so pytest collection works on CPU-only CI
+# runners. sgl_kernel and CUDA are resolved lazily inside tests that need them.
+_HAS_SGL_KERNEL = None
 
-    flash_attn_varlen_func = torch.ops.sgl_kernel.flash_attn_varlen_func
-    _HAS_SGL_KERNEL = True
-except Exception:  # pragma: no cover - depends on build environment
-    flash_attn_varlen_func = None
-    _HAS_SGL_KERNEL = False
 
-# Keep the module importable on CPU-only CI runners: never touch CUDA at import
-# time, and only resolve the kernel op lazily inside tests that need it.
+def _has_sgl_kernel():
+    global _HAS_SGL_KERNEL
+    if _HAS_SGL_KERNEL is None:
+        try:
+            import sgl_kernel  # noqa: F401
+
+            _HAS_SGL_KERNEL = True
+        except Exception:  # pragma: no cover - depends on build environment
+            _HAS_SGL_KERNEL = False
+    return _HAS_SGL_KERNEL
+
+
 def _get_flash_attn_varlen_func():
-    if not _HAS_SGL_KERNEL:
+    if not _has_sgl_kernel():
         raise unittest.SkipTest("requires sgl_kernel with CUDA support")
-    return flash_attn_varlen_func
+    return torch.ops.sgl_kernel.flash_attn_varlen_func
 
 # The even-MN dispatch condition is a pure-Python predicate mirroring
 # flash_fwd_launch_template.h; it must stay importable without sgl_kernel/CUDA.
@@ -55,13 +59,14 @@ def _is_even_mn_legacy(cu_seqlens_q, cu_seqlens_k, seqlen_k, seqlen_q, block_n, 
 
 # Avoid initializing CUDA at import time on CPU-only CI runners; the kernel
 # tests are skipped unless both sgl_kernel and CUDA are available.
-_HAS_CUDA = _HAS_SGL_KERNEL and torch.cuda.is_available()
+def _has_cuda():
+    return _has_sgl_kernel() and torch.cuda.is_available()
 
 
 def _requires_kernel(test_func):
     """Skip tests that need the compiled sgl_kernel / CUDA at runtime."""
     return unittest.skipUnless(
-        _HAS_SGL_KERNEL and _HAS_CUDA,
+        _has_cuda(),
         "requires sgl_kernel with CUDA support",
     )(test_func)
 
