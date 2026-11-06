@@ -325,14 +325,14 @@ class TestFlashAttn(CustomTestCase):
         v = torch.randn(batch, seqlen_k, num_heads_kv, head_dim, dtype=dtype)
 
         # Reference: per-sequence attention over the valid (non-leftpad) key range.
+        # Keys before leftpad[b] must be excluded from the softmax; this mirrors the
+        # BlockInfo actual_seqlen_k = seqlen_k - leftpad_k path in the kernel.
         out_ref = torch.empty(batch, seqlen_q, num_heads, head_dim, dtype=dtype)
         for b in range(batch):
             pad = int(leftpad[b].item())
-            k_b = k[b, pad:]
-            v_b = v[b, pad:]
             q_b = q[b].transpose(0, 1).unsqueeze(0)  # [1, H, Sq, D]
-            k_b = k_b.transpose(0, 1).unsqueeze(0)  # [1, H, Sk, D]
-            v_b = v_b.transpose(0, 1).unsqueeze(0)
+            k_b = k[b, pad:].transpose(0, 1).unsqueeze(0)  # [1, H, Sk - pad, D]
+            v_b = v[b, pad:].transpose(0, 1).unsqueeze(0)
             out_b = F.scaled_dot_product_attention(
                 q_b, k_b, v_b, is_causal=is_causal, enable_gqa=num_heads != num_heads_kv
             )
