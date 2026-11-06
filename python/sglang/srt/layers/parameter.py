@@ -2,7 +2,9 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Adapted from https://github.com/vllm-project/vllm/blob/v0.6.4.post1/vllm/model_executor/parameter.py"""
 
+import functools
 import logging
+import mmap
 from fractions import Fraction
 from typing import Callable, Optional, Union
 
@@ -48,6 +50,47 @@ def _dtype_rank(dtype: torch.dtype) -> Optional[int]:
     return None
 
 
+@functools.cache
+def _is_integrated_gpu(device: torch.device) -> bool:
+    """Whether `device` is a CUDA integrated GPU, cached per device.
+
+    Imported lazily so that CPU-only environments never touch the platform
+    registry on the weight-loading path.
+    """
+    if device.type != "cuda":
+        return False
+    from sglang.srt.platforms import current_platform
+
+    return current_platform.is_integrated_gpu(device.index)
+
+
+def copy_weight_(dst: torch.Tensor, src: torch.Tensor) -> torch.Tensor:
+    """`dst.copy_(src)` for weight loaders.
+
+    Model-specific weight loaders should call this instead of `.copy_()` when
+    copying a checkpoint tensor to the device. Off integrated GPUs it is a
+    plain `copy_`.
+
+    On integrated GPUs, a host-to-device copy straight from a safetensors mmap
+    takes its page faults inside the driver copy, which is several times slower
+    than faulting them on the CPU, so touch one byte per page of `src` first.
+    PyTorch already stages non-contiguous and dtype-converting copies through
+    a CPU temporary. Sources with at most one element are skipped: they count
+    as contiguous with any stride, which `view(torch.uint8)` rejects.
+    """
+    if (
+        src.device.type == "cpu"
+        and src.dtype == dst.dtype
+        and src.numel() > 1
+        and src.is_contiguous()
+        and _is_integrated_gpu(dst.device)
+    ):
+        flat = src.reshape(-1).view(torch.uint8)
+        flat[:: mmap.PAGESIZE].sum()
+        flat[-1:].sum()
+    return dst.copy_(src)
+
+
 def copy_with_check(target: torch.Tensor, loaded_weight: torch.Tensor):
     """
     Copy `loaded_weight` into `target` while forbidding downcasts.
@@ -59,7 +102,7 @@ def copy_with_check(target: torch.Tensor, loaded_weight: torch.Tensor):
     )
 
     if target.dtype == loaded_weight.dtype:
-        target.copy_(loaded_weight)
+        copy_weight_(target, loaded_weight)
         return
 
     target_rank = _dtype_rank(target.dtype)
@@ -108,7 +151,7 @@ class BasevLLMParameter(Parameter):
 
     def _assert_and_load(self, loaded_weight: torch.Tensor):
         assert self.data.shape == loaded_weight.shape
-        self.data.copy_(loaded_weight)
+        copy_weight_(self.data, loaded_weight)
 
     def load_column_parallel_weight(self, loaded_weight: torch.Tensor):
         self._assert_and_load(loaded_weight)
@@ -165,7 +208,7 @@ class _ColumnvLLMParameter(BasevLLMParameter):
                     shard_size,
                 )
                 assert param_data.shape == loaded_weight.shape
-                param_data.copy_(loaded_weight)
+                copy_weight_(param_data, loaded_weight)
                 return
             else:
                 loaded_weight = loaded_weight.narrow(
@@ -221,7 +264,7 @@ class _ColumnvLLMParameter(BasevLLMParameter):
                     )
 
         assert param_data.shape == loaded_weight.shape
-        param_data.copy_(loaded_weight)
+        copy_weight_(param_data, loaded_weight)
 
     def load_qkv_weight(
         self,
@@ -271,7 +314,7 @@ class _ColumnvLLMParameter(BasevLLMParameter):
         assert param_data.shape == loaded_weight.shape, (
             f"{param_data.shape=}, {loaded_weight.shape=}"
         )
-        param_data.copy_(loaded_weight)
+        copy_weight_(param_data, loaded_weight)
 
 
 class RowvLLMParameter(BasevLLMParameter):
@@ -314,7 +357,7 @@ class RowvLLMParameter(BasevLLMParameter):
                 )
 
                 assert param_data.shape == loaded_weight.shape
-                param_data.copy_(loaded_weight)
+                copy_weight_(param_data, loaded_weight)
 
                 return
             else:
@@ -334,7 +377,7 @@ class RowvLLMParameter(BasevLLMParameter):
             loaded_weight = loaded_weight.reshape(1)
 
         assert self.data.shape == loaded_weight.shape
-        self.data.copy_(loaded_weight)
+        copy_weight_(self.data, loaded_weight)
 
 
 class ModelWeightParameter(_ColumnvLLMParameter, RowvLLMParameter):
@@ -438,7 +481,7 @@ class PerTensorScaleParameter(BasevLLMParameter):
 
         param_data = param_data[shard_id]
         assert param_data.shape == loaded_weight.shape
-        param_data.copy_(loaded_weight)
+        copy_weight_(param_data, loaded_weight)
 
 
 class PackedColumnParameter(_ColumnvLLMParameter):
