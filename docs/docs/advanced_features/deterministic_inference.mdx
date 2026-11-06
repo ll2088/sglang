@@ -12,7 +12,7 @@ Deterministic inference ensures consistent LLM outputs across runs, which is cri
 
 Even with `temperature=0`, standard LLM inference can produce different outputs due to dynamic batching and varying reduction orders in GPU kernels.
 
-Under tensor parallelism, SGLang's custom all-reduce kernels (both the 1-stage and 2-stage variants) sum the ranks in the same absolute rank order `0..N-1`, so they produce bitwise identical results whichever kernel the size heuristic selects. This keeps the reduction order independent of the tensor size and of the rank that owns each partition. The 2-stage kernel still assigns each partition to its owner rank, but it reads the peer pointers in absolute rank order rather than rotating them by the local rank, so its float32 accumulation order matches the 1-stage kernel exactly.
+Under tensor parallelism, SGLang's custom all-reduce kernels (both the 1-stage and 2-stage variants) sum the ranks in the same absolute rank order `0..N-1`, so they produce bitwise identical results whichever kernel the size heuristic selects. This keeps the reduction order independent of the tensor size and of the rank that owns each partition. The 2-stage kernel still assigns each partition to its owner rank, but it reads the peer pointers in absolute rank order rather than rotating them by the local rank, so its float32 accumulation order matches the 1-stage kernel exactly. The same absolute-order semantics apply to both the JIT and AOT builds of `custom_all_reduce.cuh`; the 2-stage scratch buffers (`tmps`) keep the `(rank + i)` rotation because stage 2 gathers from each rank's own scratch region.
 
 ## The Root Cause of Non-Determinism
 
