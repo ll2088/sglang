@@ -124,7 +124,9 @@ def _parse_tvm_ffi_version(version: str):
     import re
 
     match = re.match(
-        r"^\s*v?(\d+(?:\.\d+)*)(?:[.-]?(?:post|rev|r)(\d+))?", version
+        r"^\s*v?(\d+(?:\.\d+)*)(?:[.-]?(?:post|rev|r)(\d+))?",
+        version,
+        re.IGNORECASE,
     )
     if match is None:
         raise ValueError(f"unparsable apache-tvm-ffi version: {version!r}")
