@@ -124,7 +124,9 @@ def _parse_tvm_ffi_version(version: str):
     import re
 
     match = re.match(
-        r"^\s*v?(\d+(?:\.\d+)*)(?:[.-]?(?:post|rev|r)(\d+))?",
+        r"^\s*v?(\d+(?:\.\d+)*)"
+        r"(?:[.-]?(?:post|rev|r)(\d+))?"
+        r"(?:[.-]?(?:dev|a|b|rc)(\d+))?",
         version,
         re.IGNORECASE,
     )

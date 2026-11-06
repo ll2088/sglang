@@ -81,8 +81,12 @@ class BaseEnv:
             try:
                 version = importlib.metadata.version(package_name)
                 versions[package_name] = version
-            except ModuleNotFoundError:
+            except importlib.metadata.PackageNotFoundError:
                 versions[package_name] = "Module Not Found"
+            except Exception:
+                # Metadata can be unreadable for partially installed or
+                # locally built distributions; never let env-check crash.
+                versions[package_name] = "Unknown"
         return versions
 
     def get_device_info(self):
