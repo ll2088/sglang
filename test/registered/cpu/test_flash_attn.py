@@ -513,6 +513,24 @@ class TestFlashAttn(CustomTestCase):
         self.assertFalse(is_even_mn(object(), None, None, None, 256, 128, 128, 64))
         self.assertFalse(is_even_mn(None, object(), None, None, 256, 128, 128, 64))
 
+    def test_flash_attn_even_mn_branch_stage1_consistency(self):
+        # run_flash_splitkv_fwd_stage1 uses the same is_even_MN predicate as
+        # run_flash_fwd and run_flash_splitkv_fwd. Assert the shared predicate
+        # rejects leftpad_k/seqused_k for the stage1 block sizes (kBlockM=16,
+        # kBlockN=64) as well, so all three launch paths stay consistent.
+        is_even_mn = _is_even_mn
+        block_m, block_n = 16, 64
+
+        # Block-aligned shapes with leftpad must NOT take the even-MN path.
+        self.assertFalse(is_even_mn(None, None, object(), None, 256, 128, block_n, block_m))
+        self.assertFalse(is_even_mn(None, None, None, object(), 256, 128, block_n, block_m))
+        self.assertFalse(is_even_mn(None, None, object(), object(), 256, 128, block_n, block_m))
+        # Without leftpad/seqused, block-aligned shapes may take the fast path.
+        self.assertTrue(is_even_mn(None, None, None, None, 256, 128, block_n, block_m))
+        # Non-aligned shapes never take the fast path.
+        self.assertFalse(is_even_mn(None, None, None, None, 255, 128, block_n, block_m))
+        self.assertFalse(is_even_mn(None, None, None, None, 256, 127, block_n, block_m))
+
     def test_flash_attn_leftpad_reference_semantics_cpu(self):
         # CPU-only semantic check of the leftpad reference used by the kernel tests:
         # keys before leftpad[b] must be excluded from the softmax, and the result
