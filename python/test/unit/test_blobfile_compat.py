@@ -8,7 +8,6 @@ import glob
 import importlib.metadata
 import os
 import re
-import sys
 import tempfile
 
 import pytest
