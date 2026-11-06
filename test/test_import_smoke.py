@@ -62,6 +62,43 @@ def test_import_sglang_top_level():
     assert len(sglang.__all__) > 0
 
 
+def test_import_sglang_reports_missing_dependency():
+    """A missing third-party dependency must be reported as the failing module.
+
+    This keeps the smoke test useful when the environment itself is broken
+    (e.g. ``pip install -e python`` failed): the failure message names the
+    first sglang submodule that could not be imported instead of a bare
+    ``ModuleNotFoundError`` from the test harness.
+    """
+    code = textwrap.dedent(
+        """
+        import sglang
+        """
+    )
+    env = dict(os.environ)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=_CHILD_IMPORT_TIMEOUT_S,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"fresh-interpreter import did not finish within "
+            f"{_CHILD_IMPORT_TIMEOUT_S}s",
+            pytrace=False,
+        )
+    if proc.returncode != 0:
+        failing = _first_failing_module_from_stderr(proc.stderr)
+        pytest.fail(
+            f"import sglang failed in module {failing!r}:\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}",
+            pytrace=False,
+        )
+
+
 def test_import_sglang_public_api_attributes():
     """Every name in ``__all__`` must be resolvable on the package.
 
