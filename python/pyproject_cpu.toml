@@ -21,7 +21,7 @@ dependencies = [
   "anthropic>=0.20.0",
   "blobfile==3.0.0",
   "build",
-  "compressed-tensors",
+  "compressed-tensors==0.20.1",
   "datasets",
   "easydict",
   "einops",

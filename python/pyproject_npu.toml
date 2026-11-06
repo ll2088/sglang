@@ -21,7 +21,7 @@ dependencies = [
   "av",
   "blobfile==3.0.0",
   "build",
-  "compressed-tensors",
+  "compressed-tensors==0.20.1",
   "datasets",
   "decord2 ; sys_platform == 'linux' and (platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'armv7l')",
   "easydict",
