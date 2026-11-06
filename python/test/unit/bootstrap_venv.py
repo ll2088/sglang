@@ -86,11 +86,17 @@ def _supported_python():
         found = shutil.which(f"python3.{minor}")
         if found:
             candidates.append(found)
-    # Only fall back to the current interpreter when it is itself supported;
-    # otherwise a system Python 3.14 would be selected and resolve cp314
-    # wheels. The explicit failure below is preferable to that.
+    # Never fall back to the interpreter running this script: on CI it is the
+    # system Python 3.14, which would resolve cp314 wheels. Only an explicit
+    # override, PYTHON, or a versioned python3.x on PATH may be selected; if
+    # none is supported we fail loudly below instead of silently using 3.14.
     if _is_supported(_current_version()):
-        candidates.append(sys.executable)
+        print(
+            f"note: invoking interpreter {sys.executable} is supported but is "
+            "not used as a fallback; select it explicitly via "
+            "SGLANG_BOOTSTRAP_PYTHON or PYTHON if intended",
+            flush=True,
+        )
     # Deduplicate while preserving order so the same path is not probed twice
     # (e.g. PYTHON and python3.12 pointing at the same binary).
     seen = set()
@@ -229,10 +235,36 @@ def _pip_install_args(python, args):
     if "--abi" not in constrained:
         constrained += ["--abi", abi_tag]
     # Also pin the platform tag so a resolver running under a different
-    # interpreter cannot pick a wheel for another ABI.
+    # interpreter cannot pick a wheel for another ABI. Derive it from the
+    # venv interpreter instead of hard-coding x86_64 so ARM hosts still work.
     if "--platform" not in constrained:
-        constrained += ["--platform", "manylinux2014_x86_64"]
+        platform_tag = _manylinux_platform_tag(python)
+        if platform_tag is not None:
+            constrained += ["--platform", platform_tag]
     return constrained
+
+
+def _manylinux_platform_tag(python):
+    """Return a manylinux platform tag for the venv interpreter, or None."""
+    result = subprocess.run(
+        [
+            os.fspath(python),
+            "-c",
+            "import sysconfig; print(sysconfig.get_platform())",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    platform = result.stdout.strip()
+    # sysconfig reports e.g. "linux-x86_64"; map it to a manylinux tag that
+    # matches the ABI we already constrained above.
+    if platform.startswith("linux-"):
+        arch = platform.split("-", 1)[1]
+        return f"manylinux2014_{arch}"
+    return None
 
 
 def _run(python, args):
@@ -410,6 +442,9 @@ def main():
     # silently downloading incompatible wheels.
     _assert_no_cp314_wheels(sys.executable)
     python = _ensure_venv()
+    # Hard gate: the venv interpreter must be 3.11-3.13 before any pip call.
+    # Fail here with diagnostics rather than letting pip resolve cp314 wheels.
+    _check_python_version(python)
     # Re-check the venv interpreter: a venv created from a different base
     # interpreter (e.g. a stale .venv) must not bypass the version gate.
     _check_python_version(python)
