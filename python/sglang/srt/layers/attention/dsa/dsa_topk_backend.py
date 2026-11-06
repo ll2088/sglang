@@ -10,6 +10,7 @@ from sglang.srt.runtime_context import get_exec, get_spec
 from sglang.srt.utils import is_hip
 
 if TYPE_CHECKING:
+    from sglang.srt.layers.attention.dsa.fused_mqa_topk_plan import FusedMQATopKPlan
     from sglang.srt.model_executor.model_runner import ModelRunner
 
 _is_hip = is_hip()
@@ -54,6 +55,27 @@ class DSATopKBackend(Enum):
 
     def should_use_topk_v2(self) -> bool:
         return self.is_sgl_kernel() and envs.SGLANG_OPT_USE_TOPK_V2.get()
+
+    def fused_prefill_plan(
+        self,
+        num_rows: int,
+        num_keys: int,
+        topk: int,
+    ) -> Optional[FusedMQATopKPlan]:
+        """Plan a single-launch fused scoring+top-k for one prefill chunk.
+
+        Returns ``None`` when the chunk must keep the dense two-phase path
+        (logits + top-k), which remains the exact reference: the fused path is
+        only accepted when it matches the dense top-k up to ties at the
+        boundary, and every row the gate cannot serve is rescanned exactly.
+        The fused kernel is not wired in yet, so this reports eligibility and
+        scratch sizing without changing dispatch.
+        """
+        from sglang.srt.layers.attention.dsa.fused_mqa_topk_plan import (
+            plan_fused_mqa_topk_prefill,
+        )
+
+        return plan_fused_mqa_topk_prefill(num_rows, num_keys, topk)
 
     def topk_func(
         self,
