@@ -10,7 +10,7 @@ import os
 import pprint
 import time
 from collections.abc import Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import Any, Callable, Optional
 
 import torch
@@ -433,29 +433,40 @@ class SGLangBackend:
             graph,
             self.compile_config.split_ops,
         )
-        from torch._dynamo.utils import lazy_format_graph_code
+        debug_ctx = nullcontext()
+        if self.compile_config.get_enable_debug_mode():
+            from sglang.srt.compilation import depyf_compat
 
-        # depyf will hook lazy_format_graph_code and dump the graph
-        # for debugging, no need to print the graph here
-        lazy_format_graph_code("before split", self.graph)
-        lazy_format_graph_code("after split", self.split_gm)
+            debug_dump_path = os.path.join(local_cache_dir, "depyf_debug")
+            os.makedirs(debug_dump_path, exist_ok=True)
+            debug_ctx = depyf_compat.prepare_debug(debug_dump_path)
 
-        compilation_counter.num_piecewise_graphs_seen += len(self.piecewise_graphs)
+        with debug_ctx:
+            from torch._dynamo.utils import lazy_format_graph_code
 
-        submod_names_to_compile = [
-            item.submod_name
-            for item in self.piecewise_graphs
-            if not item.is_splitting_graph
-        ]
+            # depyf will hook lazy_format_graph_code and dump the graph
+            # for debugging, no need to print the graph here
+            lazy_format_graph_code("before split", self.graph)
+            lazy_format_graph_code("after split", self.split_gm)
 
-        PiecewiseCompileInterpreter(
-            self.split_gm,
-            submod_names_to_compile,
-            self.inductor_config,
-            self.graph_pool,
-            self.compile_config,
-            self,
-        ).run(*example_inputs)
+            compilation_counter.num_piecewise_graphs_seen += len(
+                self.piecewise_graphs
+            )
+
+            submod_names_to_compile = [
+                item.submod_name
+                for item in self.piecewise_graphs
+                if not item.is_splitting_graph
+            ]
+
+            PiecewiseCompileInterpreter(
+                self.split_gm,
+                submod_names_to_compile,
+                self.inductor_config,
+                self.graph_pool,
+                self.compile_config,
+                self,
+            ).run(*example_inputs)
 
         rank = torch.distributed.get_rank()
 
