@@ -5,6 +5,7 @@ modules, so they can run in a minimal environment.
 """
 
 import glob
+import importlib
 import importlib.metadata
 import os
 import re
