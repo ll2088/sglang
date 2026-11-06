@@ -481,6 +481,8 @@ class TestFlashAttn(CustomTestCase):
         self.assertTrue(is_even_mn(None, None, None, None, 256, 128, 128, 64))
         # Non-aligned shapes never take the fast path.
         self.assertFalse(is_even_mn(None, None, None, None, 255, 128, 128, 64))
+        # Both leftpad and seqused set: still must not take the fast path.
+        self.assertFalse(is_even_mn(None, None, object(), object(), 256, 128, 128, 64))
 
 
 if __name__ == "__main__":
