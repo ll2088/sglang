@@ -46,13 +46,16 @@ def test_blobfile_constraints_consistent():
     for path in files:
         with open(path, encoding="utf-8") as f:
             text = f.read()
-        if not re.search(r"blobfile[^\n]*3\.3\.0", text):
-            bad.append(path)
+        match = re.search(r"blobfile[^\n]*", text)
+        if not match or "3.3.0" not in match.group(0):
+            bad.append((path, match.group(0) if match else "<no blobfile line>"))
     assert not bad, f"inconsistent blobfile constraints: {bad}"
 
 
 def test_blobfile_import_smoke():
     pytest.importorskip("blobfile")
+    # Import lazily inside the test so collection never pulls in torch-heavy
+    # modules; this keeps the suite runnable in a minimal environment.
     import sglang  # noqa: F401
     import sglang.check_env  # noqa: F401
 
