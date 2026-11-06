@@ -7,7 +7,7 @@ name = "sglang"
 dynamic = ["version"]
 description = "SGLang is a fast serving framework for large language models and vision language models."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -128,9 +128,8 @@ srt_hip = [
 
 # Kept in step with srt_hip above by hand; only the two pins below differ.
 srt_hip_rocm724 = [
-  # ROCm 7.2.4 uses torch 2.11. compressed-tensors 0.15.0 requires
-  # torch<2.11, while 0.16.0 supports torch>=2.10.
-  "compressed-tensors==0.16.0",
+  # ROCm 7.2.4 uses torch 2.11; compressed-tensors 0.20.1 supports it.
+  "compressed-tensors==0.20.1",
   "petit_kernel==0.0.2",
   "sglang[monokernels_hip]",
   "sglang[runtime_common]",
@@ -141,7 +140,7 @@ srt_hip_rocm724 = [
 # Same as srt_hip_rocm724 above except for the torch pin; keep them in step by
 # hand. ROCm 10.1 publishes no torch 2.11 wheel, so it has to be 2.12.
 srt_hip_rocm101 = [
-  "compressed-tensors==0.16.0",
+  "compressed-tensors==0.20.1",
   "petit_kernel==0.0.2",
   "sglang[runtime_common]",
   "torch==2.12.0",
