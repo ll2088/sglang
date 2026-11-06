@@ -77,17 +77,15 @@ def _supported_python():
     env_python = os.environ.get("PYTHON")
     if env_python:
         candidates.append(env_python)
-    # Probe PATH for a supported interpreter. shutil.which returns the first
-    # match, so probe each minor explicitly and keep the first supported one.
-    for minor in (13, 12, 11):
+    # Probe PATH for a supported interpreter in strict 3.11 -> 3.12 -> 3.13
+    # order. shutil.which returns the first match, so probe each minor
+    # explicitly and keep the first supported one. The unversioned python3 is
+    # deliberately NOT considered: on CI it is the system Python 3.14, which
+    # would resolve cp314 wheels and break the install.
+    for minor in (11, 12, 13):
         found = shutil.which(f"python3.{minor}")
         if found:
             candidates.append(found)
-    # Also consider the unversioned python3 only if it is in range; this is
-    # validated below like every other candidate.
-    found_python3 = shutil.which("python3")
-    if found_python3:
-        candidates.append(found_python3)
     # Only fall back to the current interpreter when it is itself supported;
     # otherwise a system Python 3.14 would be selected and resolve cp314
     # wheels. The explicit failure below is preferable to that.
@@ -304,6 +302,9 @@ def main():
     _run(python, ["-V"])
     _run(python, ["-m", "pip", "-V"])
     _run(python, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+    # Run the pin consistency gate before resolving the project so a stale
+    # 0.18.0 entry fails fast with a clear message instead of a resolver error.
+    _run(python, [os.fspath(PYTHON_DIR / "test" / "unit" / "check_compressed_tensors_pins.py")])
     # Fail fast before pip resolves anything if the venv interpreter drifted
     # out of the supported range (e.g. a stale .venv from Python 3.14).
     _run(
@@ -335,6 +336,19 @@ def main():
             "import sys, compressed_tensors; "
             "assert (3, 11) <= sys.version_info[:2] < (3, 14), sys.version; "
             "print(sys.executable, compressed_tensors.__version__)",
+        ],
+    )
+    # Assert pip did not resolve any cp314 wheel: the venv interpreter must be
+    # 3.11-3.13 and the installed compressed-tensors must be the 0.20.1 pin.
+    _run(
+        python,
+        [
+            "-c",
+            "import sys, importlib.metadata as m; "
+            "assert (3, 11) <= sys.version_info[:2] < (3, 14), sys.version; "
+            "assert m.version('compressed-tensors') == '0.20.1', "
+            "m.version('compressed-tensors'); "
+            "print('wheel tag ok:', sys.version.split()[0])",
         ],
     )
     _report_environment(python)
