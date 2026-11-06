@@ -6,6 +6,7 @@ CPU/NPU/XPU install variants without a GPU.
 """
 
 import importlib
+import importlib.metadata
 import re
 from pathlib import Path
 
@@ -46,7 +47,11 @@ def _version_tuple(version):
 
 def test_compressed_tensors_version_in_range():
     ct = pytest.importorskip("compressed_tensors")
-    version = ct.__version__
+    # Some builds do not expose __version__ on the package; fall back to the
+    # installed distribution metadata so the range check still applies.
+    version = getattr(ct, "__version__", None)
+    if version is None:
+        version = importlib.metadata.version("compressed-tensors")
     parts = _version_tuple(version)
     assert parts >= (0, 20, 1), f"compressed-tensors {version} is older than 0.20.1"
     assert parts < (0, 21), f"compressed-tensors {version} is newer than 0.20.x"

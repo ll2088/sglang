@@ -48,13 +48,43 @@ def _run(python, args):
     subprocess.run(cmd, check=True, cwd=os.fspath(REPO_ROOT))
 
 
+def _check_python_version(python):
+    # compressed-tensors 0.20.x requires Python >= 3.11; fail early with a
+    # clear message instead of letting pip resolve against an older runtime.
+    result = subprocess.run(
+        [os.fspath(python), "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    major, minor = (int(part) for part in result.stdout.strip().split("."))
+    if (major, minor) < (3, 11):
+        raise SystemExit(
+            f"compressed-tensors 0.20.x requires Python >= 3.11, "
+            f"but {python} is {major}.{minor}"
+        )
+
+
+def _report_environment(python):
+    # Keep the install and the verification commands on the same interpreter.
+    for args in (
+        ["-c", "import sys; print(sys.executable)"],
+        ["-V"],
+        ["-m", "pip", "-V"],
+        ["-m", "pip", "show", "compressed-tensors"],
+    ):
+        subprocess.run([os.fspath(python), *args], check=False, cwd=os.fspath(REPO_ROOT))
+
+
 def main():
     python = _ensure_venv()
+    _check_python_version(python)
     _run(python, ["pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
     # Editable install of the project; the pin in python/pyproject.toml decides
     # the compressed-tensors version, so no version is passed here.
     _run(python, ["pip", "install", "-e", os.fspath(PYTHON_DIR)])
     _run(python, ["-c", "import compressed_tensors; print(compressed_tensors.__version__)"])
+    _report_environment(python)
     print(f"bootstrap complete; activate with: . {VENV_DIR}/bin/activate", flush=True)
 
 
