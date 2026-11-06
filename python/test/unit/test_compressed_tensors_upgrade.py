@@ -33,8 +33,8 @@ def _read(name):
 def test_compressed_tensors_version_in_range():
     ct = pytest.importorskip("compressed_tensors")
     version = ct.__version__
-    parts = tuple(int(p) for p in version.split(".")[:2])
-    assert parts >= (0, 20), f"compressed-tensors {version} is older than 0.20"
+    parts = tuple(int(p) for p in version.split(".")[:3])
+    assert parts >= (0, 20, 1), f"compressed-tensors {version} is older than 0.20.1"
     assert parts < (0, 21), f"compressed-tensors {version} is newer than 0.20.x"
 
 
@@ -68,8 +68,11 @@ def test_quantization_config_parsing_regression():
     # The public config entry point must still be importable and constructible
     # from an empty/None config without touching removed GPTQ ordering paths.
     assert hasattr(config_mod, "CompressionConfig")
+    # 0.20 keeps CompressionConfig constructible from an empty config; guard
+    # against signature drift without depending on optional fields.
     cfg = config_mod.CompressionConfig()
     assert cfg is not None
+    assert hasattr(cfg, "quantization_status") or hasattr(cfg, "format")
     # apply_quantization_config gained allowed_modules/leave_decompressed in
     # 0.20; make sure the symbol still exists for downstream callers.
     quant_mod = importlib.import_module("compressed_tensors.quantization")
