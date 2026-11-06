@@ -54,3 +54,72 @@ def test_row_rescan_bounds():
     assert not plan_mod.row_rescan_required(2048, 2048)
     assert not plan_mod.row_rescan_required(plan_mod.CANDIDATES_PER_ROW, 2048)
     assert plan_mod.row_rescan_required(plan_mod.CANDIDATES_PER_ROW + 1, 2048)
+
+
+@pytest.mark.parametrize("topk", plan_mod.SUPPORTED_TOPKS)
+@pytest.mark.parametrize(
+    "num_candidates",
+    [
+        0,
+        1,
+        plan_mod.CANDIDATES_PER_ROW - 1,
+        plan_mod.CANDIDATES_PER_ROW,
+        plan_mod.CANDIDATES_PER_ROW + 1,
+    ],
+)
+def test_rescan_window_matches_dense_contract(topk, num_candidates):
+    # Too few candidates (the gate missed the boundary) or more than the
+    # selection scratch holds both force the exact fp32 rescan.
+    expected = not (topk <= num_candidates <= plan_mod.CANDIDATES_PER_ROW)
+    assert plan_mod.row_rescan_required(num_candidates, topk) is expected
+
+
+@pytest.mark.parametrize("topk", plan_mod.SUPPORTED_TOPKS)
+def test_boundary_shapes(topk):
+    assert plan_mod.fusion_eligible(plan_mod.MAX_ROWS, plan_mod.MAX_KEYS, topk) == (
+        True,
+        "eligible",
+    )
+    assert not plan_mod.fusion_eligible(
+        plan_mod.MAX_ROWS + 1, plan_mod.MAX_KEYS, topk
+    )[0]
+    assert not plan_mod.fusion_eligible(
+        plan_mod.MAX_ROWS, plan_mod.MAX_KEYS + 1, topk
+    )[0]
+    assert not plan_mod.fusion_eligible(
+        plan_mod.MAX_ROWS, plan_mod.MIN_KEYS - 1, topk
+    )[0]
+
+
+def test_workspace_is_fixed_and_smaller_than_dense_logits():
+    # Scratch is sized once for the maximum shape and reused across layers, so
+    # it is shape independent and stays CUDA-graph capture safe.
+    small = plan_mod.plan_fused_mqa_topk_prefill(
+        4096, plan_mod.MIN_KEYS, 2048, available=True
+    )
+    large = plan_mod.plan_fused_mqa_topk_prefill(
+        plan_mod.MAX_ROWS, plan_mod.MAX_KEYS, 2048, available=True
+    )
+    assert small.workspace_bytes == large.workspace_bytes == plan_mod.WORKSPACE_BYTES
+    assert large.dense_logits_bytes == plan_mod.MAX_ROWS * plan_mod.MAX_KEYS * 4
+    assert large.dense_logits_bytes > plan_mod.WORKSPACE_BYTES
+    assert large.dense_chunks == plan_mod.dense_logits_chunks(
+        plan_mod.MAX_ROWS, plan_mod.MAX_KEYS
+    )
+
+
+def test_resolve_prefill_plan_reports_reason():
+    plan, reason = plan_mod.resolve_prefill_plan(
+        plan_mod.MAX_ROWS, plan_mod.MAX_KEYS, 2048, available=True
+    )
+    assert plan is not None and reason == "eligible"
+
+    plan, reason = plan_mod.resolve_prefill_plan(
+        plan_mod.MAX_ROWS + 1, plan_mod.MAX_KEYS, 2048, available=True
+    )
+    assert plan is None and "exceeds the single-launch limit" in reason
+
+    plan, reason = plan_mod.resolve_prefill_plan(
+        plan_mod.MAX_ROWS, plan_mod.MAX_KEYS, 2048, available=False
+    )
+    assert plan is None and reason == "fused kernel unavailable or disabled"

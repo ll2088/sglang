@@ -121,6 +121,34 @@ def row_rescan_required(
     return num_candidates < topk or num_candidates > capacity
 
 
+def resolve_prefill_plan(
+    rows: int,
+    keys: int,
+    topk: int,
+    available: Optional[bool] = None,
+) -> Tuple[Optional[FusedMQATopKPlan], str]:
+    """Plan the fused launch, or return ``None`` and why the dense path stays.
+
+    The dense path stays the only exact reference: a rejected chunk keeps its
+    budgeted ``fp8 MQA logits + top-k`` pairs and is never served by an
+    approximate fused result.
+    """
+    if available is None:
+        available = fused_mqa_topk_available()
+    if not available:
+        return None, "fused kernel unavailable or disabled"
+    ok, reason = fusion_eligible(rows, keys, topk)
+    if not ok:
+        return None, reason
+    return FusedMQATopKPlan(
+        rows=rows,
+        keys=keys,
+        topk=topk,
+        workspace_bytes=WORKSPACE_BYTES,
+        dense_chunks=dense_logits_chunks(rows, keys),
+    ), reason
+
+
 def plan_fused_mqa_topk_prefill(
     rows: int,
     keys: int,
@@ -128,17 +156,5 @@ def plan_fused_mqa_topk_prefill(
     available: Optional[bool] = None,
 ) -> Optional[FusedMQATopKPlan]:
     """Plan one fused prefill launch, or ``None`` to keep the dense path."""
-    if available is None:
-        available = fused_mqa_topk_available()
-    if not available:
-        return None
-    ok, _ = fusion_eligible(rows, keys, topk)
-    if not ok:
-        return None
-    return FusedMQATopKPlan(
-        rows=rows,
-        keys=keys,
-        topk=topk,
-        workspace_bytes=WORKSPACE_BYTES,
-        dense_chunks=dense_logits_chunks(rows, keys),
-    )
+    plan, _ = resolve_prefill_plan(rows, keys, topk, available)
+    return plan
