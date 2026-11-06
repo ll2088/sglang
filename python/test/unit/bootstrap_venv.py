@@ -45,7 +45,19 @@ def _ensure_venv():
 def _run(python, args):
     cmd = [os.fspath(python), "-m", *args]
     print("+", " ".join(cmd), flush=True)
-    subprocess.run(cmd, check=True, cwd=os.fspath(REPO_ROOT))
+    result = subprocess.run(
+        cmd, cwd=os.fspath(REPO_ROOT), capture_output=True, text=True
+    )
+    # Echo the full output so CI logs are not truncated by the runner and the
+    # actual pip resolver error is visible when the install fails.
+    if result.stdout:
+        print(result.stdout, flush=True)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr, flush=True)
+    if result.returncode != 0:
+        raise SystemExit(
+            f"command failed with exit code {result.returncode}: {' '.join(cmd)}"
+        )
 
 
 def _check_python_version(python):
@@ -67,6 +79,7 @@ def _check_python_version(python):
             f"but {python} is {major}.{minor}; create the venv with a "
             "Python 3.11-3.13 interpreter (e.g. python3.12 -m venv .venv)"
         )
+    print(f"using Python {major}.{minor} at {python}", flush=True)
 
 
 def _check_compressed_tensors_version(python):
@@ -84,15 +97,17 @@ def _check_compressed_tensors_version(python):
         text=True,
     )
     version = result.stdout.strip()
-    if not version.startswith("0.20."):
+    if version != "0.20.1":
         # Dump diagnostics before failing so CI logs show what pip resolved.
         for args in (
             ["-m", "pip", "show", "compressed-tensors"],
             ["-m", "pip", "list"],
         ):
-            subprocess.run([os.fspath(python), *args], check=False, cwd=os.fspath(REPO_ROOT))
+            subprocess.run(
+                [os.fspath(python), *args], check=False, cwd=os.fspath(REPO_ROOT)
+            )
         raise SystemExit(
-            f"expected compressed-tensors 0.20.x, but {python} has {version}"
+            f"expected compressed-tensors 0.20.1, but {python} has {version}"
         )
     return version
 
@@ -116,7 +131,6 @@ def main():
     python = _ensure_venv()
     # Re-check the venv interpreter: a venv created from a different base
     # interpreter (e.g. a stale .venv) must not bypass the version gate.
-    _check_python_version(python)
     _check_python_version(python)
     # Print the interpreter that will receive the install so CI logs make it
     # obvious whether the system interpreter leaked in.
