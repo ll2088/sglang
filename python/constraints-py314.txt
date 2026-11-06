@@ -7,11 +7,13 @@
 # Only pins that are known to lack cp314 wheels are listed; everything else
 # is left to the normal resolver.
 
-# py-spy ships abi3 wheels only up to cp312; no cp314 wheel exists.
-py-spy==0.4.3; python_version >= "3.14"
+# py-spy ships abi3 wheels only up to cp312; no cp314 wheel exists, so it
+# must not be installed on 3.14 (the marker keeps it out of the resolution).
+py-spy==0.4.3; python_version < "3.14"
 
-# pyzmq 27.x publishes cp312-abi3 wheels; 3.14 needs a newer release.
-pyzmq>=27.3.0; python_version >= "3.14"
+# pyzmq 27.x publishes cp312-abi3 wheels; 3.14 needs a newer release, so
+# pin it only below 3.14 and let the resolver pick a cp314 build otherwise.
+pyzmq>=27.3.0; python_version < "3.14"
 
 # quack-kernels is a pure-python wheel but pins torch builds that have no
 # cp314 wheels; keep it out of the 3.14 resolution entirely.
