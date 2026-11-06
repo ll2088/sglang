@@ -14,6 +14,10 @@ import textwrap
 
 import pytest
 
+# Keep the child interpreter budget small: the whole point of this smoke test
+# is to surface a broken import in seconds, not to wait on a hung import.
+_CHILD_IMPORT_TIMEOUT_S = 20
+
 
 def _first_failing_module(exc: BaseException) -> str:
     """Best-effort extraction of the first failing module name from a traceback."""
@@ -78,16 +82,25 @@ def test_import_sglang_in_fresh_interpreter():
         print(sglang.__version__)
         """
     )
-    # Drop PYTHONPATH so the child resolves the same installed package as the
-    # parent test process; otherwise a stale path could mask a broken install.
-    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        env=env,
-    )
+    # Inherit the parent's environment (including PYTHONPATH) so the child
+    # resolves exactly the same sglang package as the parent test process.
+    # Dropping PYTHONPATH would make the child fall back to a different
+    # install and mask the very breakage this test is meant to catch.
+    env = dict(os.environ)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=_CHILD_IMPORT_TIMEOUT_S,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"fresh-interpreter import did not finish within "
+            f"{_CHILD_IMPORT_TIMEOUT_S}s",
+            pytrace=False,
+        )
     if proc.returncode != 0:
         failing = _first_failing_module_from_stderr(proc.stderr)
         pytest.fail(
