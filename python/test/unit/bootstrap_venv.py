@@ -201,6 +201,11 @@ def _run(python, args):
             "0.20.x requires Python >= 3.11 and the pinned torch/transformers "
             "wheels require Python < 3.14"
         )
+    # Refuse to let pip resolve wheels for an interpreter other than the venv
+    # one. A system Python 3.14 leaking into the install path shows up as
+    # cp314 wheels in the resolver output; fail before that happens.
+    if args[:2] == ["-m", "pip"] and "install" in args:
+        _assert_no_cp314_wheels(python)
     cmd = [os.fspath(python), "-m", *args]
     print("+", " ".join(cmd), flush=True)
     result = subprocess.run(
@@ -215,6 +220,30 @@ def _run(python, args):
     if result.returncode != 0:
         raise SystemExit(
             f"command failed with exit code {result.returncode}: {' '.join(cmd)}"
+        )
+
+
+def _assert_no_cp314_wheels(python):
+    # The pinned torch/transformers wheels are not published for Python 3.14;
+    # if pip would resolve cp314 artifacts the install is running under the
+    # wrong interpreter. Check the interpreter's own wheel tag support rather
+    # than parsing pip output, so this gate is deterministic.
+    result = subprocess.run(
+        [
+            os.fspath(python),
+            "-c",
+            "import sysconfig; print(sysconfig.get_platform()); "
+            "print(sysconfig.get_config_var('SOABI') or '')",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    soabi = result.stdout.strip().splitlines()[-1]
+    if "cp314" in soabi:
+        raise SystemExit(
+            f"refusing to install with {python}: interpreter reports {soabi}, "
+            "which would resolve cp314 wheels; use Python 3.11-3.13"
         )
 
 
@@ -304,6 +333,8 @@ def main():
     _run(python, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
     # Run the pin consistency gate before resolving the project so a stale
     # 0.18.0 entry fails fast with a clear message instead of a resolver error.
+    # Invoke it with the venv interpreter so the gate runs in the same
+    # environment that will receive the install.
     _run(python, [os.fspath(PYTHON_DIR / "test" / "unit" / "check_compressed_tensors_pins.py")])
     # Fail fast before pip resolves anything if the venv interpreter drifted
     # out of the supported range (e.g. a stale .venv from Python 3.14).
@@ -326,7 +357,9 @@ def main():
         ],
     )
     # Editable install of the project; the pin in python/pyproject.toml decides
-    # the compressed-tensors version, so no version is passed here.
+    # the compressed-tensors version, so no version is passed here. Use the
+    # venv interpreter explicitly (never bare `pip`) so the system Python 3.14
+    # cannot resolve cp314 wheels.
     _run(python, ["-m", "pip", "install", "-e", os.fspath(PYTHON_DIR)])
     version = _check_compressed_tensors_version(python)
     _run(
