@@ -6,6 +6,8 @@ submodule instead of surfacing as a slow integration-test failure.
 """
 
 import importlib
+import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -56,6 +58,17 @@ def test_import_platform_stubs():
     assert callable(stubs.install_platform_stubs)
 
 
+_FAILING_MODULE_RE = re.compile(r'File "[^"]*[\\/]([^\\/]+)\.py", line \d+')
+
+
+def _first_failing_module_from_stderr(stderr: str) -> str:
+    """Extract the last module file mentioned in a subprocess traceback."""
+    matches = _FAILING_MODULE_RE.findall(stderr or "")
+    if not matches:
+        return "<unknown>"
+    return matches[-1]
+
+
 def test_import_sglang_in_fresh_interpreter():
     """A fresh interpreter must import sglang without preloaded state."""
     code = textwrap.dedent(
@@ -65,13 +78,21 @@ def test_import_sglang_in_fresh_interpreter():
         print(sglang.__version__)
         """
     )
+    # Drop PYTHONPATH so the child resolves the same installed package as the
+    # parent test process; otherwise a stale path could mask a broken install.
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     proc = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=60,
+        env=env,
     )
-    assert proc.returncode == 0, (
-        "fresh-interpreter import failed:\n"
-        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-    )
+    if proc.returncode != 0:
+        failing = _first_failing_module_from_stderr(proc.stderr)
+        pytest.fail(
+            f"fresh-interpreter import failed in module {failing!r}:\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}",
+            pytrace=False,
+        )
+    assert proc.stdout.strip(), "fresh interpreter produced no version output"
