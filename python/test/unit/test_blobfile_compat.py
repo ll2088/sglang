@@ -17,7 +17,8 @@ PYTHON_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 
 
 def _config_files_with_blobfile():
-    files = [os.path.join(PYTHON_DIR, "setup.py"), os.path.join(PYTHON_DIR, "pyproject.toml")]
+    # setup.py does not declare runtime dependencies; only pyproject files do.
+    files = [os.path.join(PYTHON_DIR, "pyproject.toml")]
     files.extend(sorted(glob.glob(os.path.join(PYTHON_DIR, "pyproject_*.toml"))))
     result = []
     for path in files:
@@ -61,6 +62,19 @@ def test_blobfile_import_smoke():
     pytest.importorskip("torch")
     import sglang  # noqa: F401
     import sglang.check_env  # noqa: F401
+
+
+def test_blobfile_read_write_roundtrip():
+    bf = pytest.importorskip("blobfile")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "sample.bin")
+        payload = b"blobfile-compat-check"
+        with bf.BlobFile(path, "wb") as f:
+            f.write(payload)
+        with bf.BlobFile(path, "rb") as f:
+            assert f.read() == payload
+        assert bf.exists(path)
 
 
 def test_blobfile_read_write_roundtrip():
