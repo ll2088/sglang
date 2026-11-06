@@ -28,7 +28,7 @@ from sglang.srt.layers.dp_attention import (
 )
 from sglang.srt.layers.layer_boundary import get_attn_tp_context
 from sglang.srt.layers.linear import _resolve_linear_group
-from sglang.srt.layers.parameter import BasevLLMParameter
+from sglang.srt.layers.parameter import BasevLLMParameter, copy_weight_
 from sglang.srt.layers.quantization.base_config import (
     QuantizationConfig,
     QuantizeMethodBase,
@@ -412,7 +412,7 @@ class VocabParallelEmbedding(torch.nn.Module):
             ):
                 loaded_weight = loaded_weight.reshape(1)
             assert param.data.shape == loaded_weight.shape
-            param.data.copy_(loaded_weight)
+            copy_weight_(param.data, loaded_weight)
             return
 
         # Shard indexes for loading the weight
@@ -443,7 +443,7 @@ class VocabParallelEmbedding(torch.nn.Module):
         # Copy the data.
         if not self.use_presharded_weights:
             loaded_weight = loaded_weight.narrow(output_dim, start_idx, shard_size)
-        param[: loaded_weight.shape[0]].data.copy_(loaded_weight)
+        copy_weight_(param[: loaded_weight.shape[0]].data, loaded_weight)
         param[loaded_weight.shape[0] :].data.fill_(0)
 
     def _use_triton_embedding(self, input_: torch.Tensor) -> bool:

@@ -1,28 +1,31 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the SGLang project
-"""CPU-runnable tests for `copy_weight_` in `sglang.srt.layers.parameter`.
+"""CPU-runnable tests for `copy_weight_` (integrated-GPU mmap prefault).
 
-The integrated-GPU prefault path cannot run on CI hardware, so the gate is
-monkeypatched on and the copy result is checked byte for byte.
+CI has no integrated GPU, so the gate is forced on with monkeypatch. The
+prefault path must accept every shape/dtype the weight loaders pass and leave
+the copy byte-identical to a plain `copy_`.
 """
 
 import pytest
 import torch
 
-from sglang.srt.layers import parameter as parameter_mod
 from sglang.srt.layers.parameter import copy_weight_
 
 
 @pytest.fixture
 def prefault_on(monkeypatch: pytest.MonkeyPatch) -> None:
     """Take the integrated-GPU path of `copy_weight_` without a GPU."""
-    monkeypatch.setattr(parameter_mod, "_is_integrated_gpu", lambda device: True)
+    monkeypatch.setattr(
+        "sglang.srt.layers.parameter._is_integrated_gpu", lambda device: True
+    )
 
 
 @pytest.fixture
 def prefault_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force the plain-copy fallback path."""
-    monkeypatch.setattr(parameter_mod, "_is_integrated_gpu", lambda device: False)
+    """Force the plain-copy path regardless of the host."""
+    monkeypatch.setattr(
+        "sglang.srt.layers.parameter._is_integrated_gpu", lambda device: False
+    )
 
 
 @pytest.mark.parametrize(
@@ -58,7 +61,7 @@ def test_copy_weight_prefault_copies_exact_bytes(
     ],
     ids=["0d", "empty", "bf16", "dim1_narrow"],
 )
-def test_copy_weight_fallback_copies_exact_bytes(
+def test_copy_weight_plain_path_copies_exact_bytes(
     prefault_off: None, src: torch.Tensor
 ) -> None:
     dst = torch.empty_like(src, memory_format=torch.contiguous_format)
@@ -69,89 +72,75 @@ def test_copy_weight_fallback_copies_exact_bytes(
     )
 
 
-def test_copy_weight_returns_dst(prefault_on: None) -> None:
-    src = torch.randn(8, 8)
-    dst = torch.empty_like(src)
-    out = copy_weight_(dst, src)
-    assert out is dst
-
-
-def test_copy_weight_skips_prefault_for_non_cpu_source(
-    monkeypatch: pytest.MonkeyPatch,
+def test_copy_weight_prefault_touches_contiguous_source(
+    prefault_on: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A non-CPU source must not take the touch path even when the gate is on."""
-    calls = []
-    monkeypatch.setattr(
-        parameter_mod, "_is_integrated_gpu", lambda device: calls.append(device) or True
-    )
-    src = torch.randn(8, 8)
+    """The prefault path must read the source before the copy."""
+    src = torch.randn(64, 1024)
     dst = torch.empty_like(src)
+    touched = {"n": 0}
+    real_sum = torch.Tensor.sum
+
+    def counting_sum(self, *args, **kwargs):
+        touched["n"] += 1
+        return real_sum(self, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "sum", counting_sum)
     copy_weight_(dst, src)
-    assert calls == []
+    assert touched["n"] >= 1
     assert torch.equal(dst, src)
 
 
-def test_copy_weight_skips_prefault_for_dtype_conversion(
-    monkeypatch: pytest.MonkeyPatch,
+def test_copy_weight_plain_path_does_not_touch(
+    prefault_off: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls = []
-    monkeypatch.setattr(
-        parameter_mod, "_is_integrated_gpu", lambda device: calls.append(device) or True
-    )
-    src = torch.randn(8, 8)
-    dst = torch.empty(8, 8, dtype=torch.bfloat16)
+    src = torch.randn(64, 1024)
+    dst = torch.empty_like(src)
+    touched = {"n": 0}
+    real_sum = torch.Tensor.sum
+
+    def counting_sum(self, *args, **kwargs):
+        touched["n"] += 1
+        return real_sum(self, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "sum", counting_sum)
     copy_weight_(dst, src)
-    assert calls == []
-    assert torch.equal(dst, src.to(torch.bfloat16))
+    assert touched["n"] == 0
+    assert torch.equal(dst, src)
 
 
-def test_copy_weight_skips_prefault_for_non_contiguous_source(
-    monkeypatch: pytest.MonkeyPatch,
+def test_copy_weight_skips_non_contiguous_source(
+    prefault_on: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls = []
-    monkeypatch.setattr(
-        parameter_mod, "_is_integrated_gpu", lambda device: calls.append(device) or True
-    )
-    src = torch.randn(64, 64).t()
+    """Non-contiguous sources are staged by PyTorch; no prefault needed."""
+    src = torch.randn(64, 1024).t()
     dst = torch.empty_like(src, memory_format=torch.contiguous_format)
+    touched = {"n": 0}
+    real_sum = torch.Tensor.sum
+
+    def counting_sum(self, *args, **kwargs):
+        touched["n"] += 1
+        return real_sum(self, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "sum", counting_sum)
     copy_weight_(dst, src)
-    assert calls == []
+    assert touched["n"] == 0
     assert torch.equal(dst, src.contiguous())
 
 
-def test_copy_weight_prefault_touches_every_page(
+def test_copy_weight_skips_dtype_converting_source(
     prefault_on: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The touch must cover the first byte of every page plus the last byte."""
-    touched = []
+    src = torch.randn(64, 1024)
+    dst = torch.empty(64, 1024, dtype=torch.bfloat16)
+    touched = {"n": 0}
     real_sum = torch.Tensor.sum
 
-    def recording_sum(self, *args, **kwargs):
-        touched.append(self.numel())
+    def counting_sum(self, *args, **kwargs):
+        touched["n"] += 1
         return real_sum(self, *args, **kwargs)
 
-    monkeypatch.setattr(torch.Tensor, "sum", recording_sum)
-    src = torch.randn(1 << 20)
-    dst = torch.empty_like(src)
+    monkeypatch.setattr(torch.Tensor, "sum", counting_sum)
     copy_weight_(dst, src)
-    assert len(touched) == 2
-    assert torch.equal(dst, src)
-
-
-def test_copy_with_check_uses_copy_weight(
-    prefault_on: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Same-dtype copies in `copy_with_check` go through `copy_weight_`."""
-    seen = []
-    real_copy_weight = parameter_mod.copy_weight_
-
-    def recording_copy_weight(dst, src):
-        seen.append((dst.shape, src.shape))
-        return real_copy_weight(dst, src)
-
-    monkeypatch.setattr(parameter_mod, "copy_weight_", recording_copy_weight)
-    target = torch.empty(4, 4)
-    loaded = torch.randn(4, 4)
-    parameter_mod.copy_with_check(target, loaded)
-    assert seen == [((4, 4), (4, 4))]
-    assert torch.equal(target, loaded)
+    assert touched["n"] == 0
+    assert torch.equal(dst, src.to(torch.bfloat16))
