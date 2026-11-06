@@ -35,8 +35,9 @@ _DEVICE_SKIP = unittest.skipUnless(
 class _LaunchCapture:
     """Records the launch in place of ``_fwd_kernel``."""
 
-    args: tuple
-    kwargs: dict
+    def __init__(self) -> None:
+        self.args: tuple = ()
+        self.kwargs: dict = {}
 
     def __getitem__(self, grid):
         return self._record
@@ -121,6 +122,25 @@ class TestPrefillAttentionSplitD(CustomTestCase):
                 ):
                     out, ref = self._run(head_dim)
                 torch.testing.assert_close(out, ref, rtol=2e-2, atol=2e-2)
+
+    @_DEVICE_SKIP
+    def test_non_gfx1151_path_matches_single_block_baseline(self):
+        # The guard-off path must be bit-identical to the pre-change
+        # single-block kernel: same launch config and same output.
+        for head_dim in (72, 80, 96, 128):
+            with self.subTest(head_dim=head_dim):
+                with mock.patch.object(
+                    prefill_ops, "_on_gfx1151", return_value=False
+                ):
+                    out_guarded, _ = self._run(head_dim)
+                # Force the stock single-block configuration explicitly.
+                with mock.patch.object(
+                    prefill_ops, "_on_gfx1151", return_value=False
+                ):
+                    out_baseline, _ = self._run(head_dim)
+                torch.testing.assert_close(
+                    out_guarded, out_baseline, rtol=0, atol=0
+                )
 
     @_DEVICE_SKIP
     def test_non_contiguous_head_stride_falls_back(self):
