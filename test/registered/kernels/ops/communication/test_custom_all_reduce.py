@@ -322,66 +322,6 @@ def test_two_stage_matches_one_stage_bitwise(
     )
 
 
-def _order_sensitive_inputs(
-    numel: int, dtype: torch.dtype, world_size: int, seed: int
-) -> torch.Tensor:
-    """Per-rank inputs, shape [numel, world_size], whose sum depends on the
-    order the ranks are accumulated in.
-
-    Each element holds +B, -B and small terms t in a random rank order, with t
-    below the float32 accumulator's resolution at B: adding t to B loses it,
-    cancelling +B and -B first keeps it, and the difference survives the
-    downcast. Ordinary random fp16/bf16 data cannot detect a changed order,
-    because its float32 partial sums are exact.
-    """
-    log2_big, log2_tiny = {
-        torch.float16: (13, -13),
-        torch.bfloat16: (20, -8),
-        torch.float32: (20, -8),
-    }[dtype]
-    gen = torch.Generator().manual_seed(seed)
-    big = (torch.rand(numel, generator=gen, dtype=torch.float64) + 1) * 2.0**log2_big
-    tiny = torch.rand(numel, world_size - 2, generator=gen, dtype=torch.float64) + 1
-    sign = torch.randint(0, 2, tiny.shape, generator=gen) * 2 - 1
-    tiny *= sign * 2.0**log2_tiny
-    terms = torch.cat([big[:, None], -big[:, None], tiny], dim=1)
-    order = torch.argsort(torch.rand(numel, world_size, generator=gen), dim=1)
-    return torch.gather(terms, 1, order).to(dtype)
-
-
-@pytest.mark.parametrize("dtype", TEST_DTYPES)
-@pytest.mark.parametrize("size", TEST_SIZES)
-@torch.inference_mode()
-def test_two_stage_matches_one_stage_bitwise(
-    size: int, dtype: torch.dtype
-) -> None:
-    """2-stage must sum ranks in absolute order, matching 1-stage bitwise."""
-    comm = _init_comm_once()
-    device = torch.device(f"cuda:{int(os.environ['LOCAL_RANK'])}")
-    world_size = int(os.environ["WORLD_SIZE"])
-    if world_size < 2:
-        pytest.skip("needs at least 2 ranks")
-    # Round down to a multiple of the 16-byte packed element so the kernel
-    # accepts the size; keep at least one packed element.
-    elem = torch.tensor([], dtype=dtype).element_size()
-    packed = max(1, size // (16 // elem))
-    numel = packed * (16 // elem)
-    inputs = _order_sensitive_inputs(numel, dtype, world_size, seed=size).to(device)
-    rank = int(os.environ["LOCAL_RANK"])
-    local = inputs[:, rank].contiguous()
-    outs = {}
-    for algo in (AllReduceAlgo.ONE_SHOT_PULL, AllReduceAlgo.TWO_SHOT_PULL):
-        comm.override_algo = algo
-        outs[algo] = comm.custom_all_reduce(local).clone()
-        torch.cuda.synchronize()
-    torch.testing.assert_close(
-        outs[AllReduceAlgo.ONE_SHOT_PULL],
-        outs[AllReduceAlgo.TWO_SHOT_PULL],
-        atol=0,
-        rtol=0,
-    )
-
-
 def _eager_all_reduce(comm: CustomAllReduceV2, x: torch.Tensor) -> torch.Tensor:
     outs = []
     for row in x.clone():
