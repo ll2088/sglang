@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Callable, Optional, Tuple
 
 # Design port of upstream vLLM #60618 (single-launch fused scoring + top-k for
@@ -37,13 +38,23 @@ DENSE_LOGITS_BUDGET_BYTES = 512 * 1024**2
 SCORE_CODE_BYTES = 4
 
 
+@lru_cache(maxsize=1)
 def _kernel_present() -> bool:
-    """Whether the fused kernel binding is importable in this build."""
+    """Whether the fused kernel binding is importable in this build.
+
+    Cached: importability cannot change within a process, and the plan is
+    consulted on every prefill chunk.
+    """
     try:
         from sglang.kernels.ops.attention.dsa import fused_mqa_topk_prefill  # noqa: F401
     except ImportError:
         return False
     return True
+
+
+def _env_enabled(flag: str) -> bool:
+    """Parse a boolean env flag, with one shared spelling of "on"."""
+    return os.environ.get(flag, "0").strip().lower() in ("1", "true", "on")
 
 
 def fused_mqa_topk_available(
@@ -54,9 +65,10 @@ def fused_mqa_topk_available(
     The kernel is not ported yet, so this needs both the binding to exist and an
     explicit opt-in flag; otherwise the caller keeps the dense path.
     """
-    if not (kernel_present or _kernel_present)():
+    probe = kernel_present or _kernel_present
+    if not probe():
         return False
-    return os.environ.get(_ENV_FLAG, "0").strip().lower() in ("1", "true", "on")
+    return _env_enabled(_ENV_FLAG)
 
 
 def fused_mqa_topk_min_keys() -> int:
