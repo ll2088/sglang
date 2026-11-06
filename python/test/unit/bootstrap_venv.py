@@ -114,6 +114,9 @@ def main():
     # wheels and leaving .venv absent for the verification commands.
     _check_python_version(sys.executable)
     python = _ensure_venv()
+    # Re-check the venv interpreter: a venv created from a different base
+    # interpreter (e.g. a stale .venv) must not bypass the version gate.
+    _check_python_version(python)
     _check_python_version(python)
     # Print the interpreter that will receive the install so CI logs make it
     # obvious whether the system interpreter leaked in.
