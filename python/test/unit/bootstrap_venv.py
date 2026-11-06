@@ -51,6 +51,8 @@ def _run(python, args):
 def _check_python_version(python):
     # compressed-tensors 0.20.x requires Python >= 3.11; fail early with a
     # clear message instead of letting pip resolve against an older runtime.
+    # Upper bound: the pinned torch/transformers wheels in this repo are not
+    # published for Python 3.14, so reject it before pip starts resolving.
     result = subprocess.run(
         [os.fspath(python), "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
         check=True,
@@ -58,11 +60,12 @@ def _check_python_version(python):
         text=True,
     )
     major, minor = (int(part) for part in result.stdout.strip().split("."))
-    if (major, minor) < (3, 11):
+    if (major, minor) < (3, 11) or (major, minor) >= (3, 14):
         raise SystemExit(
-            f"compressed-tensors 0.20.x requires Python >= 3.11, "
+            f"compressed-tensors 0.20.x requires Python >= 3.11 and the "
+            f"pinned torch/transformers wheels require Python < 3.14, "
             f"but {python} is {major}.{minor}; create the venv with a "
-            "Python >= 3.11 interpreter (e.g. python3.11 -m venv .venv)"
+            "Python 3.11-3.13 interpreter (e.g. python3.12 -m venv .venv)"
         )
 
 
@@ -82,6 +85,12 @@ def _check_compressed_tensors_version(python):
     )
     version = result.stdout.strip()
     if not version.startswith("0.20."):
+        # Dump diagnostics before failing so CI logs show what pip resolved.
+        for args in (
+            ["-m", "pip", "show", "compressed-tensors"],
+            ["-m", "pip", "list"],
+        ):
+            subprocess.run([os.fspath(python), *args], check=False, cwd=os.fspath(REPO_ROOT))
         raise SystemExit(
             f"expected compressed-tensors 0.20.x, but {python} has {version}"
         )
@@ -100,6 +109,10 @@ def _report_environment(python):
 
 
 def main():
+    # Validate the interpreter that will create the venv before doing any
+    # work, so a system Python 3.14 fails fast instead of resolving cp314
+    # wheels and leaving .venv absent for the verification commands.
+    _check_python_version(sys.executable)
     python = _ensure_venv()
     _check_python_version(python)
     # Print the interpreter that will receive the install so CI logs make it
