@@ -43,6 +43,16 @@ def _is_even_mn(cu_seqlens_q, cu_seqlens_k, leftpad_k, seqused_k, seqlen_k, seql
         and seqlen_q % block_m == 0
     )
 
+
+def _is_even_mn_legacy(cu_seqlens_q, cu_seqlens_k, seqlen_k, seqlen_q, block_n, block_m):
+    # Pre-fix predicate (kept only for regression comparison in CPU tests).
+    return (
+        cu_seqlens_q is None
+        and cu_seqlens_k is None
+        and seqlen_k % block_n == 0
+        and seqlen_q % block_m == 0
+    )
+
 # Avoid initializing CUDA at import time on CPU-only CI runners; the kernel
 # tests are skipped unless both sgl_kernel and CUDA are available.
 _HAS_CUDA = _HAS_SGL_KERNEL and torch.cuda.is_available()
@@ -500,6 +510,12 @@ class TestFlashAttn(CustomTestCase):
         # This mirrors the C++ condition in flash_fwd_launch_template.h and runs on CPU
         # without requiring sgl_kernel or CUDA.
         is_even_mn = _is_even_mn
+        legacy = _is_even_mn_legacy
+
+        # Demonstrate the regression: the legacy predicate would wrongly take the
+        # fast path for block-aligned shapes with leftpad, while the fixed one does not.
+        self.assertTrue(legacy(None, None, 256, 128, 128, 64))
+        self.assertFalse(is_even_mn(None, None, object(), None, 256, 128, 128, 64))
 
         # Block-aligned shapes with leftpad must NOT take the even-MN path.
         self.assertFalse(is_even_mn(None, None, object(), None, 256, 128, 128, 64))
