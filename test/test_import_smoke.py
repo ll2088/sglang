@@ -55,7 +55,7 @@ def _ensure_repo_on_path() -> None:
         sys.path.insert(0, python_dir)
 
 
-def _run_python(code: str, timeout: float = 30.0) -> subprocess.CompletedProcess:
+def _run_python(code: str, timeout: float = 5.0) -> subprocess.CompletedProcess:
     """Run ``code`` in a fresh interpreter so the import chain is exercised
     from a clean ``sys.modules`` (pytest plugins may pre-import sglang)."""
     env = dict(os.environ)
@@ -96,7 +96,8 @@ def test_import_sglang_top_level():
             f"failure:\n{proc.stderr.strip().splitlines()[-1:]}"
         )
     assert proc.returncode == 0, (
-        "import sglang failed in a clean interpreter:\n"
+        "import sglang failed in a clean interpreter; first failing module "
+        f"reported by traceback:\n{proc.stderr.strip().splitlines()[-5:]}\n"
         f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     )
 
