@@ -56,6 +56,9 @@ def test_blobfile_import_smoke():
     pytest.importorskip("blobfile")
     # Import lazily inside the test so collection never pulls in torch-heavy
     # modules; this keeps the suite runnable in a minimal environment.
+    # sglang/__init__ and check_env both import torch, so skip cleanly when
+    # torch is unavailable instead of failing the dependency-bump check.
+    pytest.importorskip("torch")
     import sglang  # noqa: F401
     import sglang.check_env  # noqa: F401
 
