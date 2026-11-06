@@ -188,6 +188,22 @@ def _venv_base_version():
     return None
 
 
+def _pip_install_args(python, args):
+    # Constrain pip's resolver to the venv interpreter's own ABI so a stray
+    # system Python 3.14 pip cannot download cp314 wheels. --only-binary
+    # avoids source builds that would silently target the wrong interpreter.
+    version = _python_version(os.fspath(python))
+    if version is None:
+        return list(args)
+    py_tag = f"{version[0]}.{version[1]}"
+    constrained = list(args)
+    if "--only-binary" not in constrained:
+        constrained += ["--only-binary", ":all:"]
+    if "--python-version" not in constrained:
+        constrained += ["--python-version", py_tag]
+    return constrained
+
+
 def _run(python, args):
     # Always invoke pip as `<venv python> -m pip` so the install cannot land in
     # the system interpreter (PEP 668) or a different environment.
@@ -206,6 +222,7 @@ def _run(python, args):
     # cp314 wheels in the resolver output; fail before that happens.
     if args[:2] == ["-m", "pip"] and "install" in args:
         _assert_no_cp314_wheels(python)
+        args = _pip_install_args(python, args)
     cmd = [os.fspath(python), "-m", *args]
     print("+", " ".join(cmd), flush=True)
     result = subprocess.run(
@@ -218,6 +235,16 @@ def _run(python, args):
     if result.stderr:
         print(result.stderr, file=sys.stderr, flush=True)
     if result.returncode != 0:
+        # Print interpreter diagnostics so a wrong-Python failure is obvious.
+        for diag in (
+            ["-c", "import sys; print(sys.executable, sys.version)"],
+            ["-m", "pip", "-V"],
+        ):
+            subprocess.run(
+                [os.fspath(python), *diag],
+                check=False,
+                cwd=os.fspath(REPO_ROOT),
+            )
         raise SystemExit(
             f"command failed with exit code {result.returncode}: {' '.join(cmd)}"
         )
