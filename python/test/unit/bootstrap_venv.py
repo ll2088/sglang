@@ -69,6 +69,13 @@ def _supported_python():
         if found:
             candidates.append(found)
     candidates.append(sys.executable)
+    # Print every candidate and its detected version so CI logs show why a
+    # particular interpreter was (or was not) selected.
+    print("python interpreter candidates:", flush=True)
+    for candidate in candidates:
+        version = _python_version(candidate)
+        shown = "unknown" if version is None else f"{version[0]}.{version[1]}"
+        print(f"  {candidate} -> {shown}", flush=True)
     for candidate in candidates:
         version = _python_version(candidate)
         if _is_supported(version):
@@ -79,7 +86,8 @@ def _supported_python():
             return candidate
     raise SystemExit(
         "no supported Python (3.11-3.13) found for the venv; install one "
-        "(e.g. python3.12) or set SGLANG_BOOTSTRAP_PYTHON to its path"
+        "(e.g. python3.12) or set SGLANG_BOOTSTRAP_PYTHON to its path. "
+        "Refusing to fall back to an unsupported interpreter."
     )
 
 
@@ -111,6 +119,8 @@ def _ensure_venv():
 
 
 def _run(python, args):
+    # Always invoke pip as `<venv python> -m pip` so the install cannot land in
+    # the system interpreter (PEP 668) or a different environment.
     cmd = [os.fspath(python), "-m", *args]
     print("+", " ".join(cmd), flush=True)
     result = subprocess.run(
@@ -199,16 +209,17 @@ def main():
     _run(python, ["-c", "import sys; print(sys.executable)"])
     _run(python, ["-V"])
     _run(python, ["-m", "pip", "-V"])
-    _run(python, ["pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+    _run(python, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
     # Editable install of the project; the pin in python/pyproject.toml decides
     # the compressed-tensors version, so no version is passed here.
-    _run(python, ["pip", "install", "-e", os.fspath(PYTHON_DIR)])
+    _run(python, ["-m", "pip", "install", "-e", os.fspath(PYTHON_DIR)])
     version = _check_compressed_tensors_version(python)
     _run(
         python,
         [
             "-c",
             "import sys, compressed_tensors; "
+            "assert (3, 11) <= sys.version_info[:2] < (3, 14), sys.version; "
             "print(sys.executable, compressed_tensors.__version__)",
         ],
     )
