@@ -15,7 +15,16 @@ from sglang.kernels.ops.attention import prefill_attention as prefill_ops
 from sglang.kernels.ops.attention.prefill_attention import context_attention_fwd
 from sglang.test.test_utils import CustomTestCase
 
-_CUDA_AVAILABLE = torch.cuda.is_available()
+
+def _cuda_available() -> bool:
+    """Probe lazily so importing this module never touches the driver."""
+    try:
+        return torch.cuda.is_available()
+    except Exception:
+        return False
+
+
+_CUDA_AVAILABLE = _cuda_available()
 
 
 class _LaunchCapture:
@@ -82,6 +91,18 @@ class TestPrefillAttentionSplitD(CustomTestCase):
         for head_dim in (72, 80, 96, 128):
             with self.subTest(head_dim=head_dim):
                 out, ref = self._run(head_dim)
+                torch.testing.assert_close(out, ref, rtol=2e-2, atol=2e-2)
+
+    @unittest.skipUnless(_CUDA_AVAILABLE, "requires a CUDA/HIP device")
+    def test_non_gfx1151_path_matches_reference(self):
+        # With the guard off the kernel must take the stock single-block path
+        # and still match the reference elementwise.
+        for head_dim in (72, 128):
+            with self.subTest(head_dim=head_dim):
+                with mock.patch.object(
+                    prefill_ops, "_on_gfx1151", return_value=False
+                ):
+                    out, ref = self._run(head_dim)
                 torch.testing.assert_close(out, ref, rtol=2e-2, atol=2e-2)
 
     @unittest.skipUnless(_CUDA_AVAILABLE, "requires a CUDA/HIP device")
