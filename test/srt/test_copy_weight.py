@@ -1,31 +1,30 @@
 # SPDX-License-Identifier: Apache-2.0
-"""CPU-runnable tests for `copy_weight_` (integrated-GPU mmap prefault).
+# SPDX-FileCopyrightText: Copyright contributors to the SGLang project
+"""CPU-only tests for the integrated-GPU mmap prefault in `copy_weight_`.
 
-CI has no integrated GPU, so the gate is forced on with monkeypatch. The
-prefault path must accept every shape/dtype the weight loaders pass and leave
-the copy byte-identical to a plain `copy_`.
+The prefault path only runs on integrated GPUs, which CI does not have, so the
+platform gate is monkeypatched on. The copy itself must stay byte-exact.
 """
+
+import mmap
 
 import pytest
 import torch
 
+from sglang.srt.layers import parameter as parameter_mod
 from sglang.srt.layers.parameter import copy_weight_
 
 
 @pytest.fixture
 def prefault_on(monkeypatch: pytest.MonkeyPatch) -> None:
     """Take the integrated-GPU path of `copy_weight_` without a GPU."""
-    monkeypatch.setattr(
-        "sglang.srt.layers.parameter._is_integrated_gpu", lambda device: True
-    )
+    monkeypatch.setattr(parameter_mod, "_is_integrated_gpu", lambda device: True)
 
 
 @pytest.fixture
 def prefault_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force the plain-copy path regardless of the host."""
-    monkeypatch.setattr(
-        "sglang.srt.layers.parameter._is_integrated_gpu", lambda device: False
-    )
+    """Force the plain-copy path regardless of the host hardware."""
+    monkeypatch.setattr(parameter_mod, "_is_integrated_gpu", lambda device: False)
 
 
 @pytest.mark.parametrize(
@@ -72,75 +71,82 @@ def test_copy_weight_plain_path_copies_exact_bytes(
     )
 
 
-def test_copy_weight_prefault_touches_contiguous_source(
+def test_copy_weight_prefault_touches_every_page(
     prefault_on: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The prefault path must read the source before the copy."""
-    src = torch.randn(64, 1024)
-    dst = torch.empty_like(src)
-    touched = {"n": 0}
+    """The prefault must touch one byte per page plus the last byte."""
+    src = torch.randn(4 * mmap.PAGESIZE, dtype=torch.uint8)
+    touched: list[int] = []
     real_sum = torch.Tensor.sum
 
-    def counting_sum(self, *args, **kwargs):
-        touched["n"] += 1
+    def spy_sum(self, *args, **kwargs):
+        touched.append(self.numel())
         return real_sum(self, *args, **kwargs)
 
-    monkeypatch.setattr(torch.Tensor, "sum", counting_sum)
+    monkeypatch.setattr(torch.Tensor, "sum", spy_sum)
+    dst = torch.empty_like(src)
     copy_weight_(dst, src)
-    assert touched["n"] >= 1
+    monkeypatch.undo()
+
+    # One strided touch (one byte per page) plus the trailing byte.
+    assert touched == [4, 1]
     assert torch.equal(dst, src)
 
 
-def test_copy_weight_plain_path_does_not_touch(
-    prefault_off: None, monkeypatch: pytest.MonkeyPatch
+def test_copy_weight_skips_prefault_for_non_cpu_source(
+    prefault_on: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    src = torch.randn(64, 1024)
+    """A non-CPU source must not take the touch path."""
+    calls: list[int] = []
+    real_sum = torch.Tensor.sum
+
+    def spy_sum(self, *args, **kwargs):
+        calls.append(self.numel())
+        return real_sum(self, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "sum", spy_sum)
+    src = torch.randn(8, 8)
     dst = torch.empty_like(src)
-    touched = {"n": 0}
-    real_sum = torch.Tensor.sum
-
-    def counting_sum(self, *args, **kwargs):
-        touched["n"] += 1
-        return real_sum(self, *args, **kwargs)
-
-    monkeypatch.setattr(torch.Tensor, "sum", counting_sum)
+    # Pretend the source lives on a device; the gate must reject it.
+    monkeypatch.setattr(
+        torch.Tensor, "device", property(lambda self: torch.device("meta"))
+    )
     copy_weight_(dst, src)
-    assert touched["n"] == 0
-    assert torch.equal(dst, src)
+    monkeypatch.undo()
+    assert calls == []
 
 
-def test_copy_weight_skips_non_contiguous_source(
+def test_copy_weight_skips_prefault_for_dtype_conversion(
     prefault_on: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Non-contiguous sources are staged by PyTorch; no prefault needed."""
-    src = torch.randn(64, 1024).t()
-    dst = torch.empty_like(src, memory_format=torch.contiguous_format)
-    touched = {"n": 0}
+    """Dtype-converting copies are staged by PyTorch; no touch needed."""
+    calls: list[int] = []
     real_sum = torch.Tensor.sum
 
-    def counting_sum(self, *args, **kwargs):
-        touched["n"] += 1
+    def spy_sum(self, *args, **kwargs):
+        calls.append(self.numel())
         return real_sum(self, *args, **kwargs)
 
-    monkeypatch.setattr(torch.Tensor, "sum", counting_sum)
+    monkeypatch.setattr(torch.Tensor, "sum", spy_sum)
+    src = torch.randn(8, 8)
+    dst = torch.empty(8, 8, dtype=torch.bfloat16)
     copy_weight_(dst, src)
-    assert touched["n"] == 0
-    assert torch.equal(dst, src.contiguous())
-
-
-def test_copy_weight_skips_dtype_converting_source(
-    prefault_on: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    src = torch.randn(64, 1024)
-    dst = torch.empty(64, 1024, dtype=torch.bfloat16)
-    touched = {"n": 0}
-    real_sum = torch.Tensor.sum
-
-    def counting_sum(self, *args, **kwargs):
-        touched["n"] += 1
-        return real_sum(self, *args, **kwargs)
-
-    monkeypatch.setattr(torch.Tensor, "sum", counting_sum)
-    copy_weight_(dst, src)
-    assert touched["n"] == 0
+    monkeypatch.undo()
+    assert calls == []
     assert torch.equal(dst, src.to(torch.bfloat16))
+
+
+def test_vocab_parallel_embedding_loader_matches_plain_copy() -> None:
+    """The embedding loader's copy point must stay numerically identical."""
+    from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
+
+    num_embeddings, embedding_dim = 128, 16
+    layer = VocabParallelEmbedding(
+        num_embeddings,
+        embedding_dim,
+        params_dtype=torch.float32,
+        enable_tp=False,
+    )
+    loaded = torch.randn(num_embeddings, embedding_dim)
+    layer.weight_loader(layer.weight, loaded)
+    assert torch.equal(layer.weight.data, loaded)
