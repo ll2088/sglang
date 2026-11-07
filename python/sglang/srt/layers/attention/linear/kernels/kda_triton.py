@@ -44,6 +44,10 @@ class TritonKDAKernel(LinearAttnKernelBase):
         key = (dtype, head_dim)
         if key in cls._l2norm_warmup_registered:
             return False
+        try:
+            import triton
+        except ImportError:
+            return False
         block_dim = _l2norm_block_dim(dtype.itemsize, head_dim)
         if head_dim > block_dim:
             return False

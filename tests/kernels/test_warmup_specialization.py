@@ -1,6 +1,8 @@
 import pytest
 import torch
 
+pytest.importorskip("triton")
+
 from sglang.kernels.ops.attention.fla.l2norm import (
     _l2norm_block_dim,
     l2norm_fwd,
