@@ -1,9 +1,7 @@
-# Minimal, self-contained dependencies for tests/kernels/test_dsa_topk_bf16.py.
-#
-# These tests intentionally avoid importing sglang (which pulls in torch,
-# py-spy, quack-kernels and the rest of the runtime).  Keep this file free of
-# any sglang runtime dependency so CI can install it into a clean venv.
-#
-# Pin the interpreter-agnostic pure-Python stack only; no CUDA wheels here.
-numpy>=1.24
-pytest>=7.0
+# Minimal dependency set for tests/kernels/test_dsa_topk_bf16.py.
+# Deliberately does NOT install sglang or torch: the BF16 capability helper and
+# its host-side mirror are pure Python.  Pin versions to keep CI resolution
+# deterministic across interpreters.
+numpy==1.26.4
+pytest==8.3.4
+pytest-repeat==0.9.3

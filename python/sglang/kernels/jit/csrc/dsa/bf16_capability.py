@@ -1,56 +1,70 @@
-"""Pure-Python BF16 logits capability negotiation for the DSA indexer top-k.
+"""Pure-Python BF16 capability negotiation for the DSA indexer top-k.
 
-This module is intentionally free of torch, sglang runtime and CUDA imports so
-that the dtype/alignment negotiation can be unit-tested in a minimal CI job.
-It mirrors the host-side predicates in ``kpool_topk_transform.cuh`` and
-``topk_transform.cuh``: BF16 logits are read natively only when the row stride
-keeps every row 16-byte aligned, otherwise the caller upcasts to FP32.
+This module is intentionally free of torch / sglang runtime imports so the
+dtype/alignment negotiation and the host-side mirror of the BF16x2 packed
+histogram extraction can be unit-tested with only numpy + pytest.
+
+The CUDA/HIP kernels in this directory mirror these predicates; keep the two
+in sync when changing the alignment rule.
 """
 
 from __future__ import annotations
 
-# DLDataType codes used by the negotiation.  Kept as plain ints so this module
-# does not need dlpack/tvm-ffi at import time.
-BF16 = "bfloat16"
-FP32 = "float32"
+# DLDataType codes we care about (dlpack).
+kDLFloat = 2
+kDLBfloat = 4
 
-# Bytes per TMA/vector unit.  The alignment granularity is derived from the
-# element width, not hardcoded to the FP32 case.
-_VEC_BYTES = 16
+FP32 = "fp32"
+BF16 = "bf16"
+
+# Element widths in bytes.
+_WIDTH = {FP32: 4, BF16: 2}
 
 
 def vec_width(elem_bytes: int) -> int:
-    """Elements per 16-byte vector unit for an element of ``elem_bytes``."""
-    if elem_bytes <= 0 or _VEC_BYTES % elem_bytes != 0:
-        raise ValueError(f"unsupported element width: {elem_bytes}")
-    return _VEC_BYTES // elem_bytes
+    """Elements per 16-byte vector unit for an element width in bytes."""
+    if elem_bytes <= 0 or 16 % elem_bytes != 0:
+        raise ValueError(f"element width {elem_bytes} does not divide 16")
+    return 16 // elem_bytes
 
 
 def tma_align(elem_bytes: int) -> int:
-    """Row-stride multiple required for 16-byte aligned TMA/vector loads."""
+    """Row-stride granularity that keeps every row 16-byte aligned."""
     return vec_width(elem_bytes)
 
 
-def takes_bf16_logits(dtype: str, row_stride: int) -> bool:
-    """Whether BF16 logits can be read natively for this dtype/stride."""
-    if dtype != BF16:
+def takes_fp32_logits(dtype_code: int, dtype_bits: int, dtype_lanes: int) -> bool:
+    return dtype_code == kDLFloat and dtype_bits == 32 and dtype_lanes == 1
+
+
+def takes_bf16_logits(dtype_code: int, dtype_bits: int, dtype_lanes: int, row_stride: int) -> bool:
+    """BF16 logits are read natively only when every row stays 16-byte aligned."""
+    if dtype_code != kDLBfloat or dtype_bits != 16 or dtype_lanes != 1:
         return False
     if row_stride <= 0:
         return False
-    return row_stride % tma_align(2) == 0
+    return row_stride % tma_align(_WIDTH[BF16]) == 0
 
 
-def takes_fp32_logits(dtype: str) -> bool:
-    """FP32 logits are always readable; named for dispatcher symmetry."""
-    return dtype == FP32
-
-
-def resolve_logits_dtype(dtype: str, row_stride: int) -> str:
-    """Resolve the dtype the top-k kernel should read.
-
-    BF16 is taken natively when aligned; otherwise the caller upcasts and the
-    FP32 kernel is used.  FP32 is always taken as-is.
-    """
-    if takes_bf16_logits(dtype, row_stride):
+def resolve_logits_dtype(dtype_code: int, dtype_bits: int, dtype_lanes: int, row_stride: int) -> str:
+    """Pick the kernel dtype, falling back to FP32 when BF16 is not usable."""
+    if takes_bf16_logits(dtype_code, dtype_bits, dtype_lanes, row_stride):
         return BF16
     return FP32
+
+
+# ---------------------------------------------------------------------------
+# Host-side mirror of convert_bf16x2_to_uint8x2 (see kpool_topk_transform.cuh).
+# ---------------------------------------------------------------------------
+
+
+def host_convert_bf16_to_uint8(bits: int) -> int:
+    bits &= 0xFFFF
+    key = (~bits) & 0xFFFF if (bits & 0x8000) else (bits | 0x8000)
+    return (key >> 8) & 0xFF
+
+
+def host_convert_bf16x2_to_uint8x2(w: int) -> tuple[int, int]:
+    lo = w & 0xFFFF
+    hi = (w >> 16) & 0xFFFF
+    return host_convert_bf16_to_uint8(lo), host_convert_bf16_to_uint8(hi)
