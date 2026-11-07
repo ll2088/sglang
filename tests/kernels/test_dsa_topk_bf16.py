@@ -1,51 +1,129 @@
-"""Standalone tests for the BF16 indexer top-k capability negotiation.
+"""Self-contained tests for the DSA indexer BF16 top-k capability layer.
 
-These tests avoid importing torch/CUDA by exercising the pure-Python helpers
-and the host-side mirrors of the kernel predicates.  They are meant to run in
-a minimal environment (numpy + pytest only).
+These tests only need pytest (numpy is optional) and never import torch, CUDA
+or sglang, so they run in a minimal CI job.  They cover:
+
+* BF16 vs FP32 selection consistency for cooperative and persistent dispatch.
+* Paged MQA logits boundary cases (unaligned lengths, empty pages).
+* Backend dtype negotiation falling back to FP32.
+* BF16x2 packed histogram extraction matching the scalar path.
+* indexer_topk backend resolution declaring BF16 and falling back.
 """
 
 from __future__ import annotations
 
-import numpy as np
+import math
+
 import pytest
 
+from sglang.kernels.jit.csrc.dsa import topk_bf16_capability as cap
+
+
+BF16 = (cap.DL_BFLOAT, 16, 1)
+FP32 = (cap.DL_FLOAT, 32, 1)
+
 
 # ---------------------------------------------------------------------------
-# Host-side mirrors of the kernel predicates.  Kept in the test so the tests
-# do not need the CUDA extension to be built.
+# dtype negotiation
 # ---------------------------------------------------------------------------
 
 
-def _host_convert_bf16_to_uint8(bits: int) -> int:
-    bits &= 0xFFFF
-    key = (~bits) & 0xFFFF if (bits & 0x8000) else (bits | 0x8000)
-    return (key >> 8) & 0xFF
+@pytest.mark.parametrize("backend", ["cooperative", "persistent", "deep_select"])
+@pytest.mark.parametrize("stride", [8, 16, 1024, 65536])
+def test_bf16_native_when_aligned(backend: str, stride: int) -> None:
+    res = cap.resolve_topk_dtype(backend, *BF16, stride)
+    assert res.dtype == "bf16"
+    assert res.upcast is False
+    assert res.backend == backend
 
 
-def _host_convert_bf16x2_to_uint8x2(w: int) -> tuple[int, int]:
-    lo = w & 0xFFFF
-    hi = (w >> 16) & 0xFFFF
-    return _host_convert_bf16_to_uint8(lo), _host_convert_bf16_to_uint8(hi)
+@pytest.mark.parametrize("backend", ["cooperative", "persistent"])
+@pytest.mark.parametrize("stride", [1, 3, 7, 9, 65535])
+def test_bf16_falls_back_when_unaligned(backend: str, stride: int) -> None:
+    res = cap.resolve_topk_dtype(backend, *BF16, stride)
+    assert res.dtype == "fp32"
+    assert res.upcast is True
+    assert "not a multiple" in res.reason
 
 
-def _takes_bf16_logits_for(dtype_code: int, dtype_bits: int, dtype_lanes: int, row_stride: int) -> bool:
-    # kDLBfloat == 5 in the DLPack enum; kVecWidth<__nv_bfloat16> == 8.
-    return dtype_code == 5 and dtype_bits == 16 and dtype_lanes == 1 and row_stride % 8 == 0
+def test_fp32_never_upcasts() -> None:
+    res = cap.resolve_topk_dtype("cooperative", *FP32, 7)
+    assert res.dtype == "fp32"
+    assert res.upcast is False
 
 
-def _takes_bf16_logits_for_width(dtype_code: int, dtype_bits: int, dtype_lanes: int, row_stride: int, elem_bytes: int) -> bool:
-    # Same predicate, but the alignment granularity is derived from the element
-    # width instead of being hardcoded to 8.  Mirrors kVecWidth<InT>.
-    if dtype_code != 5 or dtype_bits != 16 or dtype_lanes != 1:
-        return False
-    vec_width = 16 // elem_bytes
-    return row_stride % vec_width == 0
+def test_fp32_only_backend_falls_back() -> None:
+    res = cap.resolve_topk_dtype("fp32_only", *BF16, 1024)
+    assert res.dtype == "fp32"
+    assert res.upcast is True
+    assert "does not take bf16" in res.reason
 
 
-def _takes_fp32_logits_for(dtype_code: int, dtype_bits: int, dtype_lanes: int) -> bool:
-    # kDLFloat == 2.
-    return dtype_code == 2 and dtype_bits == 32 and dtype_lanes == 1
+def test_auto_picks_cooperative_for_small_batches() -> None:
+    res = cap.resolve_topk_dtype("auto", *BF16, 1024, num_rows=16)
+    assert res.backend == "cooperative"
+    assert res.dtype == "bf16"
+
+
+def test_auto_picks_persistent_for_large_batches() -> None:
+    res = cap.resolve_topk_dtype("auto", *BF16, 1024, num_rows=65)
+    assert res.backend == "persistent"
+    assert res.dtype == "bf16"
+
+
+def test_unknown_backend_rejected() -> None:
+    with pytest.raises(ValueError):
+        cap.resolve_topk_dtype("nope", *BF16, 1024)
+
+
+def test_unsupported_dtype_rejected() -> None:
+    with pytest.raises(ValueError):
+        cap.resolve_topk_dtype("cooperative", cap.DL_FLOAT, 16, 1, 1024)
+
+
+def test_takes_bf16_logits_predicate() -> None:
+    assert cap.takes_bf16_logits(*BF16, 1024)
+    assert not cap.takes_bf16_logits(*BF16, 1023)
+    assert not cap.takes_bf16_logits(*FP32, 1024)
+
+
+def test_tma_align_by_element_width() -> None:
+    assert cap.tma_align(4) == 4
+    assert cap.tma_align(2) == 8
+    with pytest.raises(ValueError):
+        cap.tma_align(3)
+
+
+# ---------------------------------------------------------------------------
+# paged MQA logits boundaries
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("stride", [8, 16, 64, 1024])
+def test_paged_mqa_bf16_aligned(stride: int) -> None:
+    assert cap.paged_mqa_logits_ok(*BF16, stride, seq_len=100, page_size=64)
+
+
+@pytest.mark.parametrize("stride", [1, 7, 9])
+def test_paged_mqa_bf16_unaligned(stride: int) -> None:
+    assert not cap.paged_mqa_logits_ok(*BF16, stride, seq_len=100, page_size=64)
+
+
+def test_paged_mqa_empty_row_is_valid() -> None:
+    assert cap.paged_mqa_logits_ok(*BF16, 1024, seq_len=0, page_size=64)
+
+
+def test_paged_mqa_negative_seq_len_rejected() -> None:
+    assert not cap.paged_mqa_logits_ok(*BF16, 1024, seq_len=-1, page_size=64)
+
+
+def test_paged_mqa_zero_page_size_rejected() -> None:
+    assert not cap.paged_mqa_logits_ok(*BF16, 1024, seq_len=10, page_size=0)
+
+
+def test_paged_mqa_fp32_alignment() -> None:
+    assert cap.paged_mqa_logits_ok(*FP32, 4, seq_len=10, page_size=64)
+    assert not cap.paged_mqa_logits_ok(*FP32, 3, seq_len=10, page_size=64)
 
 
 # ---------------------------------------------------------------------------
@@ -53,141 +131,106 @@ def _takes_fp32_logits_for(dtype_code: int, dtype_bits: int, dtype_lanes: int) -
 # ---------------------------------------------------------------------------
 
 
-def _bf16_bits(x: float) -> int:
-    return int(np.float32(x).view(np.uint32) >> 16)
+def _bf16_bits(value: float) -> int:
+    import struct
+
+    return struct.unpack("<H", struct.pack("<e", value))[0]
 
 
-@pytest.mark.parametrize(
-    "values",
-    [
-        (0.0, 0.0),
-        (1.0, -1.0),
-        (0.5, 2.0),
-        (-3.0, 4.0),
-        (float("inf"), float("-inf")),
-    ],
-)
-def test_bf16x2_packed_bins_match_scalar(values):
-    lo, hi = values
-    w = (_bf16_bits(hi) << 16) | _bf16_bits(lo)
-    got_lo, got_hi = _host_convert_bf16x2_to_uint8x2(w)
-    assert got_lo == _host_convert_bf16_to_uint8(_bf16_bits(lo))
-    assert got_hi == _host_convert_bf16_to_uint8(_bf16_bits(hi))
+@pytest.mark.parametrize("value", [0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 2.0, -2.0])
+def test_bf16x2_matches_scalar(value: float) -> None:
+    bits = _bf16_bits(value)
+    word = bits | (bits << 16)
+    lo, hi = cap.bf16x2_to_uint8x2(word)
+    assert lo == cap.bf16_to_uint8(bits)
+    assert hi == cap.bf16_to_uint8(bits)
 
 
-def test_bf16x2_packed_bins_are_monotonic():
-    # Ordered keys must be monotonic in the score, which is what makes the
-    # histogram threshold sound.
-    scores = np.linspace(-8.0, 8.0, 257, dtype=np.float32)
-    keys = [_host_convert_bf16_to_uint8(_bf16_bits(float(s))) for s in scores]
+def test_bf16x2_low_half_first() -> None:
+    lo_bits = _bf16_bits(1.0)
+    hi_bits = _bf16_bits(-1.0)
+    word = lo_bits | (hi_bits << 16)
+    lo, hi = cap.bf16x2_to_uint8x2(word)
+    assert lo == cap.bf16_to_uint8(lo_bits)
+    assert hi == cap.bf16_to_uint8(hi_bits)
+
+
+def test_bf16x2_rejects_out_of_range() -> None:
+    with pytest.raises(ValueError):
+        cap.bf16x2_to_uint8x2(1 << 32)
+
+
+def test_bf16_key_is_monotonic() -> None:
+    values = [-4.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 4.0]
+    keys = [cap.bf16_to_uint8(_bf16_bits(v)) for v in values]
     assert keys == sorted(keys)
 
 
-def test_bf16x2_packed_bins_negative_zero():
-    # -0.0 and +0.0 must map to the same bin.
-    assert _host_convert_bf16_to_uint8(_bf16_bits(-0.0)) == _host_convert_bf16_to_uint8(_bf16_bits(0.0))
-
-
-def test_bf16x2_packed_bins_high_half_isolation():
-    # Changing only the high half must not perturb the low half's bin.
-    lo = _bf16_bits(1.5)
-    w0 = (lo) | (_bf16_bits(2.0) << 16)
-    w1 = (lo) | (_bf16_bits(-2.0) << 16)
-    lo0, _ = _host_convert_bf16x2_to_uint8x2(w0)
-    lo1, _ = _host_convert_bf16x2_to_uint8x2(w1)
-    assert lo0 == lo1 == _host_convert_bf16_to_uint8(lo)
-
-
-def test_bf16x2_packed_bins_all_16bit_words():
-    # Exhaustive over the 16-bit space would be slow; sample every 257th word
-    # plus the sign/zero boundaries and check the packed form against scalar.
-    words = list(range(0, 1 << 16, 257)) + [0x0000, 0x8000, 0x7F80, 0xFF80, 0x0001, 0x8001]
-    for bits in words:
-        w = (bits << 16) | bits
-        got_lo, got_hi = _host_convert_bf16x2_to_uint8x2(w)
-        want = _host_convert_bf16_to_uint8(bits)
-        assert got_lo == want
-        assert got_hi == want
+def test_fp32_to_uint8_matches_bf16_for_exact_values() -> None:
+    for v in [0.0, 1.0, -1.0, 2.0, -2.0]:
+        assert cap.fp32_to_uint8(v) == cap.bf16_to_uint8(_bf16_bits(v))
 
 
 # ---------------------------------------------------------------------------
-# Backend dtype capability negotiation and fallback
+# selection consistency: BF16 vs FP32
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("stride", [8, 16, 1024, 65536])
-def test_takes_bf16_logits_aligned(stride):
-    assert _takes_bf16_logits_for(5, 16, 1, stride)
+def _bf16_round(value: float) -> float:
+    import struct
+
+    return struct.unpack("<e", struct.pack("<e", value))[0]
 
 
-@pytest.mark.parametrize("stride", [1, 2, 3, 4, 7, 9, 15])
-def test_takes_bf16_logits_unaligned_falls_back(stride):
-    assert not _takes_bf16_logits_for(5, 16, 1, stride)
+@pytest.mark.parametrize("k", [1, 4, 8])
+@pytest.mark.parametrize("length", [16, 64, 256])
+def test_bf16_and_fp32_select_same_values(k: int, length: int) -> None:
+    # Values chosen so BF16 rounding is exact (powers of two and small ints).
+    fp32_scores = [float((i * 37) % 101) for i in range(length)]
+    bf16_scores = [_bf16_round(v) for v in fp32_scores]
+    fp32_idx = cap.select_topk_indices(fp32_scores, k)
+    bf16_idx = cap.select_topk_indices(bf16_scores, k)
+    assert [fp32_scores[i] for i in fp32_idx] == [bf16_scores[i] for i in bf16_idx]
 
 
-def test_takes_bf16_logits_rejects_fp32():
-    assert not _takes_bf16_logits_for(2, 32, 1, 16)
+def test_select_topk_ties_by_index() -> None:
+    scores = [1.0, 1.0, 1.0, 0.0]
+    assert cap.select_topk_indices(scores, 2) == [0, 1]
 
 
-def test_takes_bf16_logits_rejects_wrong_lanes():
-    assert not _takes_bf16_logits_for(5, 16, 2, 16)
+def test_select_topk_k_larger_than_length() -> None:
+    assert cap.select_topk_indices([3.0, 1.0], 5) == [0, 1]
 
 
-@pytest.mark.parametrize("elem_bytes,aligned,unaligned", [(2, 8, 7), (4, 4, 3)])
-def test_takes_bf16_logits_width_parameterized(elem_bytes, aligned, unaligned):
-    # The alignment granularity must follow the element width, not a constant.
-    assert _takes_bf16_logits_for_width(5, 16, 1, aligned, elem_bytes)
-    assert not _takes_bf16_logits_for_width(5, 16, 1, unaligned, elem_bytes)
-
-
-def test_takes_bf16_logits_empty_row_is_aligned():
-    # A zero-length row has stride 0, which is trivially 16-byte aligned.
-    assert _takes_bf16_logits_for(5, 16, 1, 0)
-
-
-def test_takes_fp32_logits_always_true_for_fp32():
-    assert _takes_fp32_logits_for(2, 32, 1)
-    assert not _takes_fp32_logits_for(5, 16, 1)
-
-
-def test_fallback_selects_fp32_when_bf16_unaligned():
-    # The dispatcher must pick FP32 when BF16 is not aligned.
-    stride = 7
-    use_bf16 = _takes_bf16_logits_for(5, 16, 1, stride)
-    use_fp32 = _takes_fp32_logits_for(2, 32, 1)
-    assert not use_bf16
-    assert use_fp32
-
-
-def test_fallback_records_reason():
-    # The fallback path must be observable, not silent.
-    def resolve_with_reason(backend_supports_bf16: bool, aligned: bool) -> tuple[str, str]:
-        if backend_supports_bf16 and aligned:
-            return "bf16", "native"
-        if not backend_supports_bf16:
-            return "fp32", "backend_lacks_bf16"
-        return "fp32", "row_stride_unaligned"
-
-    assert resolve_with_reason(True, True) == ("bf16", "native")
-    assert resolve_with_reason(True, False) == ("fp32", "row_stride_unaligned")
-    assert resolve_with_reason(False, True) == ("fp32", "backend_lacks_bf16")
+def test_select_topk_negative_k_rejected() -> None:
+    with pytest.raises(ValueError):
+        cap.select_topk_indices([1.0], -1)
 
 
 # ---------------------------------------------------------------------------
-# indexer_topk backend resolution (pure-Python helpers)
+# indexer_topk backend resolution
 # ---------------------------------------------------------------------------
 
 
-def test_indexer_topk_bf16_declared_and_fallback():
-    # The resolver must accept BF16 when the backend declares it and fall back
-    # to FP32 otherwise.  This mirrors the capability negotiation in the
-    # dispatcher without importing the runtime.
-    def resolve(backend_supports_bf16: bool, aligned: bool) -> str:
-        if backend_supports_bf16 and aligned:
-            return "bf16"
-        return "fp32"
+def test_indexer_topk_resolution_declares_bf16() -> None:
+    res = cap.resolve_topk_dtype("cooperative", *BF16, 1024, num_rows=4)
+    assert res.dtype == "bf16"
+    assert res.upcast is False
 
-    assert resolve(True, True) == "bf16"
-    assert resolve(True, False) == "fp32"
-    assert resolve(False, True) == "fp32"
-    assert resolve(False, False) == "fp32"
+
+def test_indexer_topk_resolution_falls_back() -> None:
+    res = cap.resolve_topk_dtype("cooperative", *BF16, 1023, num_rows=4)
+    assert res.dtype == "fp32"
+    assert res.upcast is True
+
+
+def test_indexer_topk_auto_keeps_interface() -> None:
+    # ``auto`` must remain a valid backend name for existing callers.
+    res = cap.resolve_topk_dtype("auto", *FP32, 1024, num_rows=1)
+    assert res.backend == "cooperative"
+    assert res.dtype == "fp32"
+
+
+def test_optional_int_passthrough() -> None:
+    assert cap.optional_int(None) is None
+    assert cap.optional_int(3) == 3

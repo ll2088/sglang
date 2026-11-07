@@ -13,3 +13,19 @@ def pytest_configure(config):
         "markers",
         "requires_sglang: test needs the sglang package to be importable",
     )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip tests marked ``requires_sglang`` when sglang is not importable.
+
+    The BF16 capability tests are pure Python and must run in a minimal
+    pytest-only job; anything that genuinely needs the runtime is skipped
+    instead of failing collection.
+    """
+    try:
+        import sglang  # noqa: F401
+    except Exception:  # pragma: no cover - depends on the environment
+        skip = pytest.mark.skip(reason="sglang is not importable")
+        for item in items:
+            if "requires_sglang" in item.keywords:
+                item.add_marker(skip)
