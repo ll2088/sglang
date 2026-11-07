@@ -15,7 +15,25 @@ from sglang.srt.layers.attention.dsa.kpool_plan import (
     register_kpool_compress_warmup,
     register_kpool_tail_seed_warmup,
 )
-from sglang.srt.layers.attention.linear.kernels.kda_triton import TritonKDAKernel
+
+# Importing the KDA Triton backend pulls in the full FLA kernel stack, which
+# needs a usable Triton toolchain. Keep the import lazy so the pure-metadata
+# tests below still run on CPU-only CI where the backend cannot be imported.
+try:
+    from sglang.srt.layers.attention.linear.kernels.kda_triton import (
+        TritonKDAKernel,
+    )
+
+    _HAS_KDA_TRITON = True
+except Exception:  # pragma: no cover - environment dependent
+    TritonKDAKernel = None  # type: ignore[assignment]
+    _HAS_KDA_TRITON = False
+
+
+requires_kda_triton = pytest.mark.skipif(
+    not _HAS_KDA_TRITON,
+    reason="KDA Triton backend is unavailable in this environment",
+)
 
 
 @pytest.mark.parametrize("dim", [64, 128, 256])
@@ -111,31 +129,32 @@ def test_kpool_tail_seed_warmup_registration_is_idempotent():
     _KPOOL_WARMUP_REGISTERED.clear()
 
 
+@requires_kda_triton
+@pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="requires CUDA device for l2norm warmup launch",
+)
 def test_kda_l2norm_warmup_registration_is_idempotent():
-    if not torch.cuda.is_available():
-        pytest.skip("requires CUDA device for l2norm warmup launch")
     TritonKDAKernel._l2norm_warmup_registered.clear()
     TritonKDAKernel._l2norm_warmup_ptr_range.clear()
-    assert TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
-    assert not TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
-    assert (torch.bfloat16, 128) in TritonKDAKernel._l2norm_warmup_ptr_range
-    TritonKDAKernel._l2norm_warmup_registered.clear()
-    TritonKDAKernel._l2norm_warmup_ptr_range.clear()
+    try:
+        assert TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
+        assert not TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
+        assert (torch.bfloat16, 128) in TritonKDAKernel._l2norm_warmup_ptr_range
+    finally:
+        TritonKDAKernel._l2norm_warmup_registered.clear()
+        TritonKDAKernel._l2norm_warmup_ptr_range.clear()
 
 
+@requires_kda_triton
 def test_kda_l2norm_warmup_degrades_without_cuda(monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     TritonKDAKernel._l2norm_warmup_registered.clear()
     TritonKDAKernel._l2norm_warmup_ptr_range.clear()
-    assert not TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
-    assert not TritonKDAKernel._l2norm_warmup_registered
-    assert not TritonKDAKernel._l2norm_warmup_ptr_range
-
-
-def test_kda_l2norm_warmup_skips_without_cuda(monkeypatch):
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    TritonKDAKernel._l2norm_warmup_registered.clear()
-    TritonKDAKernel._l2norm_warmup_ptr_range.clear()
-    assert not TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
-    assert not TritonKDAKernel._l2norm_warmup_registered
-    assert not TritonKDAKernel._l2norm_warmup_ptr_range
+    try:
+        assert not TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
+        assert not TritonKDAKernel._l2norm_warmup_registered
+        assert not TritonKDAKernel._l2norm_warmup_ptr_range
+    finally:
+        TritonKDAKernel._l2norm_warmup_registered.clear()
+        TritonKDAKernel._l2norm_warmup_ptr_range.clear()
