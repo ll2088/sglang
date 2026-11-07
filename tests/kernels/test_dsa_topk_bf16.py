@@ -6,6 +6,11 @@ import pytest
 # This file is intentionally dependency-free (stdlib only) so it can be
 # collected and run in a minimal CI environment without sglang's runtime
 # dependencies. Kernel-level coverage lives in test_dsa_topk_bf16_kernel.py.
+#
+# Do NOT import sglang, torch, or any CUDA extension at module scope here:
+# the CI setup step installs sglang's heavy dependency tree and can fail
+# before pytest ever runs. Keeping this file stdlib-only guarantees the
+# BF16x2 packed-histogram unit tests are always collectable.
 
 
 def _bf16_bits(x: float) -> int:
