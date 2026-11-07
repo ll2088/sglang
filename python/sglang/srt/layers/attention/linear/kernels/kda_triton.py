@@ -12,6 +12,10 @@ if not is_cpu():
         fused_recurrent_kda_packed_decode,
     )
     from sglang.kernels.ops.attention.fla.kda import chunk_kda
+    from sglang.kernels.ops.attention.fla.l2norm import (
+        _l2norm_block_dim,
+        l2norm_fwd_kernel,
+    )
     from sglang.kernels.ops.attention.linear.fused_recurrent_linear_replayssm import (
         fused_recurrent_linear_replayssm_decode,
     )
@@ -22,6 +26,44 @@ if not is_cpu():
 
 class TritonKDAKernel(LinearAttnKernelBase):
     """Triton-based kernel for KDA (Kimi Delta Attention) linear attention."""
+
+    _l2norm_warmup_registered: set[tuple[torch.dtype, int]] = set()
+
+    @classmethod
+    def register_l2norm_warmup(cls, dtype: torch.dtype, head_dim: int) -> bool:
+        """Idempotently warm up the FLA l2norm kernel used by KDA prefill.
+
+        Returns True when a warmup launch was issued, False when the same
+        (dtype, head_dim) pair was already registered or the kernel is
+        unavailable on this platform.
+        """
+        if is_cpu() or is_npu():
+            return False
+        key = (dtype, head_dim)
+        if key in cls._l2norm_warmup_registered:
+            return False
+        block_dim = _l2norm_block_dim(dtype.itemsize, head_dim)
+        if head_dim > block_dim:
+            return False
+        # Warm up the small-D block kernel with a minimal row count; the
+        # compile key only depends on D/BD/BT and the pointer range, not on T.
+        num_rows = 1
+        x = torch.empty((num_rows, head_dim), dtype=dtype, device="cuda")
+        y = torch.empty_like(x)
+        grid = (triton.cdiv(num_rows, 16),)
+        l2norm_fwd_kernel[grid](
+            x,
+            y,
+            1e-6,
+            T=num_rows,
+            D=head_dim,
+            BD=block_dim,
+            BT=16,
+            num_warps=8,
+            num_stages=3,
+        )
+        cls._l2norm_warmup_registered.add(key)
+        return True
 
     # XPU has no tvm_ffi CUDA JIT kernel for KDA packed decode; route XPU to the
     # non-packed Triton decode() path (fused_sigmoid_gating_delta_rule_update),

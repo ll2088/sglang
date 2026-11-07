@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List, NamedTuple, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
 import torch
 
@@ -29,6 +29,71 @@ if TYPE_CHECKING:
 
 _RAGGED_SCRATCH_K_U8: Optional[torch.Tensor] = None
 _RAGGED_SCRATCH_K_SCALE: Optional[torch.Tensor] = None
+
+_KPOOL_WARMUP_REGISTERED: Set[Tuple[int, int, bool]] = set()
+
+
+def triton_ptr_range(tensor: Any) -> int:
+    """Pointer range Triton's ROCm backend would read off ``tensor``.
+
+    Mirrors ``HIPBackend.is_within_2gb``: a tensor exposing ``ptr_range``
+    reports its own range, otherwise the backing storage size is used. This
+    keeps warmup stand-ins on the same side of the 2 GiB buffer-ops window as
+    the live tensor, so the compile key matches at runtime.
+    """
+    ptr_range = getattr(tensor, "ptr_range", None)
+    if ptr_range is not None:
+        return ptr_range()
+    return tensor.untyped_storage().size()
+
+
+def build_kpool_compress_warmup_meta(
+    *, k_cache: torch.Tensor, pool_size: int, head_dim: int, round_scale: bool
+) -> Dict[str, Any]:
+    """Compile-only metadata for the kpool compress kernel warmup.
+
+    The KV cache view can live in an allocation far past 2 GiB, so the
+    stand-in buffers must carry the real pointer range instead of assuming a
+    small storage; otherwise warmup compiles a specialization no launch uses.
+    """
+    kv_cache = k_cache.kv_cache
+    page_size = kv_cache.shape[1]
+    buf_numel_per_page = kv_cache.stride(0)
+    buf_ptr_range_bytes = triton_ptr_range(kv_cache)
+    return dict(
+        page_size=page_size,
+        buf_numel_per_page=buf_numel_per_page,
+        head_dim=head_dim,
+        round_scale=round_scale,
+        pool_size=pool_size,
+        buf_ptr_range_bytes=buf_ptr_range_bytes,
+        has_write_mask=True,
+        return_compressed=False,
+        write_cache=True,
+    )
+
+
+def register_kpool_compress_warmup(
+    *, k_cache: torch.Tensor, pool_size: int, head_dim: int, round_scale: bool
+) -> bool:
+    """Idempotently register the kpool compress kernel for warmup.
+
+    Returns True when the registration was newly recorded, False when the same
+    configuration was already registered. The actual warmup launch is owned by
+    the caller's warmup scheduler; this only records the pointer-range-aware
+    metadata so repeated registration cannot duplicate work.
+    """
+    key = (pool_size, head_dim, round_scale)
+    if key in _KPOOL_WARMUP_REGISTERED:
+        return False
+    build_kpool_compress_warmup_meta(
+        k_cache=k_cache,
+        pool_size=pool_size,
+        head_dim=head_dim,
+        round_scale=round_scale,
+    )
+    _KPOOL_WARMUP_REGISTERED.add(key)
+    return True
 
 
 def _get_ragged_scratch(

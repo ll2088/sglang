@@ -13,6 +13,12 @@ from sglang.kernels.ops.attention.fla.utils import input_guard
 
 BT_LIST = [8, 16, 32, 64, 128]
 
+_L2NORM_MBLOCK = 32
+
+
+def _l2norm_block_dim(element_size: int, dim: int) -> int:
+    return min(65536 // element_size, triton.next_power_of_2(dim))
+
 
 # @triton.autotune(
 #     configs=[
@@ -84,8 +90,7 @@ def l2norm_fwd(
     T, D = x.shape[0], x.shape[-1]
     # rstd = torch.empty((T,), dtype=torch.float32, device=x.device)
     # Less than 64KB per feature: enqueue fused kernel
-    MAX_FUSED_SIZE = 65536 // x.element_size()
-    BD = min(MAX_FUSED_SIZE, triton.next_power_of_2(D))
+    BD = _l2norm_block_dim(x.element_size(), D)
     if D > BD:
         raise RuntimeError("This layer doesn't support feature dim >= 64KB.")
 
