@@ -1,3 +1,5 @@
-# Minimal dependencies for the pure-Python BF16 top-k capability tests.
-# These tests must run without torch, CUDA or the full sglang runtime.
-pytest>=7.0
+# Minimal dependencies for tests/kernels/test_dsa_topk_bf16.py.
+# The test module only imports the standard library and the pure-Python
+# capability helper, so pytest is the only requirement.  Install with:
+#   pip install --no-deps -r tests/kernels/requirements-minimal.txt
+pytest
