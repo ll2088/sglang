@@ -68,6 +68,14 @@ __device__ __forceinline__ auto convert_bf16x2_to_uint8x2(uint32_t w) -> uint2 {
   return make_uint2((key & 0xFFFFu) >> 8, (key >> 16) >> 8);
 }
 
+// Host-side mirror of convert_bf16x2_to_uint8x2, kept free of CUDA types so the
+// packed extraction can be unit-tested without a GPU.
+inline auto host_convert_bf16x2_to_uint8x2(uint32_t w) -> uint2 {
+  const uint16_t lo = static_cast<uint16_t>(w & 0xFFFFu);
+  const uint16_t hi = static_cast<uint16_t>(w >> 16);
+  return make_uint2(host_convert_bf16_to_uint8(lo), host_convert_bf16_to_uint8(hi));
+}
+
 // Host-side mirror of convert_bf16_to_uint8, used by the reference tests.
 inline auto host_convert_bf16_to_uint8(uint16_t bits) -> uint8_t {
   const uint16_t key = (bits & 0x8000) ? static_cast<uint16_t>(~bits) : static_cast<uint16_t>(bits | 0x8000);
@@ -438,7 +446,8 @@ struct KpoolTopKTransformKernel {
   static constexpr auto kernel_bf16 = kpool_topk_transform_kernel<kGroupTopK, __nv_bfloat16>;
 
   // BF16 logits are read natively when the row stride keeps every row 16-byte
-  // aligned; otherwise the caller upcasts and takes the FP32 kernel.
+  // aligned; otherwise the caller upcasts and takes the FP32 kernel.  The
+  // alignment granularity is derived from the element width, not hardcoded.
   static auto takes_bf16_logits(const tvm::ffi::TensorView& score) -> bool {
     return score.dtype().code == kDLBfloat && score.dtype().bits == 16 && score.dtype().lanes == 1 &&
            score.stride(0) % kVecWidth<__nv_bfloat16> == 0;
