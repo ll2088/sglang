@@ -1,7 +1,5 @@
-# Minimal dependency set for the BF16 top-k capability tests.
-# Deliberately excludes torch/sglang: these tests exercise pure-Python
-# helpers and must run in a small dedicated CI job.
+# Minimal dependencies for the BF16 DSA top-k capability tests.
+# These tests are pure Python and must run without torch, CUDA or the full
+# sglang runtime, so this list intentionally stays tiny.
 pytest>=7.0
-pytest-repeat>=0.9
-pytest-randomly>=3.12
-numpy>=1.24
+numpy>=1.21

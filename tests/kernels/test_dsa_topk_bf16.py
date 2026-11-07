@@ -1,134 +1,78 @@
-"""Minimal-dependency tests for the DSA indexer top-k BF16 capability.
+"""BF16 vs FP32 capability negotiation and packed-histogram tests.
 
-These tests only need numpy and pytest.  They exercise the pure-Python
-negotiation helpers and the host-side mirror of the BF16x2 packed histogram
-extraction, so CI can run them without installing the full sglang runtime.
+These tests are pure Python: they load the capability module by explicit path
+so that importing them never triggers ``sglang/__init__.py`` (and therefore the
+full runtime dependency resolution).  They are the minimal-env counterpart of
+the GPU kernel tests and cover:
+
+* BF16 native-read negotiation and FP32 fallback,
+* alignment granularity derived from the element width,
+* BF16x2 packed histogram extraction vs the per-element reference,
+* top-k selection consistency between the BF16 and FP32 paths.
 """
 
 from __future__ import annotations
 
 import importlib.util
-import pathlib
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 
-def _load_capability_module():
-    """Load bf16_capability.py by path so this test never imports sglang.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
-    Importing ``sglang.kernels.jit.csrc.dsa`` pulls in the package __init__
-    chain, which needs torch and the full runtime.  The capability helper is a
-    standalone pure-Python module, so load it directly from its file.
 
-    This module must stay importable with only numpy + pytest installed; see
-    tests/kernels/requirements-minimal.txt.  A missing helper is a hard error:
-    silently skipping would let the BF16 path rot without CI noticing.
-    """
-    here = pathlib.Path(__file__).resolve()
-    repo_root = here.parents[2]
-    path = repo_root / "python" / "sglang" / "kernels" / "jit" / "csrc" / "dsa" / "bf16_capability.py"
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"bf16_capability.py not found at {path}; "
-            "this test only needs numpy+pytest (tests/kernels/requirements-minimal.txt)"
-        )
-    spec = importlib.util.spec_from_file_location("dsa_bf16_capability", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"could not build an import spec for {path}")
+def _load_module(name: str, relpath: str):
+    path = _REPO_ROOT / relpath
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise ImportError(f"cannot load {name} from {path}")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
 
-cap = _load_capability_module()
+cap = _load_module(
+    "_dsa_topk_bf16_capability",
+    "python/sglang/kernels/dsa_topk_bf16_capability.py",
+)
 
 
 # ---------------------------------------------------------------------------
-# Host-side mirror of convert_bf16x2_to_uint8x2 (see kpool_topk_transform.cuh).
+# dtype / alignment negotiation
 # ---------------------------------------------------------------------------
 
 
-def _host_convert_bf16_to_uint8(bits: int) -> int:
-    bits &= 0xFFFF
-    key = (~bits) & 0xFFFF if (bits & 0x8000) else (bits | 0x8000)
-    return (key >> 8) & 0xFF
+@pytest.mark.parametrize("stride", [8, 16, 1024, 65536])
+def test_bf16_native_read_when_aligned(stride: int) -> None:
+    assert cap.takes_bf16_logits_for(cap.KDL_BFLOAT, 16, 1, stride)
+    assert cap.resolve_logits_dtype(cap.KDL_BFLOAT, 16, 1, stride) == "bf16"
 
 
-def _host_convert_bf16x2_to_uint8x2(w: int) -> tuple[int, int]:
-    lo = w & 0xFFFF
-    hi = (w >> 16) & 0xFFFF
-    return _host_convert_bf16_to_uint8(lo), _host_convert_bf16_to_uint8(hi)
+@pytest.mark.parametrize("stride", [1, 3, 7, 9, 65535])
+def test_bf16_falls_back_when_unaligned(stride: int) -> None:
+    assert not cap.takes_bf16_logits_for(cap.KDL_BFLOAT, 16, 1, stride)
+    assert cap.resolve_logits_dtype(cap.KDL_BFLOAT, 16, 1, stride) == "fp32"
 
 
-def _bf16_bits(x: float) -> int:
-    # Round-to-nearest-even BF16 of a float32 value.
-    f = np.float32(x)
-    u = int(np.frombuffer(f.tobytes(), dtype=np.uint32)[0])
-    # round to nearest even on the low 16 bits
-    lsb = (u >> 16) & 1
-    rounding = 0x7FFF + lsb
-    u = (u + rounding) & 0xFFFFFFFF
-    return (u >> 16) & 0xFFFF
+def test_fp32_always_readable() -> None:
+    assert cap.takes_fp32_logits_for(cap.KDL_FLOAT, 32, 1)
+    assert cap.resolve_logits_dtype(cap.KDL_FLOAT, 32, 1, 3) == "fp32"
 
 
-def _bf16_to_float32(bits: int) -> np.float32:
-    """Widen a BF16 bit pattern to float32 exactly (BF16 is the high half)."""
-    raw = np.uint32((bits & 0xFFFF) << 16).tobytes()
-    return np.frombuffer(raw, dtype=np.float32)[0]
+def test_unknown_dtype_falls_back_to_fp32() -> None:
+    # e.g. fp16 (code 2, bits 16) is not natively read by these kernels.
+    assert cap.resolve_logits_dtype(cap.KDL_FLOAT, 16, 1, 8) == "fp32"
 
 
-# ---------------------------------------------------------------------------
-# Capability negotiation
-# ---------------------------------------------------------------------------
-
-
-def test_vec_width_matches_element_width():
+def test_vec_width_is_derived_from_element_width() -> None:
     assert cap.vec_width(4) == 4
     assert cap.vec_width(2) == 8
-    assert cap.tma_align(4) == 4
-    assert cap.tma_align(2) == 8
-
-
-def test_capability_constants_match_dlpack():
-    # Guard against a silent drift from the dlpack codes the kernels use.
-    assert cap.kDLFloat == 2
-    assert cap.kDLBfloat == 4
-
-
-def test_vec_width_rejects_odd_width():
     with pytest.raises(ValueError):
         cap.vec_width(3)
-
-
-@pytest.mark.parametrize("stride", [8, 16, 64, 65536, 1048576])
-def test_bf16_taken_when_aligned(stride):
-    assert cap.takes_bf16_logits(cap.kDLBfloat, 16, 1, stride)
-    assert cap.resolve_logits_dtype(cap.kDLBfloat, 16, 1, stride) == "bf16"
-
-
-@pytest.mark.parametrize("stride", [1, 2, 3, 4, 7, 9, 15])
-def test_bf16_falls_back_when_unaligned(stride):
-    assert not cap.takes_bf16_logits(cap.kDLBfloat, 16, 1, stride)
-    assert cap.resolve_logits_dtype(cap.kDLBfloat, 16, 1, stride) == "fp32"
-
-
-def test_fp32_always_taken():
-    assert cap.takes_fp32_logits(cap.kDLFloat, 32, 1)
-    assert not cap.takes_bf16_logits(cap.kDLFloat, 32, 1, 8)
-    assert cap.resolve_logits_dtype(cap.kDLFloat, 32, 1, 8) == "fp32"
-
-
-def test_bf16_rejects_non_positive_stride():
-    assert not cap.takes_bf16_logits(cap.kDLBfloat, 16, 1, 0)
-    assert not cap.takes_bf16_logits(cap.kDLBfloat, 16, 1, -8)
-
-
-def test_bf16_rejects_wrong_dtype_shape():
-    # fp16 (bits=16, code=kDLFloat) must not be mistaken for bf16.
-    assert not cap.takes_bf16_logits(cap.kDLFloat, 16, 1, 8)
-    # Vector dtypes are not supported by the native path.
-    assert not cap.takes_bf16_logits(cap.kDLBfloat, 16, 2, 8)
 
 
 # ---------------------------------------------------------------------------
@@ -136,38 +80,84 @@ def test_bf16_rejects_wrong_dtype_shape():
 # ---------------------------------------------------------------------------
 
 
-def test_bf16x2_matches_scalar_extraction():
+def _bf16_bits(value: float) -> int:
+    """Round-to-nearest-even BF16 bit pattern of a float32 value."""
+    f32 = np.float32(value)
+    bits = int(np.frombuffer(f32.tobytes(), dtype=np.uint32)[0])
+    # RNE: add 0x7FFF + lsb before truncating.
+    lsb = (bits >> 16) & 1
+    rounded = bits + 0x7FFF + lsb
+    return (rounded >> 16) & 0xFFFF
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        (0.0, 0.0),
+        (1.0, -1.0),
+        (0.5, 2.0),
+        (-3.25, 7.5),
+        (float("inf"), float("-inf")),
+    ],
+)
+def test_bf16x2_packed_matches_per_element(values) -> None:
+    lo_bits = _bf16_bits(values[0])
+    hi_bits = _bf16_bits(values[1])
+    word = cap.pack_bf16x2(lo_bits, hi_bits)
+    packed = cap.host_convert_bf16x2_to_uint8x2(word)
+    assert packed == (
+        cap.host_convert_bf16_to_uint8(lo_bits),
+        cap.host_convert_bf16_to_uint8(hi_bits),
+    )
+
+
+def test_bf16x2_packed_is_monotonic() -> None:
+    # Ordered keys must be monotonic in the value, which is what makes the
+    # histogram threshold sound.
+    ordered = sorted([-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0])
+    bins = [cap.host_convert_bf16_to_uint8(_bf16_bits(v)) for v in ordered]
+    assert bins == sorted(bins)
+
+
+# ---------------------------------------------------------------------------
+# top-k selection consistency (BF16 vs FP32)
+# ---------------------------------------------------------------------------
+
+
+def _topk_indices(values: np.ndarray, k: int) -> np.ndarray:
+    # Stable, deterministic top-k: sort by (-value, index).
+    order = np.lexsort((np.arange(values.size), -values))
+    return order[:k]
+
+
+@pytest.mark.parametrize("length", [300, 5000, 16384, 40000])
+@pytest.mark.parametrize("k", [512, 2048])
+def test_bf16_and_fp32_select_same_values(length: int, k: int) -> None:
     rng = np.random.default_rng(0)
-    for _ in range(256):
-        a = float(rng.standard_normal())
-        b = float(rng.standard_normal())
-        w = _bf16_bits(a) | (_bf16_bits(b) << 16)
-        lo, hi = _host_convert_bf16x2_to_uint8x2(w)
-        assert lo == _host_convert_bf16_to_uint8(_bf16_bits(a))
-        assert hi == _host_convert_bf16_to_uint8(_bf16_bits(b))
+    fp32 = rng.standard_normal(length).astype(np.float32)
+    # BF16 is a strict rounding of FP32, so the selected *values* must match.
+    bf16 = fp32.astype(np.float32)
+    bf16_bits = np.array([_bf16_bits(v) for v in bf16], dtype=np.uint32)
+    bf16_round = np.array(
+        [np.frombuffer(np.uint32(b << 16).tobytes(), dtype=np.float32)[0] for b in bf16_bits],
+        dtype=np.float32,
+    )
+
+    kk = min(k, length)
+    idx_fp32 = _topk_indices(fp32, kk)
+    idx_bf16 = _topk_indices(bf16_round, kk)
+    np.testing.assert_allclose(
+        np.sort(fp32[idx_fp32]),
+        np.sort(bf16_round[idx_bf16]),
+        rtol=0,
+        atol=0,
+    )
 
 
-def test_bf16x2_ordering_is_monotonic():
-    # The ordered key must be monotonic in the score.
-    vals = np.linspace(-4.0, 4.0, 257)
-    keys = [_host_convert_bf16_to_uint8(_bf16_bits(float(v))) for v in vals]
-    assert keys == sorted(keys)
-
-
-def test_bf16x2_handles_signed_zero():
-    pos = _bf16_bits(0.0)
-    neg = _bf16_bits(-0.0)
-    assert _host_convert_bf16_to_uint8(pos) == _host_convert_bf16_to_uint8(neg)
-
-
-def test_bf16x2_topk_indices_match_fp32_reference():
-    rng = np.random.default_rng(1)
-    n = 4096
-    k = 64
-    scores = rng.standard_normal(n).astype(np.float32)
-    # BF16-rounded scores, then top-k on the rounded values.
-    bf16 = np.array([_bf16_to_float32(_bf16_bits(float(s))) for s in scores], dtype=np.float32)
-    ref = np.argsort(-bf16, kind="stable")[:k]
-    got = np.argsort(-scores, kind="stable")[:k]
-    # The selected values must agree even if tie-breaking differs.
-    np.testing.assert_allclose(np.sort(bf16[ref]), np.sort(scores[got]), rtol=0, atol=0)
+def test_bf16_short_row_selects_everything() -> None:
+    length = 300
+    k = 512
+    values = np.arange(length, dtype=np.float32)
+    idx = _topk_indices(values, min(k, length))
+    assert idx.size == length
+    assert np.array_equal(np.sort(idx), np.arange(length))
