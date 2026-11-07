@@ -5,6 +5,21 @@ import torch
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 
 
+def _has_op(name: str) -> bool:
+    try:
+        return hasattr(torch.ops._C, name)
+    except Exception:
+        return False
+
+
+requires_cooperative_topk = pytest.mark.skipif(
+    not _has_op("cooperative_topk"), reason="torch.ops._C.cooperative_topk is not built"
+)
+requires_kpool_topk = pytest.mark.skipif(
+    not _has_op("kpool_topk_transform"), reason="torch.ops._C.kpool_topk_transform is not built"
+)
+
+
 def _reference_topk(logits: torch.Tensor, lengths: torch.Tensor, k: int):
     out = []
     for row, length in enumerate(lengths.tolist()):
@@ -25,6 +40,7 @@ def _assert_same_selection(logits: torch.Tensor, lengths: torch.Tensor, got: tor
         assert torch.all(got[row, kk:] == -1)
 
 
+@requires_cooperative_topk
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("num_rows", [1, 4, 8, 33, 64])
 @pytest.mark.parametrize("stride", [65536, 1048576])
@@ -42,6 +58,7 @@ def test_cooperative_topk_rows_shorter_than_stride(dtype, num_rows, stride):
     _assert_same_selection(logits, lengths, out, top_k)
 
 
+@requires_cooperative_topk
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("num_rows", [1, 64])
 @pytest.mark.parametrize("top_k", [512, 2048])
@@ -61,6 +78,7 @@ def test_cooperative_topk_overflow(dtype, num_rows, top_k, seq_len):
     _assert_same_selection(logits, lengths, out, top_k)
 
 
+@requires_kpool_topk
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 @torch.inference_mode()
 def test_kpool_topk_transform_bf16_matches_fp32(dtype):
@@ -75,6 +93,7 @@ def test_kpool_topk_transform_bf16_matches_fp32(dtype):
     assert torch.all(dst >= -1)
 
 
+@requires_kpool_topk
 @torch.inference_mode()
 def test_kpool_topk_transform_bf16_unaligned_falls_back():
     torch.set_default_device("cuda:0")
@@ -87,10 +106,39 @@ def test_kpool_topk_transform_bf16_unaligned_falls_back():
     assert dst.shape == (batch, group_topk * pool_size)
 
 
+def _scalar_bf16_key(bits: int) -> int:
+    # Mirrors convert_bf16_to_uint8: ordered 16-bit key of a BF16 bit pattern.
+    return (~bits) & 0xFFFF if bits & 0x8000 else (bits | 0x8000)
+
+
+def _packed_bf16x2_bins(w: int) -> tuple:
+    # Mirrors convert_bf16x2_to_uint8x2: two BF16 scores packed low half first.
+    lo = w & 0xFFFF
+    hi = (w >> 16) & 0xFFFF
+    return (_scalar_bf16_key(lo) >> 8, _scalar_bf16_key(hi) >> 8)
+
+
 def test_bf16x2_packed_histogram_bins():
     # The packed extraction must agree with the scalar key on every BF16 value.
-    values = torch.tensor([0.0, -0.0, 1.0, -1.0, 3.5, -3.5, 1e-3, -1e-3], dtype=torch.bfloat16)
-    bits = values.view(torch.int16).to(torch.int32) & 0xFFFF
-    key = torch.where(bits & 0x8000 != 0, (~bits) & 0xFFFF, bits | 0x8000)
-    expected = (key >> 8).to(torch.int64)
-    assert expected.min() >= 0 and expected.max() < 256
+    values = torch.tensor(
+        [0.0, -0.0, 1.0, -1.0, 3.5, -3.5, 1e-3, -1e-3, 65504.0, -65504.0],
+        dtype=torch.bfloat16,
+    )
+    bits = (values.view(torch.int16).to(torch.int32) & 0xFFFF).tolist()
+    for i in range(0, len(bits) - 1, 2):
+        w = bits[i] | (bits[i + 1] << 16)
+        lo, hi = _packed_bf16x2_bins(w)
+        assert lo == _scalar_bf16_key(bits[i]) >> 8
+        assert hi == _scalar_bf16_key(bits[i + 1]) >> 8
+        assert 0 <= lo < 256 and 0 <= hi < 256
+
+
+def test_bf16x2_packed_histogram_bins_ordering():
+    # Monotonicity: a larger BF16 score must never map to a smaller bin.
+    values = torch.tensor(
+        [-65504.0, -3.5, -1.0, -0.0, 0.0, 1e-3, 1.0, 3.5, 65504.0],
+        dtype=torch.bfloat16,
+    )
+    bits = (values.view(torch.int16).to(torch.int32) & 0xFFFF).tolist()
+    bins = [_scalar_bf16_key(b) >> 8 for b in bits]
+    assert bins == sorted(bins)
