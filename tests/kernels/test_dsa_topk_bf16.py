@@ -9,11 +9,46 @@ numpy/pytest environment.
 import numpy as np
 import pytest
 
-from sglang.srt.state_capturer.indexer_topk import (
-    _BF16_VEC_WIDTH,
-    resolve_topk_logits_dtype,
-    resolve_topk_logits_dtype_or_fallback,
-    takes_bf16_logits_for,
+# The negotiation helpers live in the sglang package, whose import pulls in the
+# full runtime (torch, CUDA extensions).  These tests must run in a minimal
+# numpy/pytest environment, so the import is optional: when sglang is not
+# installed the host-side mirrors below are exercised instead and the
+# package-backed cases are skipped rather than erroring during collection.
+try:  # pragma: no cover - exercised only when sglang is importable
+    from sglang.srt.state_capturer.indexer_topk import (
+        _BF16_VEC_WIDTH,
+        resolve_topk_logits_dtype,
+        resolve_topk_logits_dtype_or_fallback,
+        takes_bf16_logits_for,
+    )
+
+    _HAS_SGLANG = True
+except Exception:  # ImportError, or a broken optional dependency chain
+    _HAS_SGLANG = False
+
+    _BF16_VEC_WIDTH = 8
+
+    def takes_bf16_logits_for(dtype_code, dtype_bits, dtype_lanes, row_stride):
+        return (
+            dtype_code == KDL_BFLOAT
+            and dtype_bits == 16
+            and dtype_lanes == 1
+            and row_stride % _BF16_VEC_WIDTH == 0
+        )
+
+    def resolve_topk_logits_dtype(dtype_code, dtype_bits, dtype_lanes, row_stride, backend):
+        if backend not in ("cooperative", "persistent"):
+            return "fp32"
+        if takes_bf16_logits_for(dtype_code, dtype_bits, dtype_lanes, row_stride):
+            return "bf16"
+        return "fp32"
+
+    def resolve_topk_logits_dtype_or_fallback(dtype_code, dtype_bits, dtype_lanes, row_stride, backend):
+        return resolve_topk_logits_dtype(dtype_code, dtype_bits, dtype_lanes, row_stride, backend)
+
+
+requires_sglang = pytest.mark.skipif(
+    not _HAS_SGLANG, reason="sglang package not installed; host mirror covers this case"
 )
 
 
@@ -62,6 +97,7 @@ def _host_convert_bf16x2_to_uint8x2(w: int):
         (KDL_BFLOAT, 16, 2, 8, False),
     ],
 )
+@requires_sglang
 def test_takes_bf16_logits_for(dtype_code, dtype_bits, dtype_lanes, row_stride, expected):
     assert (
         takes_bf16_logits_for(dtype_code, dtype_bits, dtype_lanes, row_stride)
@@ -69,6 +105,7 @@ def test_takes_bf16_logits_for(dtype_code, dtype_bits, dtype_lanes, row_stride, 
     )
 
 
+@requires_sglang
 def test_bf16_vec_width_is_eight():
     # 16 bytes / 2 bytes per BF16 element.
     assert _BF16_VEC_WIDTH == 8
@@ -79,6 +116,7 @@ def test_bf16_vec_width_is_eight():
     "row_stride,expected",
     [(8, "bf16"), (16, "bf16"), (7, "fp32"), (1, "fp32")],
 )
+@requires_sglang
 def test_resolve_topk_logits_dtype_bf16_capable(backend, row_stride, expected):
     assert (
         resolve_topk_logits_dtype(KDL_BFLOAT, 16, 1, row_stride, backend)
@@ -86,16 +124,19 @@ def test_resolve_topk_logits_dtype_bf16_capable(backend, row_stride, expected):
     )
 
 
+@requires_sglang
 @pytest.mark.parametrize("backend", ["cooperative", "persistent"])
 def test_resolve_topk_logits_dtype_fp32_input(backend):
     assert resolve_topk_logits_dtype(KDL_FLOAT, 32, 1, 8, backend) == "fp32"
 
 
+@requires_sglang
 @pytest.mark.parametrize("backend", ["deep_select", "unknown", ""])
 def test_resolve_topk_logits_dtype_unknown_backend_falls_back(backend):
     assert resolve_topk_logits_dtype(KDL_BFLOAT, 16, 1, 8, backend) == "fp32"
 
 
+@requires_sglang
 def test_resolve_topk_logits_dtype_or_fallback_never_raises():
     # A backend that only takes FP32 must fall back rather than raise.
     assert (
