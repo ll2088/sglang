@@ -124,6 +124,27 @@ def test_kpool_warmup_meta_carries_real_ptr_range():
     assert meta["head_dim"] == 128
 
 
+def test_kpool_warmup_meta_degrades_without_storage():
+    class _FakeKCache:
+        def __init__(self, kv_cache):
+            self.kv_cache = kv_cache
+
+    class _NoStorage:
+        shape = (4, 64, 128)
+
+        def stride(self, _dim):
+            return 64 * 128
+
+    meta = build_kpool_compress_warmup_meta(
+        k_cache=_FakeKCache(_NoStorage()),
+        pool_size=4,
+        head_dim=128,
+        round_scale=False,
+    )
+    assert meta["buf_ptr_range_bytes"] == 0
+    assert meta["page_size"] == 64
+
+
 def test_kpool_warmup_registration_is_idempotent():
     class _FakeKCache:
         def __init__(self, kv_cache):

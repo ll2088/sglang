@@ -51,11 +51,8 @@ class TritonKDAKernel(LinearAttnKernelBase):
         block_dim = _l2norm_block_dim(dtype.itemsize, head_dim)
         if head_dim > block_dim:
             return False
-        if not torch.cuda.is_available():
-            return False
         try:
-            device = torch.device("cuda")
-            if device.type != "cuda":
+            if not torch.cuda.is_available():
                 return False
         except (RuntimeError, AssertionError):
             return False
