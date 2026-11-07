@@ -20,13 +20,23 @@ def _load_capability_module():
     Importing ``sglang.kernels.jit.csrc.dsa`` pulls in the package __init__
     chain, which needs torch and the full runtime.  The capability helper is a
     standalone pure-Python module, so load it directly from its file.
+
+    This module must stay importable with only numpy + pytest installed; see
+    tests/kernels/requirements-minimal.txt.  If the helper is missing we skip
+    with an explicit reason instead of letting the import chain pull in the
+    full sglang dependency set.
     """
     here = pathlib.Path(__file__).resolve()
     repo_root = here.parents[2]
     path = repo_root / "python" / "sglang" / "kernels" / "jit" / "csrc" / "dsa" / "bf16_capability.py"
     if not path.is_file():
-        pytest.skip(f"bf16_capability.py not found at {path}")
+        pytest.skip(
+            f"bf16_capability.py not found at {path}; "
+            "this test only needs numpy+pytest (tests/kernels/requirements-minimal.txt)"
+        )
     spec = importlib.util.spec_from_file_location("dsa_bf16_capability", path)
+    if spec is None or spec.loader is None:
+        pytest.skip(f"could not build an import spec for {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

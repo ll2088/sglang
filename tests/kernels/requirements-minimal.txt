@@ -1,5 +1,9 @@
-# Minimal deps for the pure-Python DSA top-k capability tests.
-# Deliberately excludes sglang, torch and CUDA packages so CI can run these
-# tests in a clean venv without resolving the full runtime dependency tree.
-numpy
-pytest
+# Minimal, self-contained dependencies for tests/kernels/test_dsa_topk_bf16.py.
+#
+# These tests intentionally avoid importing sglang (which pulls in torch,
+# py-spy, quack-kernels and the rest of the runtime).  Keep this file free of
+# any sglang runtime dependency so CI can install it into a clean venv.
+#
+# Pin the interpreter-agnostic pure-Python stack only; no CUDA wheels here.
+numpy>=1.24
+pytest>=7.0
