@@ -18,10 +18,25 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 
+def _has_numpy() -> bool:
+    try:
+        import numpy  # noqa: F401
+    except Exception:  # pragma: no cover - depends on the environment
+        return False
+    return True
+
+
+_HAS_NUMPY = _has_numpy()
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "requires_sglang: test needs the sglang package to be importable",
+    )
+    config.addinivalue_line(
+        "markers",
+        "requires_numpy: test needs numpy to be importable",
     )
 
 
@@ -39,3 +54,9 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "requires_sglang" in item.keywords:
                 item.add_marker(skip)
+
+    if not _HAS_NUMPY:
+        skip_np = pytest.mark.skip(reason="numpy is not importable")
+        for item in items:
+            if "requires_numpy" in item.keywords:
+                item.add_marker(skip_np)

@@ -11,8 +11,11 @@ import importlib.util
 import sys
 from pathlib import Path
 
-import numpy as np
 import pytest
+
+np = pytest.importorskip("numpy")
+
+pytestmark = pytest.mark.requires_numpy
 
 
 # Load the pure-Python helpers by explicit file path so importing them never

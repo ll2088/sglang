@@ -1,7 +1,5 @@
-# Minimal test-only dependencies for tests/kernels/test_dsa_topk_bf16.py.
-# Deliberately does NOT install sglang or its runtime deps: the capability
-# module is loaded by explicit path and must stay importable without them.
-pytest>=7.4
-pytest-repeat>=0.9
-pytest-benchmark>=4.0
-numpy>=1.24
+# Minimal dependencies for the pure-Python BF16 capability tests.
+# Deliberately excludes torch, sglang and any GPU runtime: these tests only
+# exercise host-side dtype/alignment negotiation and packed-bin extraction.
+pytest>=7.0
+numpy>=1.21
