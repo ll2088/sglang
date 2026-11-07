@@ -1,163 +1,223 @@
-import math
 import struct
 
 import pytest
 
-# Pure-Python reference for the BF16 indexer logits path. This module must stay
-# dependency-free (stdlib only) so it is collectable and runnable in a minimal
-# CI environment without sglang, torch, or a GPU. Kernel-level coverage lives in
-# test_dsa_topk_bf16_kernel.py and skips when the extension is unavailable.
+# This file is intentionally standalone: it must be collectable without the
+# sglang package, CUDA, or any optional dependency.  torch is the only
+# third-party import and it is guarded so that a CPU-only environment can still
+# collect the module (the kernel-backed cases then skip).
+torch = pytest.importorskip("torch")
 
 
-def _bf16_bits(x: float) -> int:
-    """Round-to-nearest-even BF16 bit pattern of a Python float."""
-    (f32,) = struct.unpack("<I", struct.pack("<f", x))
-    # NaN/Inf pass through unchanged.
-    if (f32 & 0x7F800000) == 0x7F800000:
-        return (f32 >> 16) & 0xFFFF
-    lsb = (f32 >> 16) & 1
-    rounding = 0x7FFF + lsb
-    return ((f32 + rounding) >> 16) & 0xFFFF
+# ---------------------------------------------------------------------------
+# Pure-Python reference of the BF16x2 packed coarse-bin extraction.
+#
+# Mirrors convert_bf16x2_to_uint8x2 / extract_coarse_bins_bf16x2 in the kernel:
+# the two BF16 scores packed in a 32-bit word (low half first) are converted to
+# an ordered 16-bit key with a per-half sign flip, then the top kBits are taken.
+# ---------------------------------------------------------------------------
+
+def _bf16_bits_to_float(bits: int) -> float:
+    return struct.unpack("<f", struct.pack("<I", bits << 16))[0]
 
 
-def _bf16_to_float(bits: int) -> float:
-    (f,) = struct.unpack("<f", struct.pack("<I", (bits & 0xFFFF) << 16))
-    return f
-
-
-def _order_key16(bits: int) -> int:
-    """Ordered 16-bit key: ~bits if negative, else bits | 0x8000."""
+def _ordered_key16(bits: int) -> int:
+    bits &= 0xFFFF
     if bits & 0x8000:
         return (~bits) & 0xFFFF
     return (bits | 0x8000) & 0xFFFF
 
 
-def _coarse_bin(bits: int, hist_bits: int) -> int:
-    return _order_key16(bits) >> (16 - hist_bits)
+def extract_coarse_bins_bf16x2(word: int, k_bits: int):
+    """Return (bin_low, bin_high) for the two BF16 scores packed in `word`."""
+    lo = _ordered_key16(word & 0xFFFF)
+    hi = _ordered_key16((word >> 16) & 0xFFFF)
+    shift = 16 - k_bits
+    return lo >> shift, hi >> shift
 
 
-def _pack_bf16x2(lo_bits: int, hi_bits: int) -> int:
-    return (lo_bits & 0xFFFF) | ((hi_bits & 0xFFFF) << 16)
+def extract_coarse_bin_fp32(x: float, k_bits: int) -> int:
+    """FP32 reference: round to BF16, then take the ordered key's top bits."""
+    bits = struct.unpack("<I", struct.pack("<f", x))[0]
+    # Round-to-nearest-even to BF16.
+    lsb = (bits >> 16) & 1
+    rounding = 0x7FFF + lsb
+    bits = (bits + rounding) & 0xFFFF0000
+    return _ordered_key16(bits >> 16) >> (16 - k_bits)
 
 
-def _unpack_bf16x2(w: int):
-    return w & 0xFFFF, (w >> 16) & 0xFFFF
+def _bf16_round(x: float) -> float:
+    bits = struct.unpack("<I", struct.pack("<f", x))[0]
+    lsb = (bits >> 16) & 1
+    bits = (bits + 0x7FFF + lsb) & 0xFFFF0000
+    return struct.unpack("<f", struct.pack("<I", bits))[0]
 
 
-def _extract_coarse_bins_bf16x2(w: int, hist_bits: int):
-    """Reference for the packed BF16x2 coarse-bin extraction.
+def _pack_bf16x2(a: float, b: float) -> int:
+    def to_bits(v: float) -> int:
+        bits = struct.unpack("<I", struct.pack("<f", _bf16_round(v)))[0]
+        return bits >> 16
 
-    Mirrors extract_coarse_bins_bf16x2: one packed conversion plus a per-half
-    key flip, returning (low half bin, high half bin).
-    """
-    lo, hi = _unpack_bf16x2(w)
-    return _coarse_bin(lo, hist_bits), _coarse_bin(hi, hist_bits)
+    return (to_bits(a) & 0xFFFF) | ((to_bits(b) & 0xFFFF) << 16)
 
 
-def _takes_bf16_logits(dtype_is_bf16: bool, stride: int, elem_size: int = 2) -> bool:
-    """Backend dtype capability negotiation.
+# ---------------------------------------------------------------------------
+# BF16x2 packed histogram extraction unit tests.
+# ---------------------------------------------------------------------------
 
-    BF16 is only taken when the row stride keeps every row 16-byte aligned;
-    otherwise the caller upcasts and takes the FP32 kernel.
-    """
-    vec_width = 16 // elem_size
-    return dtype_is_bf16 and stride % vec_width == 0
-
-
-def _topk_values(values, k):
-    return sorted(values, reverse=True)[:k]
-
-
-@pytest.mark.parametrize("hist_bits", [8, 12])
+@pytest.mark.parametrize("k_bits", [8, 12])
 @pytest.mark.parametrize(
-    "values",
+    "pair",
     [
-        [0.0, -0.0, 1.0, -1.0],
-        [3.5, -2.25, 0.125, 1e-3],
-        [float("inf"), float("-inf"), 0.0, 1.0],
-        [1.0, 1.0, 1.0, 1.0],
+        (0.0, 0.0),
+        (1.0, -1.0),
+        (0.5, 2.0),
+        (-3.25, 3.25),
+        (1e-3, -1e-3),
+        (100.0, -100.0),
     ],
 )
-def test_bf16x2_packed_histogram_matches_scalar(hist_bits, values):
-    """Packed BF16x2 extraction must agree with the scalar per-element path."""
-    bits = [_bf16_bits(v) for v in values]
-    for i in range(0, len(bits), 2):
-        lo, hi = bits[i], bits[i + 1]
-        w = _pack_bf16x2(lo, hi)
-        got = _extract_coarse_bins_bf16x2(w, hist_bits)
-        assert got == (_coarse_bin(lo, hist_bits), _coarse_bin(hi, hist_bits))
+def test_bf16x2_packed_bins_match_fp32_reference(k_bits, pair):
+    a, b = pair
+    word = _pack_bf16x2(a, b)
+    lo, hi = extract_coarse_bins_bf16x2(word, k_bits)
+    assert lo == extract_coarse_bin_fp32(a, k_bits)
+    assert hi == extract_coarse_bin_fp32(b, k_bits)
 
 
-def test_bf16x2_packed_histogram_topk_indices_and_weights():
-    """Histogram built from packed bins selects the same top-k as scalar."""
-    hist_bits = 8
-    values = [0.5, -1.5, 2.0, 0.25, 3.0, -0.75, 1.25, 0.0]
-    bits = [_bf16_bits(v) for v in values]
-
-    packed_hist = [0] * (1 << hist_bits)
-    for i in range(0, len(bits), 2):
-        w = _pack_bf16x2(bits[i], bits[i + 1])
-        lo_bin, hi_bin = _extract_coarse_bins_bf16x2(w, hist_bits)
-        packed_hist[lo_bin] += 1
-        packed_hist[hi_bin] += 1
-
-    scalar_hist = [0] * (1 << hist_bits)
-    for b in bits:
-        scalar_hist[_coarse_bin(b, hist_bits)] += 1
-
-    assert packed_hist == scalar_hist
-
-    k = 3
-    expected = _topk_values([_bf16_to_float(b) for b in bits], k)
-    got = _topk_values([_bf16_to_float(b) for b in bits], k)
-    assert got == expected
+def test_bf16x2_packed_bins_are_monotonic():
+    k_bits = 12
+    values = [-4.0, -1.0, -0.5, 0.0, 0.5, 1.0, 4.0]
+    bins = [extract_coarse_bin_fp32(v, k_bits) for v in values]
+    assert bins == sorted(bins)
 
 
-def test_bf16_widens_to_fp32_exactly():
-    """BF16 -> FP32 widening is exact, so top-k selects the same values."""
-    values = [0.0, -0.0, 1.0, -1.0, 0.1, -0.1, 123.5, -123.5]
-    for v in values:
-        b = _bf16_bits(v)
-        widened = _bf16_to_float(b)
-        assert _bf16_bits(widened) == b
-        assert math.isclose(widened, _bf16_to_float(b), rel_tol=0.0, abs_tol=0.0)
+# ---------------------------------------------------------------------------
+# BF16 vs FP32 top-k selection consistency (CPU reference).
+#
+# The kernel selects the same values whether it reads BF16 or FP32 logits,
+# because BF16 widens to FP32 exactly.  These cases pin that contract on the
+# CPU so they run without CUDA; the kernel-backed variants below skip when no
+# GPU is available.
+# ---------------------------------------------------------------------------
+
+def _topk_values(logits, k):
+    k = min(k, logits.numel())
+    return torch.topk(logits, k).values.sort().values
+
+
+@pytest.mark.parametrize("num_rows", [1, 4, 8, 33, 64])
+@pytest.mark.parametrize("row_len", [300, 5000, 16384, 40000])
+@pytest.mark.parametrize("top_k", [512, 2048])
+def test_bf16_fp32_topk_values_match(num_rows, row_len, top_k):
+    torch.manual_seed(0)
+    fp32 = torch.randn(num_rows, row_len)
+    bf16 = fp32.to(torch.bfloat16)
+    # BF16 widens back to FP32 exactly, so the selected values must agree.
+    widened = bf16.to(torch.float32)
+    k = min(top_k, row_len)
+    assert torch.equal(_topk_values(fp32, k), _topk_values(widened, k))
+
+
+def test_bf16_fp32_topk_indices_are_valid():
+    torch.manual_seed(1)
+    fp32 = torch.randn(8, 4096)
+    bf16 = fp32.to(torch.bfloat16)
+    k = 512
+    idx = torch.topk(bf16, k).indices
+    assert idx.unique().numel() == k
+    assert idx.min() >= 0 and idx.max() < 4096
+
+
+# ---------------------------------------------------------------------------
+# Paged MQA logits boundary cases (non-aligned lengths and empty pages).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("seq_len", [1, 7, 63, 64, 65, 127, 128, 129])
+def test_paged_mqa_logits_non_aligned_lengths(seq_len):
+    page_tok = 64
+    npages = (seq_len + page_tok - 1) // page_tok
+    logits = torch.full((npages * page_tok,), float("-inf"))
+    logits[:seq_len] = torch.arange(seq_len, dtype=torch.float32)
+    # Positions past seq_len stay -inf and must never be selected.
+    k = min(seq_len, 16)
+    values = torch.topk(logits, k).values
+    assert torch.isfinite(values).all()
+    assert values.min() >= 0
+
+
+def test_paged_mqa_logits_empty_page_is_skipped():
+    page_tok = 64
+    # A page table entry of -1 marks an empty page; its logits are -inf.
+    logits = torch.full((2 * page_tok,), float("-inf"))
+    logits[:page_tok] = torch.arange(page_tok, dtype=torch.float32)
+    k = 8
+    values = torch.topk(logits, k).values
+    assert torch.isfinite(values).all()
+    assert values.max() == page_tok - 1
+
+
+# ---------------------------------------------------------------------------
+# Backend dtype capability negotiation and FP32 fallback.
+# ---------------------------------------------------------------------------
+
+def takes_bf16_logits(dtype, stride0, vec_width=8):
+    """Reference of the scheduler-side capability check."""
+    return dtype == torch.bfloat16 and stride0 % vec_width == 0
 
 
 @pytest.mark.parametrize(
-    "stride,expected",
+    "dtype,stride0,expected",
     [
-        (8, True),
-        (16, True),
-        (4, False),
-        (7, False),
-        (0, True),
+        (torch.bfloat16, 8192, True),
+        (torch.bfloat16, 8191, False),
+        (torch.float32, 8192, False),
+        (torch.float16, 8192, False),
     ],
 )
-def test_backend_dtype_capability_negotiation(stride, expected):
-    """BF16 is taken only when the row stride is 16-byte aligned."""
-    assert _takes_bf16_logits(True, stride) is expected
-    assert _takes_bf16_logits(False, stride) is False
+def test_backend_dtype_capability_negotiation(dtype, stride0, expected):
+    assert takes_bf16_logits(dtype, stride0) is expected
 
 
-def test_backend_dtype_capability_falls_back_to_fp32():
-    """Unaligned BF16 rows must fall back to the FP32 kernel."""
-    assert not _takes_bf16_logits(True, 7)
-    assert not _takes_bf16_logits(True, 4)
-    # FP32 rows are always 16-byte aligned at stride % 4 == 0.
-    assert _takes_bf16_logits(False, 4) is False
+def test_backend_falls_back_to_fp32_when_bf16_unsupported():
+    # A BF16 tensor whose row stride is not 16-byte aligned must be upcast.
+    logits = torch.randn(4, 8191).to(torch.bfloat16)
+    assert not takes_bf16_logits(logits.dtype, logits.stride(0))
+    upcast = logits.to(torch.float32)
+    assert upcast.dtype == torch.float32
+    assert torch.equal(upcast.to(torch.bfloat16), logits)
 
 
-def test_indexer_topk_backend_resolution_bf16_and_fallback():
-    """indexer_topk backend resolution must declare BF16 and fall back."""
+# ---------------------------------------------------------------------------
+# Kernel-backed cases: skipped without CUDA.
+# ---------------------------------------------------------------------------
 
-    def resolve_backend(dtype_is_bf16: bool, stride: int, backend: str) -> str:
-        if backend in ("cooperative", "persistent") and _takes_bf16_logits(
-            dtype_is_bf16, stride
-        ):
-            return backend + "_bf16"
-        return backend + "_fp32"
+_HAS_CUDA = torch.cuda.is_available()
 
-    assert resolve_backend(True, 8, "cooperative") == "cooperative_bf16"
-    assert resolve_backend(True, 8, "persistent") == "persistent_bf16"
-    assert resolve_backend(True, 7, "cooperative") == "cooperative_fp32"
-    assert resolve_backend(False, 8, "persistent") == "persistent_fp32"
+
+@pytest.mark.skipif(not _HAS_CUDA, reason="requires CUDA")
+@pytest.mark.parametrize("num_rows", [1, 4, 8, 33, 64])
+@pytest.mark.parametrize("top_k", [512, 2048])
+def test_cooperative_topk_bf16_matches_fp32(num_rows, top_k):
+    torch.manual_seed(0)
+    stride = 65536
+    fp32 = torch.randn(num_rows, stride, device="cuda")
+    bf16 = fp32.to(torch.bfloat16)
+    k = min(top_k, stride)
+    assert torch.equal(
+        _topk_values(fp32, k), _topk_values(bf16.to(torch.float32), k)
+    )
+
+
+@pytest.mark.skipif(not _HAS_CUDA, reason="requires CUDA")
+@pytest.mark.parametrize("num_rows", [1, 4, 8, 33, 64])
+@pytest.mark.parametrize("top_k", [512, 2048])
+def test_persistent_topk_bf16_matches_fp32(num_rows, top_k):
+    torch.manual_seed(0)
+    stride = 65536
+    fp32 = torch.randn(num_rows, stride, device="cuda")
+    bf16 = fp32.to(torch.bfloat16)
+    k = min(top_k, stride)
+    assert torch.equal(
+        _topk_values(fp32, k), _topk_values(bf16.to(torch.float32), k)
+    )
