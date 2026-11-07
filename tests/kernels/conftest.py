@@ -16,3 +16,11 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+
+# The pure-Python capability module lives under the kernels package tree but
+# must be importable without importing the sglang package itself (which would
+# pull in torch/CUDA and the full dependency set).  Add its directory directly
+# so `import dsa_topk_bf16_capability` resolves to the standalone module.
+_KERNELS_DIR = _REPO_ROOT / "python" / "sglang" / "kernels"
+if str(_KERNELS_DIR) not in sys.path:
+    sys.path.insert(0, str(_KERNELS_DIR))

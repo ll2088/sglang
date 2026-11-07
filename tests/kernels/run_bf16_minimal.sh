@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Run the BF16 top-k capability tests without installing the sglang meta-package.
-# Usage: tests/kernels/run_bf16_minimal.sh [extra pytest args...]
+# Run the standalone DSA top-k BF16 capability tests with a minimal dependency
+# set.  This script deliberately avoids `pip install -e .` / `pip install
+# sglang`, which would resolve the full meta-package dependency tree.
 set -euo pipefail
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "${here}/../.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${HERE}/../.." && pwd)"
 
-python -m pip install --disable-pip-version-check -r "${here}/requirements-minimal.txt"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
-# Make the repository importable without installing it.
-export PYTHONPATH="${repo_root}/python${PYTHONPATH:+:${PYTHONPATH}}"
+"${PYTHON_BIN}" -m pip install --disable-pip-version-check -q \
+  -r "${HERE}/requirements-minimal.txt"
 
-cd "${here}"
-python -m pytest -q -c pytest.ini test_dsa_topk_bf16_kernel.py "$@"
+cd "${HERE}"
+"${PYTHON_BIN}" -m pytest -c "${HERE}/pytest.ini" "${HERE}/test_dsa_topk_bf16.py" "$@"

@@ -1,7 +1,5 @@
-# Minimal dependency set for tests/kernels/test_dsa_topk_bf16_kernel.py.
-# Deliberately does NOT install the sglang meta-package: the tests load the
-# pure-Python capability helpers by file path and skip GPU cases when torch is
-# unavailable.
-pytest==8.3.4
-pytest-repeat==0.9.3
-pytest-randomly==3.16.0
+# Minimal dependency set for the standalone DSA top-k BF16 capability tests.
+# These tests exercise pure-Python dtype/alignment negotiation and the
+# BF16x2 packed histogram extraction; they must not pull in the sglang
+# meta-package or any CUDA/torch dependency.
+pytest>=7.0
