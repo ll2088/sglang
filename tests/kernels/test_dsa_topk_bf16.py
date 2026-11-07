@@ -34,6 +34,33 @@ def _load_capability_module():
 cap = _load_capability_module()
 
 
+def _reference_topk(values, k):
+    """Pure-Python top-k over (score, index) pairs, descending by score.
+
+    Ties are broken by the smaller index so the reference is deterministic and
+    can be compared against the packed-extraction ordering.
+    """
+    order = sorted(range(len(values)), key=lambda i: (-values[i], i))
+    return order[:k]
+
+
+def _bf16_to_float(bits: int) -> float:
+    """Exact BF16 -> FP32 widening (BF16 is the high 16 bits of FP32)."""
+    import struct
+
+    return struct.unpack("<f", struct.pack("<I", (bits & 0xFFFF) << 16))[0]
+
+
+def _float_to_bf16_bits(value: float) -> int:
+    import struct
+
+    raw = struct.unpack("<I", struct.pack("<f", value))[0]
+    # Round-to-nearest-even on the low 16 bits, matching __float2bfloat16_rn.
+    lsb = (raw >> 16) & 1
+    rounding = 0x7FFF + lsb
+    return ((raw + rounding) >> 16) & 0xFFFF
+
+
 def test_vec_width_is_derived_from_element_width():
     assert cap.vec_width(4) == 4
     assert cap.vec_width(2) == 8
@@ -95,3 +122,45 @@ def test_bf16x2_packed_extraction_handles_high_half():
     lo, hi = cap.host_convert_bf16x2_to_uint8x2(word)
     assert lo == cap.host_convert_bf16_to_uint8(0x3F80)
     assert hi == cap.host_convert_bf16_to_uint8(0xBF80)
+
+
+def test_bf16_and_fp32_topk_select_same_values():
+    """BF16 widens to FP32 exactly, so top-k must select the same values.
+
+    This mirrors the kernel-level consistency test without needing a GPU: the
+    BF16 scores are widened exactly and compared against the FP32 reference.
+    """
+    fp32_values = [0.5, -1.25, 3.0, 2.0, -0.0, 0.0, 7.5, 1.0]
+    bf16_bits = [_float_to_bf16_bits(v) for v in fp32_values]
+    bf16_values = [_bf16_to_float(b) for b in bf16_bits]
+    for k in (1, 3, 5, len(fp32_values)):
+        assert _reference_topk(bf16_values, k) == _reference_topk(fp32_values, k)
+
+
+def test_bf16x2_packed_extraction_preserves_topk_order():
+    """The packed extraction must rank scores the same way as the scalar key."""
+    values = [0.5, -1.25, 3.0, 2.0, -0.0, 0.0, 7.5, 1.0]
+    bits = [_float_to_bf16_bits(v) for v in values]
+    keys = [cap.host_convert_bf16_to_uint8(b) for b in bits]
+    # Higher score -> higher ordered key; equal scores share a key.
+    for i in range(len(values)):
+        for j in range(len(values)):
+            if values[i] > values[j]:
+                assert keys[i] >= keys[j]
+            if values[i] == values[j]:
+                assert keys[i] == keys[j]
+
+
+def test_resolve_logits_dtype_covers_cooperative_and_persistent():
+    """Both schedulers take BF16 only when the row stride is 16B aligned."""
+    for stride in (8, 16, 65536):
+        assert cap.resolve_logits_dtype(cap.BF16, stride) == "bf16"
+    for stride in (1, 4, 7):
+        assert cap.resolve_logits_dtype(cap.BF16, stride) == "fp32"
+
+
+def test_resolve_logits_dtype_rejects_unsupported_dtype():
+    with pytest.raises(ValueError):
+        cap.resolve_logits_dtype(cap.DType(cap.DL_FLOAT, 16, 1), 65536)
+    with pytest.raises(ValueError):
+        cap.resolve_logits_dtype(cap.DType(cap.DL_BFLOAT, 16, 2), 65536)
