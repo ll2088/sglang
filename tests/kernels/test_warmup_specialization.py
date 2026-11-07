@@ -13,11 +13,20 @@ except Exception:  # pragma: no cover - environment dependent
 
 from sglang.kernels.ops.attention.fla.l2norm import (
     _l2norm_block_dim,
-    l2norm_fwd,
     l2norm_fwd_block_warmup_inputs,
     l2norm_fwd_block_warmup_inputs_from_live,
     triton_ptr_range,
 )
+
+# ``l2norm_fwd`` itself needs a usable Triton toolchain; import it lazily so
+# the metadata-only tests below still run on CPU-only CI.
+try:
+    from sglang.kernels.ops.attention.fla.l2norm import l2norm_fwd
+
+    _HAS_L2NORM_FWD = True
+except Exception:  # pragma: no cover - environment dependent
+    l2norm_fwd = None  # type: ignore[assignment]
+    _HAS_L2NORM_FWD = False
 from sglang.srt.layers.attention.dsa.kpool_plan import (
     _KPOOL_WARMUP_REGISTERED,
     build_kpool_compress_warmup_meta,
@@ -59,6 +68,10 @@ def test_l2norm_block_dim_matches_runtime(dim, dtype, ptr_range):
 
 
 @requires_triton
+@pytest.mark.skipif(
+    not _HAS_L2NORM_FWD,
+    reason="l2norm_fwd is unavailable in this environment",
+)
 def test_l2norm_fwd_unchanged_by_block_dim_helper():
     if not torch.cuda.is_available():
         pytest.skip("requires CUDA device for l2norm_fwd numerical check")

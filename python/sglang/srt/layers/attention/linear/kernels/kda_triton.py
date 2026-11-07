@@ -44,8 +44,15 @@ class TritonKDAKernel(LinearAttnKernelBase):
         key = (dtype, head_dim)
         if key in cls._l2norm_warmup_registered:
             return False
+        # Import lazily so importing this module never requires Triton; the
+        # warmup entry point degrades to a no-op when the backend is missing.
         try:
             import triton
+            from sglang.kernels.ops.attention.fla.l2norm import (
+                _l2norm_block_dim,
+                l2norm_fwd_kernel,
+                triton_ptr_range,
+            )
         except ImportError:
             return False
         block_dim = _l2norm_block_dim(dtype.itemsize, head_dim)
