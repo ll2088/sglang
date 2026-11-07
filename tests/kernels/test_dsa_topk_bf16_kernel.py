@@ -7,16 +7,21 @@ pure-Python reference tests live in ``test_dsa_topk_bf16.py`` and always run.
 
 from __future__ import annotations
 
+import importlib.util
 import unittest
 
 
+def _torch_available() -> bool:
+    # Probe with find_spec so collection never imports torch (and therefore
+    # never pulls in the compiled sglang extensions) in a minimal CI job.
+    return importlib.util.find_spec("torch") is not None
+
+
 def _ops_available() -> bool:
-    try:
-        import torch  # noqa: F401
-    except Exception:
+    if not _torch_available():
         return False
     try:
-        import torch  # noqa: F811
+        import torch
 
         return hasattr(torch.ops, "_C") and hasattr(torch.ops._C, "cooperative_topk")
     except Exception:
