@@ -93,6 +93,9 @@ def _bf16_bits(value: float) -> int:
     """Round-to-nearest-even BF16 bit pattern of a float32 value."""
     f32 = np.float32(value)
     bits = int(np.frombuffer(f32.tobytes(), dtype=np.uint32)[0])
+    # NaN/Inf keep their exponent; only finite values are rounded.
+    if (bits & 0x7F800000) == 0x7F800000:
+        return (bits >> 16) & 0xFFFF
     # RNE: add 0x7FFF + lsb before truncating.
     lsb = (bits >> 16) & 1
     rounded = bits + 0x7FFF + lsb
@@ -158,11 +161,12 @@ def test_bf16_and_fp32_select_same_values(length: int, k: int) -> None:
     kk = min(k, length)
     idx_fp32 = _topk_indices(fp32, kk)
     idx_bf16 = _topk_indices(bf16_round, kk)
-    np.testing.assert_allclose(
-        np.sort(fp32[idx_fp32]),
+    # BF16 is a strict rounding of FP32, so the selected *values* must match
+    # after widening back to FP32; compare the BF16-rounded values on both
+    # sides so the assertion is exact.
+    np.testing.assert_array_equal(
+        np.sort(bf16_round[idx_fp32]),
         np.sort(bf16_round[idx_bf16]),
-        rtol=0,
-        atol=0,
     )
 
 
@@ -174,3 +178,19 @@ def test_bf16_short_row_selects_everything() -> None:
     idx = _topk_indices(values, min(k, length))
     assert idx.size == length
     assert np.array_equal(np.sort(idx), np.arange(length))
+
+
+@requires_numpy
+def test_bf16_unaligned_stride_falls_back() -> None:
+    # A row stride that is not a multiple of the BF16 vector width must be
+    # rejected by the capability predicate and resolved to the FP32 path.
+    assert not cap.takes_bf16_logits_for(cap.KDL_BFLOAT, 16, 1, 7)
+    assert cap.resolve_logits_dtype(cap.KDL_BFLOAT, 16, 1, 7) == "fp32"
+
+
+@requires_numpy
+def test_bf16_empty_row_is_safe() -> None:
+    # Empty rows must not produce indices and must not raise.
+    values = np.empty(0, dtype=np.float32)
+    idx = _topk_indices(values, 0)
+    assert idx.size == 0
