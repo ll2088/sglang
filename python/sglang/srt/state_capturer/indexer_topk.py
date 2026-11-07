@@ -26,6 +26,52 @@ def _lazy_import_torch():
     return torch
 
 
+# BF16 logits are read natively only when the row stride keeps every row
+# 16-byte aligned (8 BF16 elements).  Mirrors the kernel-side predicate in
+# kpool_topk_transform.cuh so the dispatcher and the kernel agree.
+_BF16_VEC_WIDTH = 8
+
+
+def takes_bf16_logits_for(
+    dtype_code: int,
+    dtype_bits: int,
+    dtype_lanes: int,
+    row_stride: int,
+) -> bool:
+    """Host-side mirror of the kernel's BF16 native-read predicate.
+
+    Kept free of tensor types so the dtype/alignment negotiation can be
+    unit-tested without CUDA or torch.  ``dtype_code`` follows DLPack
+    (kDLBfloat == 4).
+    """
+    return (
+        dtype_code == 4
+        and dtype_bits == 16
+        and dtype_lanes == 1
+        and row_stride % _BF16_VEC_WIDTH == 0
+    )
+
+
+def resolve_topk_logits_dtype(
+    dtype_code: int,
+    dtype_bits: int,
+    dtype_lanes: int,
+    row_stride: int,
+    backend: str = "cooperative",
+) -> str:
+    """Negotiate the logits dtype a top-k backend should read.
+
+    Returns ``"bf16"`` when the backend can read BF16 natively and the row
+    stride keeps every row 16-byte aligned, otherwise ``"fp32"``.  The caller
+    upcasts to FP32 on the fallback path, so the selection is unchanged.
+    """
+    if backend not in ("cooperative", "persistent"):
+        return "fp32"
+    if takes_bf16_logits_for(dtype_code, dtype_bits, dtype_lanes, row_stride):
+        return "bf16"
+    return "fp32"
+
+
 class IndexerTopkCapturer(BaseTopkCapturer):
     def __init__(
         self,
