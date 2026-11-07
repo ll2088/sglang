@@ -2,8 +2,6 @@ import logging
 from typing import Optional
 
 import numpy as np
-import pybase64
-import torch
 
 from sglang.srt.configs.model_config import ModelConfig, get_num_indexer_layers
 from sglang.srt.runtime_context import (
@@ -17,6 +15,17 @@ from sglang.srt.state_capturer.base import BaseTopkCapturer
 logger = logging.getLogger(__name__)
 
 
+def _lazy_import_torch():
+    """Import torch only when a capturer is actually constructed.
+
+    Keeping the module importable without torch lets the backend-resolution and
+    fallback helpers be unit-tested in a minimal numpy/pytest environment.
+    """
+    import torch  # noqa: PLC0415
+
+    return torch
+
+
 class IndexerTopkCapturer(BaseTopkCapturer):
     def __init__(
         self,
@@ -26,6 +35,7 @@ class IndexerTopkCapturer(BaseTopkCapturer):
         max_running_requests: int,
         device: str,
     ):
+        _lazy_import_torch()
         self.num_indexer_layers = num_indexer_layers
         self.index_topk = index_topk
 
@@ -63,8 +73,8 @@ def destroy_global_indexer_capturer():
 
 
 def maybe_capture_indexer_topk(
-    layer_id: int, topk_indices: Optional[torch.Tensor]
-) -> Optional[torch.Tensor]:
+    layer_id: int, topk_indices: Optional["torch.Tensor"]
+) -> Optional["torch.Tensor"]:
     """Capture topk for layer_id if a capturer is set; pass through unchanged.
 
     Works in both expression context (`return maybe_capture_indexer_topk(...)`)
@@ -81,7 +91,11 @@ def extract_indexer_topk_from_meta_info(data):
     # Mirrors extract_routed_experts_from_meta_info: indices are returned as
     # base64-encoded int32 bytes. Caller reshapes to (seqlen-1, num_indexer_layers,
     # index_topk).
+    import pybase64  # noqa: PLC0415
+
     indexer_topk_base64 = data["meta_info"].get("indexer_topk", None)
+    if indexer_topk_base64 is None:
+        return np.empty((0,), dtype=np.int32)
     indexer_topk = np.frombuffer(
         pybase64.b64decode(indexer_topk_base64.encode("utf-8")), dtype=np.int32
     )

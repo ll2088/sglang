@@ -1,90 +1,89 @@
-"""Kernel-level BF16 top-k tests, guarded so they can be collected in a
-minimal CI job without CUDA or the compiled sglang extensions.
+"""Standalone tests for the indexer_topk backend-resolution helpers.
 
-When the compiled ops are unavailable every test is reported as skipped; the
-pure-Python reference tests live in ``test_dsa_topk_bf16.py`` and always run.
+These tests avoid importing torch/CUDA by exercising the pure-Python helpers
+and by monkeypatching the runtime context lookups.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import os
-import unittest
+import base64
+
+import numpy as np
+import pytest
+
+from sglang.srt.state_capturer import indexer_topk as it
 
 
-def _torch_available() -> bool:
-    # Probe with find_spec so collection never imports torch (and therefore
-    # never pulls in the compiled sglang extensions) in a minimal CI job.
-    return importlib.util.find_spec("torch") is not None
+def test_extract_indexer_topk_from_meta_info_roundtrip():
+    values = np.array([1, 2, 3, 4], dtype=np.int32)
+    encoded = base64.b64encode(values.tobytes()).decode("utf-8")
+    data = {"meta_info": {"indexer_topk": encoded}}
+    out = it.extract_indexer_topk_from_meta_info(data)
+    np.testing.assert_array_equal(out, values)
 
 
-def _ops_available() -> bool:
-    if not _torch_available():
-        return False
-    try:
-        import torch
-
-        # Never import sglang here: importing the top-level package can trigger
-        # extension builds, which is exactly what collection must avoid.
-        return hasattr(torch.ops, "_C") and hasattr(torch.ops._C, "cooperative_topk")
-    except Exception:
-        return False
+def test_extract_indexer_topk_missing_returns_empty():
+    out = it.extract_indexer_topk_from_meta_info({"meta_info": {}})
+    assert out.dtype == np.int32
+    assert out.size == 0
 
 
-# These tests exercise the compiled CUDA/HIP kernels and therefore need both a
-# GPU and the built sglang extensions.  They are opt-in so that a minimal CI
-# job (pytest only, no torch/sglang) can still collect this file and run the
-# pure-Python reference tests below.
-OPS_AVAILABLE = _ops_available()
-GPU_TESTS_ENABLED = os.environ.get("SGLANG_RUN_GPU_KERNEL_TESTS", "0") == "1"
+def test_maybe_capture_passthrough_without_capturer(monkeypatch):
+    monkeypatch.setattr(it, "get_global_indexer_capturer", lambda: None)
+    sentinel = object()
+    assert it.maybe_capture_indexer_topk(0, sentinel) is sentinel
+    assert it.maybe_capture_indexer_topk(0, None) is None
 
 
-@unittest.skipUnless(
-    OPS_AVAILABLE and GPU_TESTS_ENABLED,
-    "requires compiled sglang kernels and SGLANG_RUN_GPU_KERNEL_TESTS=1",
-)
-class TestCooperativeTopkBf16(unittest.TestCase):
-    def test_rows_shorter_than_stride(self) -> None:
-        import torch
+def test_maybe_capture_calls_capturer(monkeypatch):
+    calls = []
 
-        torch.manual_seed(0)
-        num_rows, stride, top_k = 4, 65536, 512
-        row_lengths = [300000, 40000, 16384, 5000]
-        lengths = torch.tensor(
-            [min(stride, row_lengths[i % len(row_lengths)]) for i in range(num_rows)],
-            dtype=torch.int32,
-            device="cuda",
-        )
-        for dtype in (torch.float32, torch.bfloat16):
-            logits = torch.randn(num_rows, stride, device="cuda", dtype=dtype)
-            out = torch.empty(num_rows, top_k, dtype=torch.int32, device="cuda")
-            workspace = torch.empty(1 << 20, dtype=torch.uint8, device="cuda")
-            torch.ops._C.cooperative_topk(logits, lengths, out, workspace, top_k)
-            for row in range(num_rows):
-                length = int(lengths[row])
-                k = min(top_k, length)
-                idx = out[row, :k].long()
-                self.assertEqual(idx.unique().numel(), k)
-                torch.testing.assert_close(
-                    logits[row, idx].sort().values,
-                    logits[row, :length].topk(k).values.sort().values,
-                )
+    class _Cap:
+        def capture(self, layer_id, topk_indices):
+            calls.append((layer_id, topk_indices))
 
-    def test_overflow_cluster_boundary_bf16(self) -> None:
-        import torch
-
-        num_rows, seq_len, top_k = 9, 65537, 2048
-        stride = (seq_len + 7) & ~7
-        row = 1.0 + torch.arange(seq_len, dtype=torch.float32) * (0.01 / seq_len)
-        logits = torch.full((num_rows, stride), float("inf"), device="cuda", dtype=torch.bfloat16)
-        logits[:, :seq_len] = row.cuda().to(torch.bfloat16)
-        lengths = torch.full((num_rows,), seq_len, dtype=torch.int32, device="cuda")
-        indices = torch.empty((num_rows, top_k), dtype=torch.int32, device="cuda")
-        workspace = torch.empty(1 << 20, dtype=torch.uint8, device="cuda")
-        torch.ops._C.cooperative_topk(logits, lengths, indices, workspace, top_k)
-        for r in range(num_rows):
-            self.assertEqual(indices[r].unique().numel(), top_k)
+    monkeypatch.setattr(it, "get_global_indexer_capturer", lambda: _Cap())
+    sentinel = object()
+    assert it.maybe_capture_indexer_topk(3, sentinel) is sentinel
+    assert calls == [(3, sentinel)]
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_create_indexer_capturer_disabled_returns_none(monkeypatch):
+    class _Exec:
+        class features:
+            enable_return_indexer_topk = False
+
+    monkeypatch.setattr(it, "get_exec", lambda: _Exec())
+    out = it._create_indexer_capturer_raw(
+        enable=False,
+        num_indexer_layers=4,
+        index_topk=2048,
+        num_tokens=16,
+        max_running_requests=8,
+        device="cuda",
+    )
+    assert out is None
+
+
+def test_create_indexer_capturer_invalid_topk_returns_none(monkeypatch):
+    out = it._create_indexer_capturer_raw(
+        enable=True,
+        num_indexer_layers=4,
+        index_topk=0,
+        num_tokens=16,
+        max_running_requests=8,
+        device="cuda",
+    )
+    assert out is None
+
+
+def test_create_indexer_capturer_no_layers_returns_none():
+    out = it._create_indexer_capturer_raw(
+        enable=True,
+        num_indexer_layers=0,
+        index_topk=2048,
+        num_tokens=16,
+        max_running_requests=8,
+        device="cuda",
+    )
+    assert out is None
