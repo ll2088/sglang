@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
@@ -18,6 +19,39 @@ _L2NORM_MBLOCK = 32
 
 def _l2norm_block_dim(element_size: int, dim: int) -> int:
     return min(65536 // element_size, triton.next_power_of_2(dim))
+
+
+def triton_ptr_range(tensor: Any) -> int:
+    """Pointer range Triton's backend would read off ``tensor``.
+
+    Mirrors ``HIPBackend.is_within_2gb``: prefer an explicit ``ptr_range``
+    attribute (set by warmup stand-ins), otherwise fall back to the byte size
+    of the underlying storage, not the view.
+    """
+    ptr_range = getattr(tensor, "ptr_range", None)
+    if ptr_range is not None:
+        return ptr_range()
+    return tensor.untyped_storage().size()
+
+
+@dataclass(frozen=True)
+class TritonWarmupTensor:
+    """Compile-only tensor metadata used by Triton warmup.
+
+    ``ptr_range_bytes`` is the byte size of the storage behind the runtime
+    tensor (its ``untyped_storage()``, not the view), most easily derived with
+    ``triton_ptr_range``. With buffer ops enabled, Triton's ROCm backend gives
+    pointers into storage of at most 2 GB a ``tt.pointer_range = 32``
+    specialization (32-bit buffer offsets), which is part of the compile key.
+    The default 0 assumes such a small storage; set it above 2 GB for tensors
+    that view a larger pool, such as a KV cache layer, or warmup compiles a
+    variant the runtime never uses. CUDA ignores it.
+    """
+
+    dtype: Any
+    shape: tuple[int, ...] = ()
+    aligned: bool = True
+    ptr_range_bytes: int = 0
 
 
 # @triton.autotune(
@@ -74,6 +108,26 @@ def l2norm_fwd_kernel(
     b_y = b_x / tl.sqrt(b_var + eps)[:, None]
     p_y = tl.make_block_ptr(y, (T, D), (D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
     tl.store(p_y, b_y.to(p_y.dtype.element_ty), boundary_check=(0, 1))
+
+
+def l2norm_fwd_block_warmup_inputs(
+    *, dtype: torch.dtype, dim: int, ptr_range_bytes: int = 0
+) -> dict[str, Any]:
+    """Warmup inputs for the small-D ``l2norm_fwd_kernel`` path.
+
+    ``ptr_range_bytes`` must match the live tensor's storage range so the
+    warmup compile key lands on the same side of ROCm's 2 GiB buffer-ops
+    window as the runtime launch.
+    """
+    block_dim = _l2norm_block_dim(dtype.itemsize, dim)
+    return dict(
+        x=TritonWarmupTensor(
+            dtype, shape=(1, dim), ptr_range_bytes=ptr_range_bytes
+        ),
+        y=TritonWarmupTensor(dtype, ptr_range_bytes=ptr_range_bytes),
+        eps=1e-6,
+        block_dim=block_dim,
+    )
 
 
 def l2norm_fwd(

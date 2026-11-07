@@ -4,12 +4,14 @@ import torch
 from sglang.kernels.ops.attention.fla.l2norm import (
     _l2norm_block_dim,
     l2norm_fwd,
+    l2norm_fwd_block_warmup_inputs,
+    triton_ptr_range,
 )
 from sglang.srt.layers.attention.dsa.kpool_plan import (
     _KPOOL_WARMUP_REGISTERED,
     build_kpool_compress_warmup_meta,
     register_kpool_compress_warmup,
-    triton_ptr_range,
+    register_kpool_tail_seed_warmup,
 )
 from sglang.srt.layers.attention.linear.kernels.kda_triton import TritonKDAKernel
 
@@ -37,6 +39,17 @@ def test_triton_ptr_range_reads_ptr_range_attribute():
     assert triton_ptr_range(t) == t.untyped_storage().size()
     t.ptr_range = lambda: 1 << 32
     assert triton_ptr_range(t) == 1 << 32
+
+
+@pytest.mark.parametrize("ptr_range_bytes", [0, 1 << 32])
+def test_l2norm_warmup_inputs_carry_ptr_range(ptr_range_bytes):
+    meta = l2norm_fwd_block_warmup_inputs(
+        dtype=torch.bfloat16, dim=128, ptr_range_bytes=ptr_range_bytes
+    )
+    assert meta["x"].ptr_range_bytes == ptr_range_bytes
+    assert meta["y"].ptr_range_bytes == ptr_range_bytes
+    assert meta["x"].shape == (1, 128)
+    assert meta["block_dim"] == _l2norm_block_dim(2, 128)
 
 
 def test_kpool_warmup_meta_carries_real_ptr_range():
@@ -71,10 +84,25 @@ def test_kpool_warmup_registration_is_idempotent():
     _KPOOL_WARMUP_REGISTERED.clear()
 
 
+def test_kpool_tail_seed_warmup_registration_is_idempotent():
+    _KPOOL_WARMUP_REGISTERED.clear()
+    tail_cache = torch.empty((4, 64, 128), dtype=torch.uint8)
+    assert register_kpool_tail_seed_warmup(
+        tail_cache=tail_cache, kpool=4, head_dim=128
+    )
+    assert not register_kpool_tail_seed_warmup(
+        tail_cache=tail_cache, kpool=4, head_dim=128
+    )
+    _KPOOL_WARMUP_REGISTERED.clear()
+
+
 def test_kda_l2norm_warmup_registration_is_idempotent():
     if not torch.cuda.is_available():
         pytest.skip("requires CUDA")
     TritonKDAKernel._l2norm_warmup_registered.clear()
+    TritonKDAKernel._l2norm_warmup_ptr_range.clear()
     assert TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
     assert not TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
+    assert (torch.bfloat16, 128) in TritonKDAKernel._l2norm_warmup_ptr_range
     TritonKDAKernel._l2norm_warmup_registered.clear()
+    TritonKDAKernel._l2norm_warmup_ptr_range.clear()

@@ -15,6 +15,7 @@ if not is_cpu():
     from sglang.kernels.ops.attention.fla.l2norm import (
         _l2norm_block_dim,
         l2norm_fwd_kernel,
+        triton_ptr_range,
     )
     from sglang.kernels.ops.attention.linear.fused_recurrent_linear_replayssm import (
         fused_recurrent_linear_replayssm_decode,
@@ -28,6 +29,7 @@ class TritonKDAKernel(LinearAttnKernelBase):
     """Triton-based kernel for KDA (Kimi Delta Attention) linear attention."""
 
     _l2norm_warmup_registered: set[tuple[torch.dtype, int]] = set()
+    _l2norm_warmup_ptr_range: dict[tuple[torch.dtype, int], int] = {}
 
     @classmethod
     def register_l2norm_warmup(cls, dtype: torch.dtype, head_dim: int) -> bool:
@@ -47,9 +49,12 @@ class TritonKDAKernel(LinearAttnKernelBase):
             return False
         # Warm up the small-D block kernel with a minimal row count; the
         # compile key only depends on D/BD/BT and the pointer range, not on T.
+        # Derive the pointer range from the real tensor instead of assuming a
+        # <2GiB storage, otherwise ROCm re-specializes on the first real batch.
         num_rows = 1
         x = torch.empty((num_rows, head_dim), dtype=dtype, device="cuda")
         y = torch.empty_like(x)
+        ptr_range_bytes = triton_ptr_range(x)
         grid = (triton.cdiv(num_rows, 16),)
         l2norm_fwd_kernel[grid](
             x,
@@ -62,6 +67,8 @@ class TritonKDAKernel(LinearAttnKernelBase):
             num_warps=8,
             num_stages=3,
         )
+        # Keep the derived range observable for tests and future dispatchers.
+        cls._l2norm_warmup_ptr_range[key] = ptr_range_bytes
         cls._l2norm_warmup_registered.add(key)
         return True
 
