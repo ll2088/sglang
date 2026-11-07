@@ -53,26 +53,38 @@ class TritonKDAKernel(LinearAttnKernelBase):
             return False
         if not torch.cuda.is_available():
             return False
+        try:
+            device = torch.device("cuda")
+            if device.type != "cuda":
+                return False
+        except (RuntimeError, AssertionError):
+            return False
         # Warm up the small-D block kernel with a minimal row count; the
         # compile key only depends on D/BD/BT and the pointer range, not on T.
         # Derive the pointer range from the real tensor instead of assuming a
         # <2GiB storage, otherwise ROCm re-specializes on the first real batch.
         num_rows = 1
-        x = torch.empty((num_rows, head_dim), dtype=dtype, device="cuda")
-        y = torch.empty_like(x)
+        try:
+            x = torch.empty((num_rows, head_dim), dtype=dtype, device="cuda")
+            y = torch.empty_like(x)
+        except (RuntimeError, AssertionError):
+            return False
         ptr_range_bytes = triton_ptr_range(x)
         grid = (triton.cdiv(num_rows, 16),)
-        l2norm_fwd_kernel[grid](
-            x,
-            y,
-            1e-6,
-            T=num_rows,
-            D=head_dim,
-            BD=block_dim,
-            BT=16,
-            num_warps=8,
-            num_stages=3,
-        )
+        try:
+            l2norm_fwd_kernel[grid](
+                x,
+                y,
+                1e-6,
+                T=num_rows,
+                D=head_dim,
+                BD=block_dim,
+                BT=16,
+                num_warps=8,
+                num_stages=3,
+            )
+        except (RuntimeError, AssertionError):
+            return False
         # Keep the derived range observable for tests and future dispatchers.
         cls._l2norm_warmup_ptr_range[key] = ptr_range_bytes
         cls._l2norm_warmup_registered.add(key)

@@ -29,7 +29,7 @@ def test_l2norm_block_dim_matches_runtime(dim, dtype, ptr_range):
 
 def test_l2norm_fwd_unchanged_by_block_dim_helper():
     if not torch.cuda.is_available():
-        pytest.skip("requires CUDA", allow_module_level=False)
+        pytest.skip("requires CUDA device for l2norm_fwd numerical check")
     x = torch.randn(8, 128, dtype=torch.bfloat16, device="cuda")
     y = l2norm_fwd(x)
     ref = x.float() / x.float().norm(dim=-1, keepdim=True).clamp_min(1e-6)
@@ -41,6 +41,19 @@ def test_triton_ptr_range_reads_ptr_range_attribute():
     assert triton_ptr_range(t) == t.untyped_storage().size()
     t.ptr_range = lambda: 1 << 32
     assert triton_ptr_range(t) == 1 << 32
+
+
+def test_triton_ptr_range_tolerates_missing_storage():
+    class _NoStorage:
+        pass
+
+    assert triton_ptr_range(_NoStorage()) == 0
+
+    class _BrokenStorage:
+        def untyped_storage(self):
+            raise RuntimeError("no storage")
+
+    assert triton_ptr_range(_BrokenStorage()) == 0
 
 
 @pytest.mark.parametrize("ptr_range_bytes", [0, 1 << 32])
@@ -100,7 +113,7 @@ def test_kpool_tail_seed_warmup_registration_is_idempotent():
 
 def test_kda_l2norm_warmup_registration_is_idempotent():
     if not torch.cuda.is_available():
-        pytest.skip("requires CUDA", allow_module_level=False)
+        pytest.skip("requires CUDA device for l2norm warmup launch")
     TritonKDAKernel._l2norm_warmup_registered.clear()
     TritonKDAKernel._l2norm_warmup_ptr_range.clear()
     assert TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
@@ -108,6 +121,15 @@ def test_kda_l2norm_warmup_registration_is_idempotent():
     assert (torch.bfloat16, 128) in TritonKDAKernel._l2norm_warmup_ptr_range
     TritonKDAKernel._l2norm_warmup_registered.clear()
     TritonKDAKernel._l2norm_warmup_ptr_range.clear()
+
+
+def test_kda_l2norm_warmup_degrades_without_cuda(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    TritonKDAKernel._l2norm_warmup_registered.clear()
+    TritonKDAKernel._l2norm_warmup_ptr_range.clear()
+    assert not TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
+    assert not TritonKDAKernel._l2norm_warmup_registered
+    assert not TritonKDAKernel._l2norm_warmup_ptr_range
 
 
 def test_kda_l2norm_warmup_skips_without_cuda(monkeypatch):

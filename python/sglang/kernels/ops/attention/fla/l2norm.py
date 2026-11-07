@@ -26,12 +26,19 @@ def triton_ptr_range(tensor: Any) -> int:
 
     Mirrors ``HIPBackend.is_within_2gb``: prefer an explicit ``ptr_range``
     attribute (set by warmup stand-ins), otherwise fall back to the byte size
-    of the underlying storage, not the view.
+    of the underlying storage, not the view. Returns 0 for objects that expose
+    neither (e.g. fake tensors), so callers never crash on a missing storage.
     """
     ptr_range = getattr(tensor, "ptr_range", None)
     if ptr_range is not None:
         return ptr_range()
-    return tensor.untyped_storage().size()
+    untyped_storage = getattr(tensor, "untyped_storage", None)
+    if untyped_storage is None:
+        return 0
+    try:
+        return untyped_storage().size()
+    except (RuntimeError, NotImplementedError):
+        return 0
 
 
 @dataclass(frozen=True)

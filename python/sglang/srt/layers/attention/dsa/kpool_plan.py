@@ -22,6 +22,10 @@ def build_kpool_compress_warmup_meta(
     page_size = kv_cache.shape[1]
     buf_numel_per_page = kv_cache.stride(0)
     buf_ptr_range_bytes = triton_ptr_range(kv_cache)
+    if buf_ptr_range_bytes <= 0:
+        # Unknown storage range: keep the optimistic default rather than
+        # emitting a bogus specialization key.
+        buf_ptr_range_bytes = 0
     return dict(
         page_size=page_size,
         buf_numel_per_page=buf_numel_per_page,
