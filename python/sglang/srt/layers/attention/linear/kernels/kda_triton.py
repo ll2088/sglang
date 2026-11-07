@@ -51,6 +51,8 @@ class TritonKDAKernel(LinearAttnKernelBase):
         block_dim = _l2norm_block_dim(dtype.itemsize, head_dim)
         if head_dim > block_dim:
             return False
+        if not torch.cuda.is_available():
+            return False
         # Warm up the small-D block kernel with a minimal row count; the
         # compile key only depends on D/BD/BT and the pointer range, not on T.
         # Derive the pointer range from the real tensor instead of assuming a

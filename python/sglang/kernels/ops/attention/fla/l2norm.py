@@ -117,7 +117,8 @@ def l2norm_fwd_block_warmup_inputs(
 
     ``ptr_range_bytes`` must match the live tensor's storage range so the
     warmup compile key lands on the same side of ROCm's 2 GiB buffer-ops
-    window as the runtime launch.
+    window as the runtime launch. Pass ``triton_ptr_range(live_tensor)``
+    rather than relying on the optimistic default.
     """
     block_dim = _l2norm_block_dim(dtype.itemsize, dim)
     return dict(

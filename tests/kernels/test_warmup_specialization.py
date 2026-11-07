@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-pytest.importorskip("triton")
+pytest.importorskip("triton", reason="triton is required for warmup tests")
 
 from sglang.kernels.ops.attention.fla.l2norm import (
     _l2norm_block_dim,
@@ -29,7 +29,7 @@ def test_l2norm_block_dim_matches_runtime(dim, dtype, ptr_range):
 
 def test_l2norm_fwd_unchanged_by_block_dim_helper():
     if not torch.cuda.is_available():
-        pytest.skip("requires CUDA")
+        pytest.skip("requires CUDA", allow_module_level=False)
     x = torch.randn(8, 128, dtype=torch.bfloat16, device="cuda")
     y = l2norm_fwd(x)
     ref = x.float() / x.float().norm(dim=-1, keepdim=True).clamp_min(1e-6)
@@ -100,7 +100,7 @@ def test_kpool_tail_seed_warmup_registration_is_idempotent():
 
 def test_kda_l2norm_warmup_registration_is_idempotent():
     if not torch.cuda.is_available():
-        pytest.skip("requires CUDA")
+        pytest.skip("requires CUDA", allow_module_level=False)
     TritonKDAKernel._l2norm_warmup_registered.clear()
     TritonKDAKernel._l2norm_warmup_ptr_range.clear()
     assert TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
@@ -108,3 +108,12 @@ def test_kda_l2norm_warmup_registration_is_idempotent():
     assert (torch.bfloat16, 128) in TritonKDAKernel._l2norm_warmup_ptr_range
     TritonKDAKernel._l2norm_warmup_registered.clear()
     TritonKDAKernel._l2norm_warmup_ptr_range.clear()
+
+
+def test_kda_l2norm_warmup_skips_without_cuda(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    TritonKDAKernel._l2norm_warmup_registered.clear()
+    TritonKDAKernel._l2norm_warmup_ptr_range.clear()
+    assert not TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
+    assert not TritonKDAKernel._l2norm_warmup_registered
+    assert not TritonKDAKernel._l2norm_warmup_ptr_range
