@@ -1,12 +1,21 @@
 import pytest
 import torch
 
-pytest.importorskip("triton", reason="triton is required for warmup tests")
+# Triton is optional for the metadata-only tests below. Import it lazily so
+# CPU-only CI can still exercise the pointer-range and registration logic
+# instead of skipping the whole module.
+try:
+    import triton  # noqa: F401
+
+    _HAS_TRITON = True
+except Exception:  # pragma: no cover - environment dependent
+    _HAS_TRITON = False
 
 from sglang.kernels.ops.attention.fla.l2norm import (
     _l2norm_block_dim,
     l2norm_fwd,
     l2norm_fwd_block_warmup_inputs,
+    l2norm_fwd_block_warmup_inputs_from_live,
     triton_ptr_range,
 )
 from sglang.srt.layers.attention.dsa.kpool_plan import (
@@ -34,6 +43,10 @@ requires_kda_triton = pytest.mark.skipif(
     not _HAS_KDA_TRITON,
     reason="KDA Triton backend is unavailable in this environment",
 )
+requires_triton = pytest.mark.skipif(
+    not _HAS_TRITON,
+    reason="triton is unavailable in this environment",
+)
 
 
 @pytest.mark.parametrize("dim", [64, 128, 256])
@@ -45,6 +58,7 @@ def test_l2norm_block_dim_matches_runtime(dim, dtype, ptr_range):
     assert block_dim == min(65536 // dtype.itemsize, 1 << (dim - 1).bit_length())
 
 
+@requires_triton
 def test_l2norm_fwd_unchanged_by_block_dim_helper():
     if not torch.cuda.is_available():
         pytest.skip("requires CUDA device for l2norm_fwd numerical check")
@@ -83,6 +97,16 @@ def test_l2norm_warmup_inputs_carry_ptr_range(ptr_range_bytes):
     assert meta["y"].ptr_range_bytes == ptr_range_bytes
     assert meta["x"].shape == (1, 128)
     assert meta["block_dim"] == _l2norm_block_dim(2, 128)
+
+
+def test_l2norm_warmup_inputs_from_live_uses_real_ptr_range():
+    live = torch.empty(64, dtype=torch.uint8)
+    live.ptr_range = lambda: 1 << 32
+    meta = l2norm_fwd_block_warmup_inputs_from_live(
+        dtype=torch.bfloat16, dim=128, live=live
+    )
+    assert meta["x"].ptr_range_bytes == 1 << 32
+    assert meta["y"].ptr_range_bytes == 1 << 32
 
 
 def test_kpool_warmup_meta_carries_real_ptr_range():
@@ -141,6 +165,37 @@ def test_kda_l2norm_warmup_registration_is_idempotent():
         assert TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
         assert not TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
         assert (torch.bfloat16, 128) in TritonKDAKernel._l2norm_warmup_ptr_range
+    finally:
+        TritonKDAKernel._l2norm_warmup_registered.clear()
+        TritonKDAKernel._l2norm_warmup_ptr_range.clear()
+
+
+@requires_kda_triton
+def test_kda_l2norm_warmup_degrades_without_cuda(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    TritonKDAKernel._l2norm_warmup_registered.clear()
+    TritonKDAKernel._l2norm_warmup_ptr_range.clear()
+    try:
+        assert not TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
+        assert not TritonKDAKernel._l2norm_warmup_registered
+        assert not TritonKDAKernel._l2norm_warmup_ptr_range
+    finally:
+        TritonKDAKernel._l2norm_warmup_registered.clear()
+        TritonKDAKernel._l2norm_warmup_ptr_range.clear()
+
+
+def test_kda_l2norm_warmup_degrades_without_backend(monkeypatch):
+    """The warmup entry point must not raise when the backend is missing."""
+    if not _HAS_KDA_TRITON:
+        # Explicitly assert the documented degradation contract instead of
+        # skipping: a missing backend must be observable, not fatal.
+        assert TritonKDAKernel is None
+        return
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    TritonKDAKernel._l2norm_warmup_registered.clear()
+    TritonKDAKernel._l2norm_warmup_ptr_range.clear()
+    try:
+        assert not TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
     finally:
         TritonKDAKernel._l2norm_warmup_registered.clear()
         TritonKDAKernel._l2norm_warmup_ptr_range.clear()

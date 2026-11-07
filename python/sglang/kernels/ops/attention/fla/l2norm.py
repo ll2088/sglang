@@ -138,6 +138,19 @@ def l2norm_fwd_block_warmup_inputs(
     )
 
 
+def l2norm_fwd_block_warmup_inputs_from_live(
+    *, dtype: torch.dtype, dim: int, live: Any
+) -> dict[str, Any]:
+    """Derive warmup inputs from a live tensor's real pointer range.
+
+    Convenience wrapper so callers never fall back to the optimistic <2 GiB
+    default when a real tensor is available.
+    """
+    return l2norm_fwd_block_warmup_inputs(
+        dtype=dtype, dim=dim, ptr_range_bytes=triton_ptr_range(live)
+    )
+
+
 def l2norm_fwd(
     x: torch.Tensor, eps: float = 1e-6, output_dtype: Optional[torch.dtype] = None
 ):
