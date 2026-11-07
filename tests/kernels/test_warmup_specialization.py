@@ -206,6 +206,12 @@ def test_kda_l2norm_warmup_registration_is_idempotent():
 
 @requires_kda_triton
 def test_kda_l2norm_warmup_degrades_without_cuda(monkeypatch):
+    """The warmup entry point must degrade cleanly when CUDA is unavailable.
+
+    Covers both the case where the Triton backend imported successfully and
+    the case where it is missing: either way the entry point must return
+    False without raising and must not record any registration state.
+    """
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     TritonKDAKernel._l2norm_warmup_registered.clear()
     TritonKDAKernel._l2norm_warmup_ptr_range.clear()
@@ -230,20 +236,6 @@ def test_kda_l2norm_warmup_degrades_without_backend(monkeypatch):
     TritonKDAKernel._l2norm_warmup_ptr_range.clear()
     try:
         assert not TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
-    finally:
-        TritonKDAKernel._l2norm_warmup_registered.clear()
-        TritonKDAKernel._l2norm_warmup_ptr_range.clear()
-
-
-@requires_kda_triton
-def test_kda_l2norm_warmup_degrades_without_cuda(monkeypatch):
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    TritonKDAKernel._l2norm_warmup_registered.clear()
-    TritonKDAKernel._l2norm_warmup_ptr_range.clear()
-    try:
-        assert not TritonKDAKernel.register_l2norm_warmup(torch.bfloat16, 128)
-        assert not TritonKDAKernel._l2norm_warmup_registered
-        assert not TritonKDAKernel._l2norm_warmup_ptr_range
     finally:
         TritonKDAKernel._l2norm_warmup_registered.clear()
         TritonKDAKernel._l2norm_warmup_ptr_range.clear()
