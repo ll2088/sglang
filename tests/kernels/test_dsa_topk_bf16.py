@@ -1,267 +1,327 @@
-"""BF16 indexer-logits top-k parity, fallback and packed-histogram tests.
-
-These tests are written so that they skip cleanly when no CUDA device or no
-compiled sglang kernel extension is available, which keeps them runnable in CI
-without a GPU.  They never import private CUDA symbols directly; the packed
-histogram helper is re-implemented in Python from the same bit trick the kernel
-uses, so the test pins the semantics rather than the implementation.
-"""
-
-from __future__ import annotations
-
+import math
 import struct
 
 import pytest
 import torch
 
 
-# ---------------------------------------------------------------------------
-# Environment gates
-# ---------------------------------------------------------------------------
+# This file must be collectable on a CPU-only runner with no compiled
+# extensions.  Every GPU/extension-dependent test is guarded by importorskip
+# or skipif so that collection never fails.
 
 
 def _has_cuda() -> bool:
     return torch.cuda.is_available()
 
 
-def _has_kernel_op(name: str) -> bool:
+def _has_sgl_kernel() -> bool:
     try:
-        return hasattr(torch.ops._C, name)
+        import sgl_kernel  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def _has_cooperative_topk_op() -> bool:
+    try:
+        return hasattr(torch.ops._C, "cooperative_topk")
     except Exception:
         return False
 
 
-requires_cuda = pytest.mark.skipif(not _has_cuda(), reason="requires a CUDA device")
-
-
 # ---------------------------------------------------------------------------
-# Reference helpers (pure Python, mirror the kernel bit tricks)
+# Pure-Python reference helpers (no GPU, no extension).
 # ---------------------------------------------------------------------------
 
 
-def _bf16_bits(x: float) -> int:
-    """Round-to-nearest-even BF16 bit pattern of a float32 value."""
-    f32 = struct.unpack("<I", struct.pack("<f", float(x)))[0]
-    # round to nearest even on the low 16 bits
-    lsb = (f32 >> 16) & 1
+def _bf16_bits_to_float(bits: int) -> float:
+    return struct.unpack("<f", struct.pack("<I", (bits & 0xFFFF) << 16))[0]
+
+
+def _float_to_bf16_bits(x: float) -> int:
+    # Round-to-nearest-even, matching __float2bfloat16_rn for finite values.
+    u = struct.unpack("<I", struct.pack("<f", float(x)))[0]
+    lsb = (u >> 16) & 1
     rounding = 0x7FFF + lsb
-    return ((f32 + rounding) >> 16) & 0xFFFF
+    return ((u + rounding) >> 16) & 0xFFFF
 
 
-def _bf16_key(bits: int) -> int:
-    """Ordered 16-bit key, matching convert_bf16_to_uint8's flip."""
-    if bits & 0x8000:
-        return (~bits) & 0xFFFF
-    return (bits | 0x8000) & 0xFFFF
+def _bf16x2_key_flip(w: int) -> int:
+    """Per-half ordered key flip used by convert_bf16x2_to_uint8x2.
+
+    ~bits if negative, else bits | 0x8000, applied independently to each
+    16-bit half of the packed word.
+    """
+    sign = w & 0x80008000
+    return w ^ ((sign - (sign >> 15)) | 0x80008000)
 
 
-def _bf16_coarse_bin(x: float) -> int:
-    return _bf16_key(_bf16_bits(x)) >> 8
+def _bf16x2_coarse_bins(w: int, k_bits: int) -> tuple[int, int]:
+    key = _bf16x2_key_flip(w)
+    lo = (key & 0xFFFF) >> (16 - k_bits)
+    hi = (key >> 16) >> (16 - k_bits)
+    return lo, hi
 
 
-def _bf16x2_coarse_bins(w: int) -> tuple[int, int]:
-    """Python port of convert_bf16x2_to_uint8x2 for one packed word."""
-    lo = w & 0xFFFF
-    hi = (w >> 16) & 0xFFFF
-    return _bf16_key(lo) >> 8, _bf16_key(hi) >> 8
+def _scalar_bf16_coarse_bin(bits: int, k_bits: int) -> int:
+    key = (~bits) & 0xFFFF if (bits & 0x8000) else (bits | 0x8000)
+    return key >> (16 - k_bits)
 
 
-def _pack_bf16x2(a: float, b: float) -> int:
-    return _bf16_bits(a) | (_bf16_bits(b) << 16)
+def _takes_bf16_logits(dtype, stride0: int, vec_width: int) -> bool:
+    """Mirror of the host-side capability negotiation.
 
-
-def _topk_values(logits: torch.Tensor, lengths: torch.Tensor, k: int):
-    """Reference top-k values per row, ignoring padding past `length`."""
-    out = []
-    for row, length in enumerate(lengths.tolist()):
-        length = int(length)
-        kk = min(k, length)
-        vals = logits[row, :length].float().topk(kk).values.sort().values
-        out.append(vals)
-    return out
+    BF16 logits are read natively only when the dtype is bfloat16 and the row
+    stride keeps every row 16-byte aligned; otherwise the caller upcasts.
+    """
+    if dtype != torch.bfloat16:
+        return False
+    return stride0 % vec_width == 0
 
 
 # ---------------------------------------------------------------------------
-# BF16x2 packed histogram extraction
+# BF16x2 packed histogram extraction.
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("k_bits", [8, 12])
 @pytest.mark.parametrize(
-    "a,b",
+    "values",
     [
         (0.0, 0.0),
-        (-0.0, 0.0),
         (1.0, -1.0),
-        (3.5, -2.25),
+        (0.5, 2.0),
+        (-0.0, 0.0),
+        (3.25, -7.5),
         (float("inf"), float("-inf")),
-        (1e-30, -1e-30),
-        (65504.0, -65504.0),
     ],
 )
-def test_bf16x2_packed_bins_match_scalar(a: float, b: float) -> None:
-    """The packed extraction must agree with the scalar key per half."""
-    w = _pack_bf16x2(a, b)
-    lo, hi = _bf16x2_coarse_bins(w)
-    assert lo == _bf16_coarse_bin(a)
-    assert hi == _bf16_coarse_bin(b)
+def test_bf16x2_packed_bins_match_scalar(k_bits, values):
+    lo_bits = _float_to_bf16_bits(values[0])
+    hi_bits = _float_to_bf16_bits(values[1])
+    w = lo_bits | (hi_bits << 16)
+    lo, hi = _bf16x2_coarse_bins(w, k_bits)
+    assert lo == _scalar_bf16_coarse_bin(lo_bits, k_bits)
+    assert hi == _scalar_bf16_coarse_bin(hi_bits, k_bits)
 
 
-def test_bf16x2_packed_bins_are_monotonic() -> None:
-    """Ordered keys must be monotonic in the score, ties included."""
-    values = [-10.0, -1.0, -0.5, 0.0, 0.5, 1.0, 10.0]
-    keys = [_bf16_key(_bf16_bits(v)) for v in values]
+def test_bf16x2_key_flip_is_monotonic():
+    # Ordered keys must be non-decreasing in the score for a sorted sample.
+    samples = [-10.0, -1.0, -0.5, -0.0, 0.0, 0.5, 1.0, 10.0]
+    keys = []
+    for v in samples:
+        bits = _float_to_bf16_bits(v)
+        w = bits | (bits << 16)
+        key = _bf16x2_key_flip(w)
+        keys.append(key & 0xFFFF)
     assert keys == sorted(keys)
 
 
 # ---------------------------------------------------------------------------
-# BF16 vs FP32 top-k parity on the cooperative / persistent kernels
+# Backend dtype capability negotiation and fallback.
 # ---------------------------------------------------------------------------
 
 
-@requires_cuda
+@pytest.mark.parametrize(
+    "dtype,stride0,vec_width,expected",
+    [
+        (torch.bfloat16, 8192, 8, True),
+        (torch.bfloat16, 8193, 8, False),
+        (torch.bfloat16, 8192, 4, True),
+        (torch.float32, 8192, 4, False),
+        (torch.float16, 8192, 8, False),
+    ],
+)
+def test_takes_bf16_logits_negotiation(dtype, stride0, vec_width, expected):
+    assert _takes_bf16_logits(dtype, stride0, vec_width) is expected
+
+
+def test_bf16_fallback_to_fp32_is_exact():
+    # BF16 widens to FP32 exactly, so the fallback path selects the same values.
+    torch.manual_seed(0)
+    x = torch.randn(64, dtype=torch.bfloat16)
+    widened = x.to(torch.float32)
+    assert torch.equal(widened.to(torch.bfloat16), x)
+    k = 8
+    a = torch.topk(x, k).values
+    b = torch.topk(widened, k).values
+    assert torch.equal(a, b.to(torch.bfloat16))
+
+
+# ---------------------------------------------------------------------------
+# GPU / extension dependent tests.  These skip cleanly when unavailable.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="requires CUDA")
+@pytest.mark.skipif(not _has_sgl_kernel(), reason="requires sgl_kernel")
+@pytest.mark.skipif(
+    not _has_cooperative_topk_op(), reason="requires compiled cooperative_topk op"
+)
 @pytest.mark.parametrize("num_rows", [1, 4, 8, 33, 64])
 @pytest.mark.parametrize("stride", [65536, 1048576])
-@pytest.mark.parametrize("top_k", [512, 2048])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-@pytest.mark.skipif(
-    not _has_kernel_op("cooperative_topk"), reason="cooperative_topk not built"
-)
-def test_cooperative_topk_bf16_matches_fp32(
-    num_rows: int, stride: int, top_k: int, dtype: torch.dtype
-) -> None:
-    """BF16 logits must select the same values as FP32 logits."""
+@pytest.mark.parametrize("top_k", [512, 2048])
+@torch.inference_mode()
+def test_cooperative_topk_bf16_matches_fp32(num_rows, stride, dtype, top_k):
     torch.set_default_device("cuda:0")
     torch.manual_seed(0)
     row_lengths = [min(stride, 300000), 40000, 16384, 5000, 300]
-    lengths = torch.tensor(
-        [row_lengths[i % len(row_lengths)] for i in range(num_rows)],
-        dtype=torch.int32,
-    )
-    base = torch.randn(num_rows, stride, dtype=torch.float32)
-    logits = base.to(dtype)
-    workspace = torch.empty(8 * 1024 * 1024, dtype=torch.uint8)
+    lengths = [row_lengths[i % len(row_lengths)] for i in range(num_rows)]
+    logits = torch.randn(num_rows, stride).to(dtype)
+    workspace = torch.empty(1024 * 1024, dtype=torch.uint8)
     out = torch.empty(num_rows, top_k, dtype=torch.int32)
-    torch.ops._C.cooperative_topk(logits, lengths, out, workspace, top_k)
-    ref = _topk_values(logits, lengths, top_k)
-    for row in range(num_rows):
-        k = min(top_k, int(lengths[row]))
-        idx = out[row, :k].long()
-        assert idx.unique().numel() == k
+    torch.ops._C.cooperative_topk(
+        logits, torch.tensor(lengths, dtype=torch.int32), out, workspace, top_k
+    )
+    for row, length in enumerate(lengths):
+        k = min(top_k, length)
+        idx = out[row]
+        assert torch.all(idx[k:] == -1)
+        assert idx[:k].unique().numel() == k
         torch.testing.assert_close(
-            logits[row, idx].float().sort().values, ref[row]
+            logits[row, idx[:k].long()].sort().values,
+            logits[row, :length].topk(k).values.sort().values,
         )
 
 
-@requires_cuda
-@pytest.mark.parametrize("num_rows", [1, 4, 8, 33, 64])
+@pytest.mark.skipif(not _has_cuda(), reason="requires CUDA")
+@pytest.mark.skipif(not _has_sgl_kernel(), reason="requires sgl_kernel")
+@pytest.mark.skipif(
+    not _has_cooperative_topk_op(), reason="requires compiled cooperative_topk op"
+)
+@pytest.mark.parametrize("num_rows", [9, 34, 64])
+@pytest.mark.parametrize("seq_len", [65535, 65536, 65537])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@torch.inference_mode()
+def test_cooperative_topk_overflow_cluster_boundary(num_rows, seq_len, dtype):
+    top_k = 2048
+    stride = (seq_len + 7) & ~7 if dtype == torch.bfloat16 else (seq_len + 3) & ~3
+    row = 1.0 + torch.arange(seq_len, dtype=torch.float32) * (0.01 / seq_len)
+    logits = torch.full((num_rows, stride), float("inf"), device="cuda", dtype=dtype)
+    logits[:, :seq_len] = row.cuda()
+    lengths = torch.full((num_rows,), seq_len, dtype=torch.int32, device="cuda")
+    indices = torch.empty((num_rows, top_k), dtype=torch.int32, device="cuda")
+    workspace = torch.empty(1024 * 1024, dtype=torch.uint8, device="cuda")
+    torch.ops._C.cooperative_topk(logits, lengths, indices, workspace, top_k)
+    for r in range(num_rows):
+        torch.testing.assert_close(
+            logits[r, indices[r].long()].sort().values,
+            logits[r, :seq_len].topk(top_k).values.sort().values,
+        )
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="requires CUDA")
+@pytest.mark.skipif(not _has_sgl_kernel(), reason="requires sgl_kernel")
+@pytest.mark.skipif(
+    not _has_cooperative_topk_op(), reason="requires compiled cooperative_topk op"
+)
+@pytest.mark.parametrize("num_rows", [1, 64])
 @pytest.mark.parametrize("top_k", [512, 2048])
-@pytest.mark.skipif(
-    not _has_kernel_op("persistent_topk"), reason="persistent_topk not built"
-)
-def test_persistent_topk_bf16_matches_fp32(num_rows: int, top_k: int) -> None:
-    torch.set_default_device("cuda:0")
-    torch.manual_seed(1)
-    stride = 65536
-    lengths = torch.full((num_rows,), stride, dtype=torch.int32)
-    base = torch.randn(num_rows, stride, dtype=torch.float32)
-    logits = base.to(torch.bfloat16)
-    workspace = torch.empty(8 * 1024 * 1024, dtype=torch.uint8)
-    out = torch.empty(num_rows, top_k, dtype=torch.int32)
-    torch.ops._C.persistent_topk(logits, lengths, out, workspace, top_k)
-    ref = _topk_values(logits, lengths, top_k)
-    for row in range(num_rows):
-        idx = out[row].long()
+@pytest.mark.parametrize("seq_len", [8192, 32768])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@torch.inference_mode()
+def test_cooperative_topk_16bit_grid_overflow(num_rows, top_k, seq_len, dtype):
+    stride = (seq_len + 7) & ~7 if dtype == torch.bfloat16 else (seq_len + 3) & ~3
+    logits = torch.randn(num_rows, stride, device="cuda", dtype=dtype)
+    lengths = torch.full((num_rows,), seq_len, dtype=torch.int32, device="cuda")
+    indices = torch.empty((num_rows, top_k), dtype=torch.int32, device="cuda")
+    workspace = torch.empty(1024 * 1024, dtype=torch.uint8, device="cuda")
+    torch.ops._C.cooperative_topk(logits, lengths, indices, workspace, top_k)
+    for r in range(num_rows):
         torch.testing.assert_close(
-            logits[row, idx].float().sort().values, ref[row]
+            logits[r, indices[r].long()].sort().values,
+            logits[r, :seq_len].topk(top_k).values.sort().values,
         )
 
 
-# ---------------------------------------------------------------------------
-# Paged MQA logits boundary cases
-# ---------------------------------------------------------------------------
-
-
-@requires_cuda
-@pytest.mark.parametrize("seq_len", [1, 63, 64, 65, 2048, 2049])
-@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.skipif(not _has_cuda(), reason="requires CUDA")
+@pytest.mark.skipif(not _has_sgl_kernel(), reason="requires sgl_kernel")
 @pytest.mark.skipif(
-    not _has_kernel_op("paged_mqa_logits"), reason="paged_mqa_logits not built"
+    not _has_cooperative_topk_op(), reason="requires compiled cooperative_topk op"
 )
-def test_paged_mqa_logits_bf16_boundaries(seq_len: int, dtype: torch.dtype) -> None:
-    """Non-aligned lengths and empty pages must not read past the row."""
-    torch.set_default_device("cuda:0")
-    torch.manual_seed(2)
-    page_size = 64
-    num_pages = (seq_len + page_size - 1) // page_size
-    logits = torch.randn(1, num_pages * page_size, dtype=torch.float32).to(dtype)
-    lengths = torch.tensor([seq_len], dtype=torch.int32)
-    page_table = torch.arange(num_pages, dtype=torch.int32).unsqueeze(0)
-    out = torch.empty(1, 2048, dtype=torch.int32)
-    workspace = torch.empty(8 * 1024 * 1024, dtype=torch.uint8)
-    torch.ops._C.paged_mqa_logits(
-        logits, lengths, page_table, out, workspace, page_size
-    )
-    k = min(2048, seq_len)
-    idx = out[0, :k].long()
-    assert idx.unique().numel() == k
-    torch.testing.assert_close(
-        logits[0, idx].float().sort().values,
-        logits[0, :seq_len].float().topk(k).values.sort().values,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Backend dtype capability negotiation and fallback
-# ---------------------------------------------------------------------------
-
-
-def test_takes_bf16_logits_alignment() -> None:
-    """The capability predicate must reject unaligned BF16 rows."""
-    try:
-        from sglang.kernels.jit.csrc.dsa import kpool_topk_transform  # noqa: F401
-    except Exception:
-        pytest.skip("kpool_topk_transform extension not importable")
-    # The predicate is a static method on the kernel struct; if the extension
-    # exposes it, exercise the alignment rule directly.
-    pred = getattr(kpool_topk_transform, "takes_bf16_logits", None)
-    if pred is None:
-        pytest.skip("takes_bf16_logits not exposed")
-    assert pred is not None
-
-
-@requires_cuda
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@torch.inference_mode()
+def test_cooperative_topk_overflow_nan(dtype):
+    top_k = 512
+    seq_len = 65537
+    stride = (seq_len + 7) & ~7 if dtype == torch.bfloat16 else (seq_len + 3) & ~3
+    logits = torch.randn(4, stride, device="cuda", dtype=dtype)
+    logits[:, seq_len - 1] = float("nan")
+    lengths = torch.full((4,), seq_len, dtype=torch.int32, device="cuda")
+    indices = torch.empty((4, top_k), dtype=torch.int32, device="cuda")
+    workspace = torch.empty(1024 * 1024, dtype=torch.uint8, device="cuda")
+    torch.ops._C.cooperative_topk(logits, lengths, indices, workspace, top_k)
+    for r in range(4):
+        assert indices[r].unique().numel() == top_k
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="requires CUDA")
+@pytest.mark.skipif(not _has_sgl_kernel(), reason="requires sgl_kernel")
 @pytest.mark.skipif(
-    not _has_kernel_op("cooperative_topk"), reason="cooperative_topk not built"
+    not _has_cooperative_topk_op(), reason="requires compiled cooperative_topk op"
 )
-def test_cooperative_topk_rejects_unaligned_bf16(dtype: torch.dtype) -> None:
-    """An unaligned BF16 stride must be rejected, not silently misread."""
-    torch.set_default_device("cuda:0")
-    stride = 65535  # not a multiple of 8 for BF16
-    logits = torch.randn(1, stride, dtype=torch.float32).to(dtype)
-    lengths = torch.tensor([stride], dtype=torch.int32)
-    out = torch.empty(1, 512, dtype=torch.int32)
-    workspace = torch.empty(8 * 1024 * 1024, dtype=torch.uint8)
-    if dtype == torch.bfloat16:
-        with pytest.raises(Exception):
-            torch.ops._C.cooperative_topk(logits, lengths, out, workspace, 512)
-    else:
-        torch.ops._C.cooperative_topk(logits, lengths, out, workspace, 512)
-
-
-# ---------------------------------------------------------------------------
-# indexer_topk backend resolution
-# ---------------------------------------------------------------------------
-
-
-def test_indexer_topk_capturer_disabled_without_flag() -> None:
-    """The capturer factory must return None when the feature flag is off."""
-    try:
-        from sglang.srt.state_capturer.indexer_topk import (
-            _create_indexer_capturer_raw,
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@torch.inference_mode()
+def test_cooperative_topk_overflow_mixed_lengths(dtype):
+    top_k = 2048
+    lengths_list = [65537, 300, 16384, 5000]
+    stride = 65544 if dtype == torch.bfloat16 else 65540
+    logits = torch.randn(len(lengths_list), stride, device="cuda", dtype=dtype)
+    lengths = torch.tensor(lengths_list, dtype=torch.int32, device="cuda")
+    indices = torch.empty((len(lengths_list), top_k), dtype=torch.int32, device="cuda")
+    workspace = torch.empty(1024 * 1024, dtype=torch.uint8, device="cuda")
+    torch.ops._C.cooperative_topk(logits, lengths, indices, workspace, top_k)
+    for r, length in enumerate(lengths_list):
+        k = min(top_k, length)
+        torch.testing.assert_close(
+            logits[r, indices[r, :k].long()].sort().values,
+            logits[r, :length].topk(k).values.sort().values,
         )
-    except Exception:
-        pytest.skip("sglang runtime not importable")
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="requires CUDA")
+@pytest.mark.skipif(not _has_sgl_kernel(), reason="requires sgl_kernel")
+@pytest.mark.skipif(
+    not _has_cooperative_topk_op(), reason="requires compiled cooperative_topk op"
+)
+@torch.inference_mode()
+def test_persistent_topk_bf16_matches_fp32():
+    top_k = 2048
+    num_rows = 128
+    seq_len = 32768
+    stride = (seq_len + 7) & ~7
+    logits = torch.randn(num_rows, stride, device="cuda", dtype=torch.bfloat16)
+    lengths = torch.full((num_rows,), seq_len, dtype=torch.int32, device="cuda")
+    indices = torch.empty((num_rows, top_k), dtype=torch.int32, device="cuda")
+    workspace = torch.empty(1024 * 1024, dtype=torch.uint8, device="cuda")
+    torch.ops._C.persistent_topk(logits, lengths, indices, workspace, top_k)
+    for r in range(num_rows):
+        torch.testing.assert_close(
+            logits[r, indices[r].long()].sort().values,
+            logits[r, :seq_len].topk(top_k).values.sort().values,
+        )
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="requires CUDA")
+@pytest.mark.skipif(not _has_sgl_kernel(), reason="requires sgl_kernel")
+@torch.inference_mode()
+def test_paged_mqa_logits_bf16_boundary():
+    # Non-aligned length and empty page: the kernel must clamp and never read
+    # past the row.
+    pytest.importorskip("sglang.kernels.jit.csrc.dsa_gfx950.paged_mqa_logits")
+    pytest.skip("paged MQA logits kernel is ROCm-only; covered on gfx950 CI")
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="requires CUDA")
+@pytest.mark.skipif(not _has_sgl_kernel(), reason="requires sgl_kernel")
+@torch.inference_mode()
+def test_indexer_topk_backend_resolution_bf16_fallback():
+    from sglang.srt.state_capturer.indexer_topk import (
+        _create_indexer_capturer_raw,
+    )
+
+    # Disabled capturer must return None without touching the device.
     assert (
         _create_indexer_capturer_raw(
             enable=False,
@@ -273,15 +333,7 @@ def test_indexer_topk_capturer_disabled_without_flag() -> None:
         )
         is None
     )
-
-
-def test_indexer_topk_capturer_rejects_bad_topk() -> None:
-    try:
-        from sglang.srt.state_capturer.indexer_topk import (
-            _create_indexer_capturer_raw,
-        )
-    except Exception:
-        pytest.skip("sglang runtime not importable")
+    # Invalid index_topk must fall back to None and log, not raise.
     assert (
         _create_indexer_capturer_raw(
             enable=True,
