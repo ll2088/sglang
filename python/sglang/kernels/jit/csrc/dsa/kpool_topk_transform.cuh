@@ -58,13 +58,14 @@ __device__ __forceinline__ auto convert_bf16_to_uint8(__nv_bfloat16 x) -> uint8_
 }
 
 // Coarse bins of the two BF16 scores packed in `w` (low half first), from one
-// packed conversion and key flip.
+// packed conversion and key flip.  The flip is the per-half form of
+// convert_bf16_to_uint8: ~bits if negative, else bits | 0x8000.
 __device__ __forceinline__ auto convert_bf16x2_to_uint8x2(uint32_t w) -> uint2 {
   const __nv_bfloat162 h = __floats2bfloat162_rn(__uint_as_float(w << 16), __uint_as_float(w & 0xFFFF0000u));
   const uint32_t bits = *reinterpret_cast<const uint32_t*>(&h);
   const uint32_t sign = bits & 0x80008000u;
   const uint32_t key = bits ^ ((sign - (sign >> 15)) | 0x80008000u);
-  return make_uint2((key & 0xFFFFu) >> 8, key >> 24);
+  return make_uint2((key & 0xFFFFu) >> 8, (key >> 16) >> 8);
 }
 
 // Coarse bin of score e of a staged vector: FP32 bins each score, BF16 bins
