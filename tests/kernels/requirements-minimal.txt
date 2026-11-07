@@ -1,5 +1,4 @@
 # Minimal dependency set for the standalone DSA top-k BF16 capability tests.
-# These tests exercise pure-Python dtype/alignment negotiation and the
-# BF16x2 packed histogram extraction; they must not pull in the sglang
-# meta-package or any CUDA/torch dependency.
+# These tests only need the standard library plus pytest; they must not pull in
+# the sglang meta-package or its full dependency set.
 pytest>=7.0

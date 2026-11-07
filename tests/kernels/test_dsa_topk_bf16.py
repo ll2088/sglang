@@ -7,21 +7,47 @@ installing the sglang meta-package or any CUDA/torch dependency.
 
 from __future__ import annotations
 
+import importlib.util
 import struct
+import sys
+from pathlib import Path
 
 import pytest
 
-from dsa_topk_bf16_capability import (
-    KDL_BFLOAT,
-    KDL_FLOAT,
-    host_convert_bf16_to_uint8,
-    host_convert_bf16x2_to_uint8x2,
-    pack_bf16x2,
-    resolve_logits_dtype,
-    takes_bf16_logits_for,
-    takes_fp32_logits_for,
-    vec_width,
-)
+
+def _load_capability_module():
+    """Load the pure-Python capability module by explicit path.
+
+    Importing ``sglang`` would pull in torch/CUDA and the full dependency set,
+    so the module is loaded directly from its file instead.
+    """
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "python"
+        / "sglang"
+        / "kernels"
+        / "dsa_topk_bf16_capability.py"
+    )
+    spec = importlib.util.spec_from_file_location("dsa_topk_bf16_capability", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load capability module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_cap = _load_capability_module()
+
+KDL_BFLOAT = _cap.KDL_BFLOAT
+KDL_FLOAT = _cap.KDL_FLOAT
+host_convert_bf16_to_uint8 = _cap.host_convert_bf16_to_uint8
+host_convert_bf16x2_to_uint8x2 = _cap.host_convert_bf16x2_to_uint8x2
+pack_bf16x2 = _cap.pack_bf16x2
+resolve_logits_dtype = _cap.resolve_logits_dtype
+takes_bf16_logits_for = _cap.takes_bf16_logits_for
+takes_fp32_logits_for = _cap.takes_fp32_logits_for
+vec_width = _cap.vec_width
 
 
 def _bf16_bits(value: float) -> int:
