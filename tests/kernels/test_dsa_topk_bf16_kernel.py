@@ -13,6 +13,11 @@ from pathlib import Path
 
 import pytest
 
+# The kernel-level consistency tests need torch + CUDA.  They are skipped (not
+# failed) when the minimal CI environment has no GPU stack, so the pure-Python
+# capability tests below still run and the job stays meaningful.
+torch = pytest.importorskip("torch", reason="torch is not installed in the minimal CI environment")
+
 
 # Load the pure-Python helpers by explicit file path so importing them never
 # triggers `sglang/__init__.py` (and therefore the full runtime dependency
@@ -40,10 +45,10 @@ cap = _load_module(
 
 def _load_indexer_topk_helpers():
     # Loaded lazily so collection never depends on the sglang runtime package.
-    return _load_module(
-        "_dsa_indexer_topk_helpers",
-        "python/sglang/srt/state_capturer/indexer_topk.py",
-    )
+    path = _REPO_ROOT / "python/sglang/srt/state_capturer/indexer_topk.py"
+    if not path.is_file():
+        pytest.skip(f"indexer_topk helpers not present at {path}")
+    return _load_module("_dsa_indexer_topk_helpers", str(path.relative_to(_REPO_ROOT)))
 
 
 def test_extract_indexer_topk_from_meta_info_roundtrip():
@@ -189,3 +194,25 @@ def test_bf16x2_packed_extraction_handles_high_half():
     lo, hi = cap.host_convert_bf16x2_to_uint8x2(word)
     assert lo == cap.host_convert_bf16_to_uint8(0x3F80)
     assert hi == cap.host_convert_bf16_to_uint8(0xBF80)
+
+
+def test_bf16x2_packed_extraction_matches_scalar_for_all_16bit_patterns():
+    # Exhaustive over the 16-bit space: the packed path must agree with the
+    # scalar key for every BF16 bit pattern, including NaN/Inf encodings.
+    for bits in range(0x10000):
+        word = cap.pack_bf16x2(bits, bits ^ 0x8000)
+        lo, hi = cap.host_convert_bf16x2_to_uint8x2(word)
+        assert lo == cap.host_convert_bf16_to_uint8(bits)
+        assert hi == cap.host_convert_bf16_to_uint8(bits ^ 0x8000)
+
+
+def test_resolve_logits_dtype_falls_back_on_misaligned_bf16():
+    # The dispatcher must negotiate dtype, not silently reinterpret bytes.
+    assert cap.resolve_logits_dtype(cap.BF16, 16) == "bf16"
+    assert cap.resolve_logits_dtype(cap.BF16, 15) == "fp32"
+    assert cap.resolve_logits_dtype(cap.BF16, 0) == "fp32"
+
+
+def test_takes_bf16_logits_requires_unit_lanes():
+    assert not cap.takes_bf16_logits(cap.DType(cap.DL_BFLOAT, 16, 2), 65536)
+    assert not cap.takes_bf16_logits(cap.DType(cap.DL_BFLOAT, 16, 0), 65536)

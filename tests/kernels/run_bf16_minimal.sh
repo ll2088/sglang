@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Run the BF16 top-k capability tests in a minimal environment.
-#
-# The tests are pure Python and must not trigger sglang's full dependency
-# resolution.  Install only the minimal requirements with --no-deps and run
-# pytest against the explicit test path.
+# Run the BF16 top-k capability tests without installing the sglang meta-package.
+# Usage: tests/kernels/run_bf16_minimal.sh [extra pytest args...]
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "${REPO_ROOT}"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${here}/../.." && pwd)"
 
-python -m pip install --no-deps -r tests/kernels/requirements-minimal.txt
+python -m pip install --disable-pip-version-check -r "${here}/requirements-minimal.txt"
 
-python -m pytest -q tests/kernels/test_dsa_topk_bf16.py "$@"
+# Make the repository importable without installing it.
+export PYTHONPATH="${repo_root}/python${PYTHONPATH:+:${PYTHONPATH}}"
+
+cd "${here}"
+python -m pytest -q -c pytest.ini test_dsa_topk_bf16_kernel.py "$@"
