@@ -1,25 +1,24 @@
 #!/usr/bin/env bash
-# Run the standalone DSA top-k BF16 capability tests without installing the
-# sglang meta-package (which would resolve py-spy/pybase64/pydantic/...).
+# Standalone runner for the DSA top-k BF16 capability tests.
+#
+# Deliberately avoids `pip install -e python` (which resolves the full sglang
+# dependency set) and any CUDA/torch requirement: the tests load the pure-Python
+# capability module by explicit file path.
+#
+# Usage:
+#   tests/kernels/run_bf16_minimal.sh            # single run
+#   tests/kernels/run_bf16_minimal.sh --count=3  # stability run
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${HERE}/../.." && pwd)"
-
-PYTHON_BIN="${PYTHON_BIN:-python3}"
-REQ="${HERE}/requirements-minimal.txt"
-
-if [[ ! -f "${REQ}" ]]; then
-  echo "missing requirements file: ${REQ}" >&2
-  exit 1
-fi
-
-echo "python: ${PYTHON_BIN}"
-"${PYTHON_BIN}" -c 'import sys; print("interpreter:", sys.executable); print("version:", sys.version)'
-echo "requirements: ${REQ}"
-
-# Install only the minimal test dependency, never the sglang meta-package.
-"${PYTHON_BIN}" -m pip install --no-deps -r "${REQ}"
-
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
-"${PYTHON_BIN}" -m pytest -q "${HERE}/test_dsa_topk_bf16.py" "$@"
+
+echo "python: $(command -v python || true)"
+python --version
+echo "pip: $(command -v python) -m pip"
+
+# Install only the minimal test dependency, without resolving sglang's tree.
+python -m pip install --no-deps -r tests/kernels/requirements-minimal.txt
+
+EXTRA_ARGS=("$@")
+python -m pytest -q -p no:randomly tests/kernels/test_dsa_topk_bf16.py "${EXTRA_ARGS[@]}"

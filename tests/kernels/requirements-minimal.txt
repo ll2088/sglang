@@ -1,4 +1,9 @@
-# Minimal dependency set for the standalone DSA top-k BF16 capability tests.
-# These tests only need the standard library plus pytest; they must not pull in
-# the sglang meta-package or its full dependency set.
-pytest>=7.0
+# Minimal dependency set for tests/kernels/test_dsa_topk_bf16.py.
+#
+# These tests only need the standard library plus pytest; the capability
+# module is loaded by explicit file path so the sglang meta-package (and its
+# torch/CUDA/pydantic/py-spy/quack-kernels dependency tree) is never resolved.
+#
+# Install with:
+#   python -m pip install --no-deps -r tests/kernels/requirements-minimal.txt
+pytest==8.3.4

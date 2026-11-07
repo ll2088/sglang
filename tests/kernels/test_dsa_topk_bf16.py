@@ -50,6 +50,14 @@ takes_fp32_logits_for = _cap.takes_fp32_logits_for
 vec_width = _cap.vec_width
 
 
+def test_capability_module_loads_without_sglang_package() -> None:
+    """The capability module must be loadable by path, never via the
+    ``sglang`` meta-package (which would pull in torch/CUDA and the full
+    dependency set during CI setup)."""
+    assert "sglang" not in sys.modules
+    assert _cap.__name__ == "dsa_topk_bf16_capability"
+
+
 def _bf16_bits(value: float) -> int:
     """Round a Python float to BF16 and return its 16-bit pattern."""
     packed = struct.pack("<f", value)
