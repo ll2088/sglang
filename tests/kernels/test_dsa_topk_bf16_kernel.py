@@ -38,6 +38,13 @@ def _load_extension():
     return True
 
 
+def _load_torch_extension():
+    """Load the extension only when torch and CUDA are both present."""
+    if not _cuda_available():
+        pytest.skip("requires a CUDA device")
+    return _load_extension()
+
+
 @cuda_required
 def test_bf16_and_fp32_topk_selection_agree() -> None:
     """BF16 logits must select the same values as FP32 logits.
@@ -46,14 +53,14 @@ def test_bf16_and_fp32_topk_selection_agree() -> None:
     same values as the top-k over the FP32 upcast. Ties may pick different
     indices, so compare the selected values, not the indices.
     """
-    _load_extension()
+    _load_torch_extension()
     pytest.skip("kernel-level BF16 top-k test requires the built extension")
 
 
 @cuda_required
 def test_bf16_topk_unaligned_row_falls_back() -> None:
     """Rows whose stride is not 16-byte aligned must fall back to FP32."""
-    _load_extension()
+    _load_torch_extension()
     pytest.skip("kernel-level BF16 top-k test requires the built extension")
 
 
