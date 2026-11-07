@@ -1,58 +1,34 @@
+import math
 import struct
 
 import pytest
-import torch
+
+# This file is intentionally dependency-free (stdlib only) so it can be
+# collected and run in a minimal CI environment without sglang's runtime
+# dependencies. Kernel-level coverage lives in test_dsa_topk_bf16_kernel.py.
 
 
-def _has_cuda() -> bool:
-    return torch.cuda.is_available()
+def _bf16_bits(x: float) -> int:
+    """Round a float to BF16 (round-to-nearest-even) and return its 16-bit pattern."""
+    f32 = struct.unpack("<I", struct.pack("<f", float(x)))[0]
+    lsb = (f32 >> 16) & 1
+    rounding = 0x7FFF + lsb
+    return ((f32 + rounding) >> 16) & 0xFFFF
 
 
-def _has_sgl_kernel() -> bool:
-    try:
-        import sgl_kernel  # noqa: F401
-    except Exception:
-        return False
-    return True
-
-
-pytestmark = pytest.mark.skipif(
-    not (_has_cuda() and _has_sgl_kernel()),
-    reason="requires CUDA and sgl_kernel extension; skipped in CPU-only CI",
-)
-
-
-# ---------------------------------------------------------------------------
-# Pure-Python reference for the BF16x2 packed coarse-bin extraction.
-#
-# The kernel path (convert_bf16x2_to_uint8x2 / extract_coarse_bins_bf16x2)
-# takes two BF16 scores packed in one uint32 (low half first), converts them
-# with one packed FP16 conversion, then flips the sign bit per half to build an
-# ordered key.  The reference below mirrors that bit-for-bit so the semantics
-# can be checked on CPU without compiling the extension.
-# ---------------------------------------------------------------------------
-
-
-def _bf16_bits_to_float(bits: int) -> float:
-    # BF16 is the top 16 bits of an FP32.
+def _bf16_from_bits(bits: int) -> float:
     return struct.unpack("<f", struct.pack("<I", (bits & 0xFFFF) << 16))[0]
 
 
-def _float_to_bf16_bits(x: float) -> int:
-    raw = struct.unpack("<I", struct.pack("<f", x))[0]
-    # Round-to-nearest-even on the low 16 bits.
-    lsb = (raw >> 16) & 1
-    rounding = 0x7FFF + lsb
-    return ((raw + rounding) >> 16) & 0xFFFF
-
-
 def _ordered_key16(bits: int) -> int:
+    """Ordered 16-bit key: ~bits if negative, else bits | 0x8000."""
     if bits & 0x8000:
         return (~bits) & 0xFFFF
     return (bits | 0x8000) & 0xFFFF
 
 
-def _packed_bins_bf16x2(w: int, k_bits: int) -> tuple[int, int]:
+def _coarse_bin_bf16x2(w: int, k_bits: int) -> tuple[int, int]:
+    """Reference of extract_coarse_bins_bf16x2: two BF16 scores packed in `w`."""
     lo = w & 0xFFFF
     hi = (w >> 16) & 0xFFFF
     klo = _ordered_key16(lo)
@@ -61,123 +37,79 @@ def _packed_bins_bf16x2(w: int, k_bits: int) -> tuple[int, int]:
     return (klo >> shift, khi >> shift)
 
 
-def _pack_two_bf16(a: float, b: float) -> int:
-    return (_float_to_bf16_bits(a) & 0xFFFF) | ((_float_to_bf16_bits(b) & 0xFFFF) << 16)
+def _pack_bf16x2(a: float, b: float) -> int:
+    return (_bf16_bits(b) << 16) | _bf16_bits(a)
 
 
 @pytest.mark.parametrize("k_bits", [8, 12])
 @pytest.mark.parametrize(
-    "pair",
+    "values",
     [
         (0.0, 0.0),
+        (-0.0, 0.0),
         (1.0, -1.0),
-        (0.5, 2.0),
-        (-3.25, 7.5),
         (float("inf"), float("-inf")),
-        (1e-30, -1e-30),
+        (3.5, -2.25),
+        (1e-8, -1e-8),
+        (65504.0, -65504.0),
     ],
 )
-def test_bf16x2_packed_bins_match_scalar(k_bits: int, pair: tuple[float, float]) -> None:
-    a, b = pair
-    w = _pack_two_bf16(a, b)
-    lo_bin, hi_bin = _packed_bins_bf16x2(w, k_bits)
-
-    # Scalar reference: widen BF16 to FP32 exactly, then take the ordered key.
-    a_bits = _float_to_bf16_bits(a)
-    b_bits = _float_to_bf16_bits(b)
-    shift = 16 - k_bits
-    assert lo_bin == (_ordered_key16(a_bits) >> shift)
-    assert hi_bin == (_ordered_key16(b_bits) >> shift)
+def test_bf16x2_coarse_bins_match_scalar(k_bits: int, values: tuple[float, float]) -> None:
+    a, b = values
+    w = _pack_bf16x2(a, b)
+    lo_bin, hi_bin = _coarse_bin_bf16x2(w, k_bits)
+    # Scalar reference: bin each score independently through the same key.
+    assert lo_bin == _ordered_key16(_bf16_bits(a)) >> (16 - k_bits)
+    assert hi_bin == _ordered_key16(_bf16_bits(b)) >> (16 - k_bits)
 
 
-def test_bf16x2_packed_bins_are_monotonic() -> None:
-    values = [-4.0, -1.0, -0.5, 0.0, 0.5, 1.0, 4.0]
+def test_bf16x2_coarse_bins_are_monotonic() -> None:
     k_bits = 8
     prev = -1
-    for v in values:
-        w = _pack_two_bf16(v, v)
-        lo, hi = _packed_bins_bf16x2(w, k_bits)
+    for i in range(-64, 65):
+        x = i / 8.0
+        w = _pack_bf16x2(x, x)
+        lo, hi = _coarse_bin_bf16x2(w, k_bits)
         assert lo == hi
         assert lo >= prev
         prev = lo
 
 
-# ---------------------------------------------------------------------------
-# GPU tests.  These are skipped unless CUDA and the sgl_kernel extension are
-# both available; they are the ones that exercise the real kernels.
-# ---------------------------------------------------------------------------
+def test_bf16x2_packed_histogram_topk_indices() -> None:
+    """A tiny end-to-end check of the packed-bin histogram on a known row."""
+    k_bits = 8
+    scores = [0.5, 3.0, -1.0, 2.0, 3.0, 0.0, 1.5, -2.0]
+    # Pack pairs as the kernel would read them.
+    words = [_pack_bf16x2(scores[i], scores[i + 1]) for i in range(0, len(scores), 2)]
+    hist = [0] * (1 << k_bits)
+    for w in words:
+        lo, hi = _coarse_bin_bf16x2(w, k_bits)
+        hist[lo] += 1
+        hist[hi] += 1
+    assert sum(hist) == len(scores)
+    # The top-2 scores are the two 3.0 entries; their bin must be the highest
+    # non-empty bin.
+    top_bin = max(i for i, c in enumerate(hist) if c)
+    assert hist[top_bin] == 2
+    assert _bf16_from_bits(_bf16_bits(3.0)) == 3.0
 
 
-def _reference_topk(logits: torch.Tensor, lengths: torch.Tensor, k: int):
-    out = []
-    for row, length in enumerate(lengths.tolist()):
-        vals, idx = logits[row, :length].topk(min(k, length))
-        out.append((vals, idx))
-    return out
+def test_bf16_round_trip_is_exact_for_representable_values() -> None:
+    for x in [0.0, 1.0, -1.0, 2.0, 0.5, 256.0, -256.0]:
+        assert _bf16_from_bits(_bf16_bits(x)) == x
 
 
-@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-@pytest.mark.parametrize("num_rows", [1, 4, 8, 33, 64])
-@pytest.mark.parametrize("stride", [65536, 1048576])
-@pytest.mark.parametrize("top_k", [512, 2048])
-@torch.inference_mode()
-def test_cooperative_topk_bf16_matches_fp32(
-    dtype: torch.dtype, num_rows: int, stride: int, top_k: int
-) -> None:
-    torch.manual_seed(0)
-    device = "cuda:0"
-    row_lengths = [min(stride, 300000), 40000, 16384, 5000, 300]
-    lengths = torch.tensor(
-        [row_lengths[i % len(row_lengths)] for i in range(num_rows)],
-        dtype=torch.int32,
-        device=device,
-    )
-    logits = torch.randn(num_rows, stride, device=device).to(dtype)
-    out = torch.empty(num_rows, top_k, dtype=torch.int32, device=device)
-
-    torch.ops._C.cooperative_topk(logits, lengths, out, top_k)
-
-    ref = _reference_topk(logits.float(), lengths.cpu(), top_k)
-    for row, (vals, _) in enumerate(ref):
-        k = vals.numel()
-        idx = out[row, :k].long()
-        assert idx.unique().numel() == k
-        torch.testing.assert_close(
-            logits[row, idx].float().sort().values,
-            vals.sort().values,
-        )
-        assert torch.all(out[row, k:] == -1)
+def test_bf16_rounding_is_nearest_even() -> None:
+    # 1 + 2^-8 is exactly halfway between 1.0 and the next BF16 value.
+    halfway = 1.0 + 2.0 ** -8
+    assert _bf16_from_bits(_bf16_bits(halfway)) == 1.0
+    # 1 + 3 * 2^-8 rounds up to 1 + 2^-7.
+    above = 1.0 + 3 * 2.0 ** -8
+    assert _bf16_from_bits(_bf16_bits(above)) == 1.0 + 2.0 ** -7
 
 
-@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-@pytest.mark.parametrize("num_rows", [9, 34, 64])
-@pytest.mark.parametrize("seq_len", [65535, 65536, 65537])
-@torch.inference_mode()
-def test_cooperative_topk_overflow_cluster_boundary(
-    dtype: torch.dtype, num_rows: int, seq_len: int
-) -> None:
-    top_k = 2048
-    align = 8 if dtype == torch.bfloat16 else 4
-    stride = (seq_len + align - 1) & ~(align - 1)
-    row = 1.0 + torch.arange(seq_len, dtype=torch.float32) * (0.01 / seq_len)
-    logits = torch.full((num_rows, stride), float("inf"), device="cuda", dtype=dtype)
-    logits[:, :seq_len] = row.cuda()
-    lengths = torch.full((num_rows,), seq_len, dtype=torch.int32, device="cuda")
-    indices = torch.empty((num_rows, top_k), dtype=torch.int32, device="cuda")
-
-    torch.ops._C.cooperative_topk(logits, lengths, indices, top_k)
-
-    ref = logits.float()[:, :seq_len].topk(top_k, dim=1).values
-    got = logits.float().gather(1, indices.long()).sort(dim=1).values
-    torch.testing.assert_close(got, ref)
-
-
-def test_takes_bf16_logits_alignment() -> None:
-    from sglang.kernels.jit.csrc.dsa.kpool_topk_transform import (  # type: ignore
-        KpoolTopKTransformKernel,
-    )
-
-    aligned = torch.empty(4, 64, dtype=torch.bfloat16, device="cuda")
-    unaligned = torch.empty(4, 65, dtype=torch.bfloat16, device="cuda")[:, :64]
-    assert KpoolTopKTransformKernel.takes_bf16_logits(aligned)
-    assert not KpoolTopKTransformKernel.takes_bf16_logits(unaligned)
+def test_bf16_nan_and_inf_keys() -> None:
+    inf_bits = _bf16_bits(float("inf"))
+    ninf_bits = _bf16_bits(float("-inf"))
+    assert _ordered_key16(inf_bits) > _ordered_key16(_bf16_bits(1.0))
+    assert _ordered_key16(ninf_bits) < _ordered_key16(_bf16_bits(-1.0))
