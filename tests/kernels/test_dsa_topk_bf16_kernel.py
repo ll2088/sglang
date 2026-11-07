@@ -23,6 +23,8 @@ def _ops_available() -> bool:
     try:
         import torch
 
+        # Never import sglang here: importing the top-level package can trigger
+        # extension builds, which is exactly what collection must avoid.
         return hasattr(torch.ops, "_C") and hasattr(torch.ops._C, "cooperative_topk")
     except Exception:
         return False
