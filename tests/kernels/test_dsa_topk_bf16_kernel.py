@@ -32,17 +32,22 @@ def _load_module(name: str, relpath: str):
     return module
 
 
-it = _load_module(
-    "_dsa_indexer_topk_helpers",
-    "python/sglang/srt/state_capturer/indexer_topk.py",
-)
 cap = _load_module(
     "_dsa_topk_bf16_capability",
     "python/sglang/kernels/jit/csrc/dsa/topk_bf16_capability.py",
 )
 
 
+def _load_indexer_topk_helpers():
+    # Loaded lazily so collection never depends on the sglang runtime package.
+    return _load_module(
+        "_dsa_indexer_topk_helpers",
+        "python/sglang/srt/state_capturer/indexer_topk.py",
+    )
+
+
 def test_extract_indexer_topk_from_meta_info_roundtrip():
+    it = _load_indexer_topk_helpers()
     values = [1, 2, 3, 4]
     encoded = base64.b64encode(bytes(v & 0xFF for v in values)).decode("utf-8")
     data = {"meta_info": {"indexer_topk": encoded}}
@@ -51,11 +56,13 @@ def test_extract_indexer_topk_from_meta_info_roundtrip():
 
 
 def test_extract_indexer_topk_missing_returns_empty():
+    it = _load_indexer_topk_helpers()
     out = it.extract_indexer_topk_from_meta_info({"meta_info": {}})
     assert len(out) == 0
 
 
 def test_maybe_capture_passthrough_without_capturer(monkeypatch):
+    it = _load_indexer_topk_helpers()
     monkeypatch.setattr(it, "get_global_indexer_capturer", lambda: None)
     sentinel = object()
     assert it.maybe_capture_indexer_topk(0, sentinel) is sentinel
@@ -63,6 +70,7 @@ def test_maybe_capture_passthrough_without_capturer(monkeypatch):
 
 
 def test_maybe_capture_calls_capturer(monkeypatch):
+    it = _load_indexer_topk_helpers()
     calls = []
 
     class _Cap:
@@ -76,6 +84,8 @@ def test_maybe_capture_calls_capturer(monkeypatch):
 
 
 def test_create_indexer_capturer_disabled_returns_none(monkeypatch):
+    it = _load_indexer_topk_helpers()
+
     class _Exec:
         class features:
             enable_return_indexer_topk = False
@@ -93,6 +103,7 @@ def test_create_indexer_capturer_disabled_returns_none(monkeypatch):
 
 
 def test_create_indexer_capturer_invalid_topk_returns_none(monkeypatch):
+    it = _load_indexer_topk_helpers()
     out = it._create_indexer_capturer_raw(
         enable=True,
         num_indexer_layers=4,
@@ -105,6 +116,7 @@ def test_create_indexer_capturer_invalid_topk_returns_none(monkeypatch):
 
 
 def test_create_indexer_capturer_no_layers_returns_none():
+    it = _load_indexer_topk_helpers()
     out = it._create_indexer_capturer_raw(
         enable=True,
         num_indexer_layers=0,
