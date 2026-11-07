@@ -1,5 +1,3 @@
-# Minimal dependencies for the pure-Python BF16 capability tests.
-# Deliberately excludes torch, sglang and any GPU runtime: these tests only
-# exercise host-side dtype/alignment negotiation and packed-bin extraction.
+# Minimal dependencies for the pure-Python DSA BF16 capability tests.
+# These tests must be collectable without torch, CUDA or the sglang runtime.
 pytest>=7.0
-numpy>=1.21

@@ -20,6 +20,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def _load_capability_module():
     path = _REPO_ROOT / "python/sglang/kernels/jit/csrc/dsa/topk_bf16_capability.py"
+    if not path.is_file():  # pragma: no cover - defensive
+        raise ImportError(f"capability module not found at {path}")
     spec = importlib.util.spec_from_file_location("_dsa_topk_bf16_capability", path)
     if spec is None or spec.loader is None:  # pragma: no cover - defensive
         raise ImportError(f"cannot load capability module from {path}")

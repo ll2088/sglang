@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
-# Run the BF16 capability tests with the minimal dependency set only.
-# Never installs the sglang package, so py-spy/quack-kernels and friends are
-# not pulled in during CI environment preparation.
+# Run the BF16 indexer top-k capability tests in a minimal environment.
+#
+# The tests only need pytest and the standard library, so this script installs
+# the minimal requirements and runs pytest directly on the test file instead of
+# installing the sglang package (which would pull the full runtime dependency
+# set and fail in a CPU-only CI job).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${here}/../.." && pwd)"
 
-python -m pip install --disable-pip-version-check -r "${here}/requirements-minimal.txt"
+python -m pip install --no-deps -r "${here}/requirements-minimal.txt"
 
 cd "${repo_root}"
-
-# Stability: repeat via a shell loop instead of pytest-repeat, which is not in
-# the minimal dependency set.
-for i in 1 2 3; do
-  echo "== bf16 capability run ${i}/3 =="
-  python -m pytest -q -p no:randomly tests/kernels/test_dsa_topk_bf16_kernel.py
-done
+python -m pytest -q -p no:randomly "${here}/test_dsa_topk_bf16.py" "$@"
