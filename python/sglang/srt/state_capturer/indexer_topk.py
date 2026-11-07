@@ -72,6 +72,27 @@ def resolve_topk_logits_dtype(
     return "fp32"
 
 
+def resolve_topk_logits_dtype_or_fallback(
+    dtype_code: int,
+    dtype_bits: int,
+    dtype_lanes: int,
+    row_stride: int,
+    backend: str = "cooperative",
+) -> str:
+    """Same negotiation as :func:`resolve_topk_logits_dtype`, but never raises.
+
+    Kept as a separate entry point so callers that must not fail on an
+    unexpected dtype (e.g. a backend that only takes FP32) can fall back to
+    ``"fp32"`` and record the reason.  Pure Python, no torch/CUDA needed.
+    """
+    try:
+        return resolve_topk_logits_dtype(
+            dtype_code, dtype_bits, dtype_lanes, row_stride, backend
+        )
+    except Exception:  # noqa: BLE001 - fallback must never propagate
+        return "fp32"
+
+
 class IndexerTopkCapturer(BaseTopkCapturer):
     def __init__(
         self,
