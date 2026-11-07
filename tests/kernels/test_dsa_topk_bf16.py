@@ -41,6 +41,12 @@ def _bf16_bits(x: float) -> int:
     return (u >> 16) & 0xFFFF
 
 
+def _bf16_to_float32(bits: int) -> np.float32:
+    """Widen a BF16 bit pattern to float32 exactly (BF16 is the high half)."""
+    raw = np.uint32((bits & 0xFFFF) << 16).tobytes()
+    return np.frombuffer(raw, dtype=np.float32)[0]
+
+
 # ---------------------------------------------------------------------------
 # Capability negotiation
 # ---------------------------------------------------------------------------
@@ -116,9 +122,7 @@ def test_bf16x2_topk_indices_match_fp32_reference():
     k = 64
     scores = rng.standard_normal(n).astype(np.float32)
     # BF16-rounded scores, then top-k on the rounded values.
-    bf16 = np.array([np.float32(np.frombuffer(
-        np.uint16(_bf16_bits(float(s))).tobytes() + b"\x00\x00",
-        dtype=np.float32)[0]) for s in scores], dtype=np.float32)
+    bf16 = np.array([_bf16_to_float32(_bf16_bits(float(s))) for s in scores], dtype=np.float32)
     ref = np.argsort(-bf16, kind="stable")[:k]
     got = np.argsort(-scores, kind="stable")[:k]
     # The selected values must agree even if tie-breaking differs.
