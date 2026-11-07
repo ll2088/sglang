@@ -17,8 +17,17 @@ import importlib.util
 import sys
 from pathlib import Path
 
-import numpy as np
 import pytest
+
+# numpy is only needed by the reference implementations below; the capability
+# negotiation tests must stay runnable in the minimal CI venv even if the
+# wheel for the runner's Python is unavailable.
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - exercised only in minimal envs
+    np = None
+
+requires_numpy = pytest.mark.skipif(np is None, reason="numpy is not installed")
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -90,6 +99,7 @@ def _bf16_bits(value: float) -> int:
     return (rounded >> 16) & 0xFFFF
 
 
+@requires_numpy
 @pytest.mark.parametrize(
     "values",
     [
@@ -111,6 +121,7 @@ def test_bf16x2_packed_matches_per_element(values) -> None:
     )
 
 
+@requires_numpy
 def test_bf16x2_packed_is_monotonic() -> None:
     # Ordered keys must be monotonic in the value, which is what makes the
     # histogram threshold sound.
@@ -130,6 +141,7 @@ def _topk_indices(values: np.ndarray, k: int) -> np.ndarray:
     return order[:k]
 
 
+@requires_numpy
 @pytest.mark.parametrize("length", [300, 5000, 16384, 40000])
 @pytest.mark.parametrize("k", [512, 2048])
 def test_bf16_and_fp32_select_same_values(length: int, k: int) -> None:
@@ -154,6 +166,7 @@ def test_bf16_and_fp32_select_same_values(length: int, k: int) -> None:
     )
 
 
+@requires_numpy
 def test_bf16_short_row_selects_everything() -> None:
     length = 300
     k = 512
