@@ -8,6 +8,7 @@ pure-Python reference tests live in ``test_dsa_topk_bf16.py`` and always run.
 from __future__ import annotations
 
 import importlib.util
+import os
 import unittest
 
 
@@ -30,10 +31,18 @@ def _ops_available() -> bool:
         return False
 
 
+# These tests exercise the compiled CUDA/HIP kernels and therefore need both a
+# GPU and the built sglang extensions.  They are opt-in so that a minimal CI
+# job (pytest only, no torch/sglang) can still collect this file and run the
+# pure-Python reference tests below.
 OPS_AVAILABLE = _ops_available()
+GPU_TESTS_ENABLED = os.environ.get("SGLANG_RUN_GPU_KERNEL_TESTS", "0") == "1"
 
 
-@unittest.skipUnless(OPS_AVAILABLE, "requires compiled sglang kernels")
+@unittest.skipUnless(
+    OPS_AVAILABLE and GPU_TESTS_ENABLED,
+    "requires compiled sglang kernels and SGLANG_RUN_GPU_KERNEL_TESTS=1",
+)
 class TestCooperativeTopkBf16(unittest.TestCase):
     def test_rows_shorter_than_stride(self) -> None:
         import torch
