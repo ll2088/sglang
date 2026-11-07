@@ -7,11 +7,36 @@ and by monkeypatching the runtime context lookups.
 from __future__ import annotations
 
 import base64
+import importlib.util
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-from sglang.srt.state_capturer import indexer_topk as it
+
+# Load the pure-Python helpers by explicit file path so importing them never
+# triggers `sglang/__init__.py` (and therefore the full runtime dependency
+# resolution).  The modules are kept free of torch/CUDA imports for exactly
+# this reason.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_module(name: str, relpath: str):
+    path = _REPO_ROOT / relpath
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise ImportError(f"cannot load {name} from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+it = _load_module(
+    "_dsa_indexer_topk_helpers",
+    "python/sglang/srt/state_capturer/indexer_topk.py",
+)
 
 
 def test_extract_indexer_topk_from_meta_info_roundtrip():
