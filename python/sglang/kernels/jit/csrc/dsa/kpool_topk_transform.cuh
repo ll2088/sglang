@@ -68,6 +68,12 @@ __device__ __forceinline__ auto convert_bf16x2_to_uint8x2(uint32_t w) -> uint2 {
   return make_uint2((key & 0xFFFFu) >> 8, (key >> 16) >> 8);
 }
 
+// Host-side mirror of convert_bf16_to_uint8, used by the reference tests.
+inline auto host_convert_bf16_to_uint8(uint16_t bits) -> uint8_t {
+  const uint16_t key = (bits & 0x8000) ? static_cast<uint16_t>(~bits) : static_cast<uint16_t>(bits | 0x8000);
+  return static_cast<uint8_t>(key >> 8);
+}
+
 // Coarse bin of score e of a staged vector: FP32 bins each score, BF16 bins
 // both halves of the packed word with one conversion.
 template <typename InT>
@@ -436,6 +442,12 @@ struct KpoolTopKTransformKernel {
   static auto takes_bf16_logits(const tvm::ffi::TensorView& score) -> bool {
     return score.dtype().code == kDLBfloat && score.dtype().bits == 16 && score.dtype().lanes == 1 &&
            score.stride(0) % kVecWidth<__nv_bfloat16> == 0;
+  }
+
+  // FP32 logits are always readable; kept as a named capability so the
+  // dispatcher can negotiate dtype without duplicating the predicate.
+  static auto takes_fp32_logits(const tvm::ffi::TensorView& score) -> bool {
+    return score.dtype().code == kDLFloat && score.dtype().bits == 32 && score.dtype().lanes == 1;
   }
 
   static void transform(

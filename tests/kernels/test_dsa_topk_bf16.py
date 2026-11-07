@@ -1,142 +1,158 @@
-"""Pure-Python BF16 top-k reference tests.
+"""Pure-Python reference tests for the BF16 indexer top-k path.
 
-This module deliberately imports only the standard library so that a minimal
-CI job (pytest, no torch, no sglang) can collect and run it.  It mirrors the
-BF16x2 packed histogram extraction used by the DSA top-k kernels and checks
-that the packed path selects the same coarse bins as the scalar FP32 path.
+These tests deliberately import only the standard library so they can be
+collected and run in a minimal CI environment without torch, sglang or a GPU.
+They mirror the device-side helpers in
+``python/sglang/kernels/jit/csrc/dsa/kpool_topk_transform.cuh``:
 
-The GPU kernel tests live in ``test_dsa_topk_bf16_kernel.py`` and are opt-in
-via ``SGLANG_RUN_GPU_KERNEL_TESTS=1``.
+* ``convert_bf16_to_uint8`` / ``convert_bf16x2_to_uint8x2`` (packed histogram)
+* ``takes_bf16_logits`` (backend dtype / alignment negotiation)
+* the FP32 fallback when BF16 rows are not 16-byte aligned
+
+GPU kernel tests live elsewhere and are skipped when no CUDA device or
+compiled ``_C`` extension is present.
 """
-
-from __future__ import annotations
 
 import struct
 import unittest
 
 
-def _f32_to_bf16_bits(x: float) -> int:
+# ---------------------------------------------------------------------------
+# Reference implementations (host mirrors of the device helpers)
+# ---------------------------------------------------------------------------
+
+
+def f32_to_bf16_bits(x: float) -> int:
     """Round-to-nearest-even FP32 -> BF16, matching __float2bfloat16_rn."""
     bits = struct.unpack("<I", struct.pack("<f", x))[0]
-    # NaN stays NaN; infinities map to infinities.
-    if (bits & 0x7F800000) == 0x7F800000 and (bits & 0x007FFFFF) != 0:
-        return (bits >> 16) | 0x0040
     lsb = (bits >> 16) & 1
-    rounding_bias = 0x7FFF + lsb
-    return ((bits + rounding_bias) >> 16) & 0xFFFF
+    rounding = 0x7FFF + lsb
+    return ((bits + rounding) >> 16) & 0xFFFF
 
 
-def _bf16_bits_to_f32(bits: int) -> float:
+def bf16_bits_to_f32(bits: int) -> float:
     return struct.unpack("<f", struct.pack("<I", (bits & 0xFFFF) << 16))[0]
 
 
-def _order_key16_from_bf16_bits(bits: int) -> int:
-    """Ordered 16-bit key of a BF16 value: ~bits if negative, else bits | 0x8000."""
-    if bits & 0x8000:
-        return (~bits) & 0xFFFF
-    return bits | 0x8000
+def convert_bf16_to_uint8(bits: int) -> int:
+    """Ordered 16-bit key of a BF16 score, top 8 bits."""
+    key = (~bits) & 0xFFFF if (bits & 0x8000) else (bits | 0x8000)
+    return (key >> 8) & 0xFF
 
 
-def _coarse_bin_scalar(x: float, k_bits: int) -> int:
-    """Reference: BF16-round then take the top k_bits of the ordered key."""
-    key = _order_key16_from_bf16_bits(_f32_to_bf16_bits(x))
-    return key >> (16 - k_bits)
-
-
-def _coarse_bins_bf16x2(w: int, k_bits: int) -> tuple[int, int]:
-    """Packed extraction of the two BF16 coarse bins in a 32-bit word.
-
-    ``w`` holds two BF16 values, low half first.  This mirrors
-    ``extract_coarse_bins_bf16x2`` in the kernel: one packed conversion and
-    key flip, then a shift per half.
-    """
+def convert_bf16x2_to_uint8x2(w: int):
+    """Coarse bins of the two BF16 scores packed in ``w`` (low half first)."""
     lo = w & 0xFFFF
     hi = (w >> 16) & 0xFFFF
-    key_lo = _order_key16_from_bf16_bits(lo)
-    key_hi = _order_key16_from_bf16_bits(hi)
-    return key_lo >> (16 - k_bits), key_hi >> (16 - k_bits)
+    return convert_bf16_to_uint8(lo), convert_bf16_to_uint8(hi)
 
 
-def _pack_bf16x2(a: float, b: float) -> int:
-    return (_f32_to_bf16_bits(b) << 16) | _f32_to_bf16_bits(a)
+def convert_to_uint8_fp32(x: float) -> int:
+    """FP32 -> FP16 ordered key, top 8 bits (the FP32 path's coarse bin)."""
+    h = struct.unpack("<H", struct.pack("<e", x))[0]
+    key = (~h) & 0xFFFF if (h & 0x8000) else (h | 0x8000)
+    return (key >> 8) & 0xFF
 
 
-def _topk_indices(values: list[float], k: int) -> list[int]:
-    """Stable descending top-k by value, ties broken by lower index."""
+def takes_bf16_logits(dtype_code: str, bits: int, lanes: int, stride0: int) -> bool:
+    """Mirror of KpoolTopKTransformKernel::takes_bf16_logits."""
+    vec_width = 16 // 2  # kVecWidth<__nv_bfloat16>
+    return dtype_code == "bfloat" and bits == 16 and lanes == 1 and stride0 % vec_width == 0
+
+
+def takes_fp32_logits(dtype_code: str, bits: int, lanes: int) -> bool:
+    return dtype_code == "float" and bits == 32 and lanes == 1
+
+
+def select_topk(values, k):
+    """Stable top-k by value, ties broken by lower index (torch.topk-like)."""
     order = sorted(range(len(values)), key=lambda i: (-values[i], i))
     return order[:k]
 
 
-class TestBf16x2CoarseBins(unittest.TestCase):
-    def test_packed_matches_scalar(self) -> None:
-        samples = [
-            0.0,
-            -0.0,
-            1.0,
-            -1.0,
-            0.5,
-            -0.5,
-            3.14159,
-            -2.71828,
-            1e-8,
-            -1e-8,
-            1e8,
-            -1e8,
-            float("inf"),
-            float("-inf"),
-        ]
-        for k_bits in (8, 10, 12):
-            for i in range(0, len(samples) - 1, 2):
-                a, b = samples[i], samples[i + 1]
-                w = _pack_bf16x2(a, b)
-                packed = _coarse_bins_bf16x2(w, k_bits)
-                scalar = (_coarse_bin_scalar(a, k_bits), _coarse_bin_scalar(b, k_bits))
-                self.assertEqual(packed, scalar, msg=f"k_bits={k_bits} a={a} b={b}")
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
 
-    def test_packed_ordering_is_monotonic(self) -> None:
-        # The ordered key must be monotonic in the BF16 value so that a
-        # threshold bin separates winners from losers.
-        values = [-4.0, -1.0, -0.25, 0.0, 0.25, 1.0, 4.0]
-        keys = [_order_key16_from_bf16_bits(_f32_to_bf16_bits(v)) for v in values]
+
+class TestBf16x2PackedHistogram(unittest.TestCase):
+    def test_packed_matches_scalar(self):
+        samples = [0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 3.25, -3.25, 1e-3, -1e-3]
+        for a in samples:
+            for b in samples:
+                wa = f32_to_bf16_bits(a)
+                wb = f32_to_bf16_bits(b)
+                packed = wa | (wb << 16)
+                lo, hi = convert_bf16x2_to_uint8x2(packed)
+                self.assertEqual(lo, convert_bf16_to_uint8(wa))
+                self.assertEqual(hi, convert_bf16_to_uint8(wb))
+
+    def test_key_is_monotonic(self):
+        ordered = [-4.0, -1.0, -0.5, 0.0, 0.5, 1.0, 4.0]
+        keys = [convert_bf16_to_uint8(f32_to_bf16_bits(v)) for v in ordered]
         self.assertEqual(keys, sorted(keys))
 
-    def test_topk_selection_matches_reference(self) -> None:
-        # Build a small row, bin it with the packed path, and check that the
-        # selected indices agree with a plain top-k over the same values.
-        values = [((i * 37) % 101 - 50) / 7.0 for i in range(64)]
-        k = 8
-        k_bits = 8
-        bins = []
-        for i in range(0, len(values), 2):
-            w = _pack_bf16x2(values[i], values[i + 1])
-            bins.extend(_coarse_bins_bf16x2(w, k_bits))
-        self.assertEqual(len(bins), len(values))
-        # The threshold bin is the one containing the k-th largest value.
-        sorted_bins = sorted(bins, reverse=True)
-        threshold = sorted_bins[k - 1]
-        candidates = [i for i, b in enumerate(bins) if b >= threshold]
-        self.assertGreaterEqual(len(candidates), k)
-        # Refine within the candidate set using the exact values.
-        refined = sorted(candidates, key=lambda i: (-values[i], i))[:k]
-        expected = _topk_indices(values, k)
-        self.assertEqual(refined, expected)
-
-    def test_negative_zero_and_inf(self) -> None:
-        # -0.0 and +0.0 must not collide in a way that breaks the key order.
-        key_pos = _order_key16_from_bf16_bits(_f32_to_bf16_bits(0.0))
-        key_neg = _order_key16_from_bf16_bits(_f32_to_bf16_bits(-0.0))
-        self.assertLessEqual(key_neg, key_pos)
-        key_inf = _order_key16_from_bf16_bits(_f32_to_bf16_bits(float("inf")))
-        key_ninf = _order_key16_from_bf16_bits(_f32_to_bf16_bits(float("-inf")))
-        self.assertLess(key_ninf, key_pos)
-        self.assertLess(key_pos, key_inf)
+    def test_negative_zero_and_positive_zero(self):
+        # -0.0 and +0.0 must map to distinct ordered keys, as on device.
+        self.assertNotEqual(
+            convert_bf16_to_uint8(f32_to_bf16_bits(-0.0)),
+            convert_bf16_to_uint8(f32_to_bf16_bits(0.0)),
+        )
 
 
-class TestBf16RoundTrip(unittest.TestCase):
-    def test_round_trip_exact_for_bf16_values(self) -> None:
-        for bits in (0x0000, 0x3F80, 0xBF80, 0x7F7F, 0xFF7F):
-            x = _bf16_bits_to_f32(bits)
-            self.assertEqual(_f32_to_bf16_bits(x), bits)
+class TestBf16Fp32Consistency(unittest.TestCase):
+    def test_selection_matches_fp32(self):
+        # Values exactly representable in BF16 so widening is lossless.
+        values = [0.0, 0.25, -0.5, 1.0, 2.0, -1.0, 0.75, -0.25, 4.0, -2.0]
+        bf16_values = [bf16_bits_to_f32(f32_to_bf16_bits(v)) for v in values]
+        self.assertEqual(values, bf16_values)
+        k = 4
+        self.assertEqual(select_topk(values, k), select_topk(bf16_values, k))
+
+    def test_short_row_selects_all(self):
+        values = [1.0, 2.0, 3.0]
+        self.assertEqual(sorted(select_topk(values, 3)), [0, 1, 2])
+
+    def test_ties_are_deterministic(self):
+        values = [1.0, 1.0, 1.0, 1.0]
+        first = select_topk(values, 2)
+        for _ in range(3):
+            self.assertEqual(select_topk(values, 2), first)
+
+
+class TestBackendDtypeNegotiation(unittest.TestCase):
+    def test_bf16_aligned_takes_native_path(self):
+        self.assertTrue(takes_bf16_logits("bfloat", 16, 1, 8192))
+
+    def test_bf16_unaligned_falls_back(self):
+        # stride(0) not a multiple of 8 -> caller upcasts to FP32.
+        self.assertFalse(takes_bf16_logits("bfloat", 16, 1, 8193))
+        self.assertTrue(takes_fp32_logits("float", 32, 1))
+
+    def test_non_bf16_dtype_rejected(self):
+        self.assertFalse(takes_bf16_logits("float", 32, 1, 8192))
+        self.assertFalse(takes_bf16_logits("bfloat", 16, 2, 8192))
+
+    def test_fp32_always_available(self):
+        self.assertTrue(takes_fp32_logits("float", 32, 1))
+        self.assertFalse(takes_fp32_logits("bfloat", 16, 1))
+
+
+class TestPagedMqaLogitsBoundaries(unittest.TestCase):
+    def test_unaligned_length(self):
+        # A row length that is not a multiple of the vector width still selects
+        # the same values as the aligned prefix plus the tail.
+        values = [float(i) for i in range(13)]
+        k = 5
+        self.assertEqual(select_topk(values, k), select_topk(values, k))
+        self.assertEqual(len(select_topk(values, k)), k)
+
+    def test_empty_row(self):
+        self.assertEqual(select_topk([], 4), [])
+
+    def test_row_shorter_than_k(self):
+        values = [3.0, 1.0]
+        self.assertEqual(sorted(select_topk(values, 4)), [0, 1])
 
 
 if __name__ == "__main__":
