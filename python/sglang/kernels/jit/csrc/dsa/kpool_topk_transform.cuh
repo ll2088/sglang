@@ -81,6 +81,35 @@ __device__ __forceinline__ auto vec_coarse_bin(const InT* buf, uint32_t e) -> ui
   }
 }
 
+// Visit a row's scores as (index, coarse bin, score).  BF16 is read two scores
+// per 32-bit load and binned with one packed conversion, so the histogram pass
+// does not pay a per-element conversion.  FP32 keeps the scalar path.
+template <typename InT, typename Visit>
+__device__ __forceinline__ void for_each_coarse_bin(const InT* __restrict__ row, int length, Visit visit) {
+  const auto tx = threadIdx.x;
+  if constexpr (std::is_same_v<InT, __nv_bfloat16>) {
+    const auto* words = reinterpret_cast<const uint32_t*>(row);
+    const int nwords = length / 2;
+    for (int i = tx; i < nwords; i += BLOCK_SIZE) {
+      const uint32_t w = words[i];
+      const uint2 bins = convert_bf16x2_to_uint8x2(w);
+      visit(2 * i, static_cast<uint8_t>(bins.x), __uint_as_float(w << 16));
+      visit(2 * i + 1, static_cast<uint8_t>(bins.y), __uint_as_float(w & 0xFFFF0000u));
+    }
+    if ((length & 1) && tx == 0) {
+      const int i = length - 1;
+      const uint32_t w = words[i / 2];
+      const uint2 bins = convert_bf16x2_to_uint8x2(w);
+      visit(i, static_cast<uint8_t>(bins.y), __uint_as_float(w & 0xFFFF0000u));
+    }
+  } else {
+    for (int i = tx; i < length; i += BLOCK_SIZE) {
+      const float sc = row[i];
+      visit(i, convert_to_uint8(sc), sc);
+    }
+  }
+}
+
 __device__ __forceinline__ auto convert_to_uint8(float x) -> uint8_t {
   __half h = __float2half_rn(x);
   uint16_t bits = __half_as_ushort(h);
@@ -121,10 +150,9 @@ fast_topk_cuda_tl_impl(const InT* __restrict__ input, int* __restrict__ index, i
   if (tx < RADIX + 1) s_histogram[tx] = 0;
   __syncthreads();
 
-  for (int idx = tx; idx < length; idx += BLOCK_SIZE) {
-    const auto bin = vec_coarse_bin(input + row_start, static_cast<uint32_t>(idx));
+  for_each_coarse_bin(input + row_start, length, [&](int, uint8_t bin, float) {
     ::atomicAdd(&s_histogram[bin], 1);
-  }
+  });
   __syncthreads();
 
   const auto run_cumsum = [&] {
@@ -157,13 +185,12 @@ fast_topk_cuda_tl_impl(const InT* __restrict__ input, int* __restrict__ index, i
   const auto num_threshold_candidates = s_histogram[threshold_bin] - s_histogram[threshold_bin + 1];
 
   if (topk == 0) {
-    for (int idx = tx; idx < length; idx += BLOCK_SIZE) {
-      const auto bin = static_cast<int>(vec_coarse_bin(input + row_start, static_cast<uint32_t>(idx)));
-      if (bin > threshold_bin) {
+    for_each_coarse_bin(input + row_start, length, [&](int idx, uint8_t bin, float) {
+      if (static_cast<int>(bin) > threshold_bin) {
         const auto pos = ::atomicAdd(&s_counter, 1);
         index[pos] = idx;
       }
-    }
+    });
     __syncthreads();
     return;
   } else if (num_threshold_candidates > int(SMEM_INPUT_SIZE)) {
@@ -230,9 +257,8 @@ fast_topk_cuda_tl_impl(const InT* __restrict__ input, int* __restrict__ index, i
     }
     __syncthreads();
 
-    for (int idx = tx; idx < length; idx += BLOCK_SIZE) {
-      const auto raw_input = input[idx + row_start];
-      const auto bin = static_cast<int>(vec_coarse_bin(input + row_start, static_cast<uint32_t>(idx)));
+    for_each_coarse_bin(input + row_start, length, [&](int idx, uint8_t coarse, float raw_input) {
+      const auto bin = static_cast<int>(coarse);
       if (bin > threshold_bin) {
         const auto pos = ::atomicAdd(&s_counter, 1);
         index[pos] = idx;
@@ -240,12 +266,12 @@ fast_topk_cuda_tl_impl(const InT* __restrict__ input, int* __restrict__ index, i
         const auto pos = ::atomicAdd(&s_num_input[0], 1);
         if (C10_LIKELY(pos < SMEM_INPUT_SIZE)) {
           s_input_idx[0][pos] = idx;
-          const auto bin = convert_to_uint32(raw_input);
-          const auto sub_bin = (bin >> 24) & 0xFF;
+          const auto key = convert_to_uint32(raw_input);
+          const auto sub_bin = (key >> 24) & 0xFF;
           ::atomicAdd(&s_histogram[sub_bin], 1);
         }
       }
-    }
+    });
     __syncthreads();
   }
 
