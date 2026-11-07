@@ -3,6 +3,9 @@ import struct
 
 import pytest
 
+# 本文件只依赖标准库与 pytest，禁止在模块作用域导入 sglang/torch/CUDA 扩展，
+# 以保证在最小 CI 环境中可被收集。内核级覆盖见 test_dsa_topk_bf16_kernel.py。
+
 # This file is intentionally dependency-free (stdlib only) so it can be
 # collected and run in a minimal CI environment without sglang's runtime
 # dependencies. Kernel-level coverage lives in test_dsa_topk_bf16_kernel.py.
@@ -19,6 +22,11 @@ def _bf16_bits(x: float) -> int:
     lsb = (f32 >> 16) & 1
     rounding = 0x7FFF + lsb
     return ((f32 + rounding) >> 16) & 0xFFFF
+
+
+def _takes_bf16_logits(dtype_code: str, bits: int, lanes: int, stride0: int) -> bool:
+    """调度层能力协商的纯 Python 参考：BF16 原生读取需 16 字节行对齐。"""
+    return dtype_code == "bfloat" and bits == 16 and lanes == 1 and stride0 % 8 == 0
 
 
 def _bf16_from_bits(bits: int) -> float:
@@ -118,3 +126,37 @@ def test_bf16_nan_and_inf_keys() -> None:
     ninf_bits = _bf16_bits(float("-inf"))
     assert _ordered_key16(inf_bits) > _ordered_key16(_bf16_bits(1.0))
     assert _ordered_key16(ninf_bits) < _ordered_key16(_bf16_bits(-1.0))
+
+
+@pytest.mark.parametrize(
+    "dtype_code,bits,lanes,stride0,expected",
+    [
+        ("bfloat", 16, 1, 8, True),
+        ("bfloat", 16, 1, 16, True),
+        ("bfloat", 16, 1, 7, False),
+        ("bfloat", 16, 1, 4, False),
+        ("float", 32, 1, 8, False),
+        ("bfloat", 16, 2, 8, False),
+    ],
+)
+def test_takes_bf16_logits_capability_negotiation(
+    dtype_code: str, bits: int, lanes: int, stride0: int, expected: bool
+) -> None:
+    """后端 dtype 能力协商：不满足 16 字节对齐时回退 FP32 路径。"""
+    assert _takes_bf16_logits(dtype_code, bits, lanes, stride0) is expected
+
+
+def test_bf16x2_packed_histogram_matches_scalar_topk() -> None:
+    """BF16x2 打包直方图提取与逐元素标量直方图在 top-k 选择上一致。"""
+    k_bits = 8
+    scores = [0.5, 3.0, -1.0, 2.0, 3.0, 0.0, 1.5, -2.0]
+    words = [_pack_bf16x2(scores[i], scores[i + 1]) for i in range(0, len(scores), 2)]
+    packed_hist = [0] * (1 << k_bits)
+    for w in words:
+        lo, hi = _coarse_bin_bf16x2(w, k_bits)
+        packed_hist[lo] += 1
+        packed_hist[hi] += 1
+    scalar_hist = [0] * (1 << k_bits)
+    for s in scores:
+        scalar_hist[_ordered_key16(_bf16_bits(s)) >> (16 - k_bits)] += 1
+    assert packed_hist == scalar_hist
