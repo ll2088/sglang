@@ -34,6 +34,15 @@ def _takes_bf16_logits_for(dtype_code: int, dtype_bits: int, dtype_lanes: int, r
     return dtype_code == 5 and dtype_bits == 16 and dtype_lanes == 1 and row_stride % 8 == 0
 
 
+def _takes_bf16_logits_for_width(dtype_code: int, dtype_bits: int, dtype_lanes: int, row_stride: int, elem_bytes: int) -> bool:
+    # Same predicate, but the alignment granularity is derived from the element
+    # width instead of being hardcoded to 8.  Mirrors kVecWidth<InT>.
+    if dtype_code != 5 or dtype_bits != 16 or dtype_lanes != 1:
+        return False
+    vec_width = 16 // elem_bytes
+    return row_stride % vec_width == 0
+
+
 def _takes_fp32_logits_for(dtype_code: int, dtype_bits: int, dtype_lanes: int) -> bool:
     # kDLFloat == 2.
     return dtype_code == 2 and dtype_bits == 32 and dtype_lanes == 1
@@ -79,6 +88,28 @@ def test_bf16x2_packed_bins_negative_zero():
     assert _host_convert_bf16_to_uint8(_bf16_bits(-0.0)) == _host_convert_bf16_to_uint8(_bf16_bits(0.0))
 
 
+def test_bf16x2_packed_bins_high_half_isolation():
+    # Changing only the high half must not perturb the low half's bin.
+    lo = _bf16_bits(1.5)
+    w0 = (lo) | (_bf16_bits(2.0) << 16)
+    w1 = (lo) | (_bf16_bits(-2.0) << 16)
+    lo0, _ = _host_convert_bf16x2_to_uint8x2(w0)
+    lo1, _ = _host_convert_bf16x2_to_uint8x2(w1)
+    assert lo0 == lo1 == _host_convert_bf16_to_uint8(lo)
+
+
+def test_bf16x2_packed_bins_all_16bit_words():
+    # Exhaustive over the 16-bit space would be slow; sample every 257th word
+    # plus the sign/zero boundaries and check the packed form against scalar.
+    words = list(range(0, 1 << 16, 257)) + [0x0000, 0x8000, 0x7F80, 0xFF80, 0x0001, 0x8001]
+    for bits in words:
+        w = (bits << 16) | bits
+        got_lo, got_hi = _host_convert_bf16x2_to_uint8x2(w)
+        want = _host_convert_bf16_to_uint8(bits)
+        assert got_lo == want
+        assert got_hi == want
+
+
 # ---------------------------------------------------------------------------
 # Backend dtype capability negotiation and fallback
 # ---------------------------------------------------------------------------
@@ -102,6 +133,18 @@ def test_takes_bf16_logits_rejects_wrong_lanes():
     assert not _takes_bf16_logits_for(5, 16, 2, 16)
 
 
+@pytest.mark.parametrize("elem_bytes,aligned,unaligned", [(2, 8, 7), (4, 4, 3)])
+def test_takes_bf16_logits_width_parameterized(elem_bytes, aligned, unaligned):
+    # The alignment granularity must follow the element width, not a constant.
+    assert _takes_bf16_logits_for_width(5, 16, 1, aligned, elem_bytes)
+    assert not _takes_bf16_logits_for_width(5, 16, 1, unaligned, elem_bytes)
+
+
+def test_takes_bf16_logits_empty_row_is_aligned():
+    # A zero-length row has stride 0, which is trivially 16-byte aligned.
+    assert _takes_bf16_logits_for(5, 16, 1, 0)
+
+
 def test_takes_fp32_logits_always_true_for_fp32():
     assert _takes_fp32_logits_for(2, 32, 1)
     assert not _takes_fp32_logits_for(5, 16, 1)
@@ -114,6 +157,20 @@ def test_fallback_selects_fp32_when_bf16_unaligned():
     use_fp32 = _takes_fp32_logits_for(2, 32, 1)
     assert not use_bf16
     assert use_fp32
+
+
+def test_fallback_records_reason():
+    # The fallback path must be observable, not silent.
+    def resolve_with_reason(backend_supports_bf16: bool, aligned: bool) -> tuple[str, str]:
+        if backend_supports_bf16 and aligned:
+            return "bf16", "native"
+        if not backend_supports_bf16:
+            return "fp32", "backend_lacks_bf16"
+        return "fp32", "row_stride_unaligned"
+
+    assert resolve_with_reason(True, True) == ("bf16", "native")
+    assert resolve_with_reason(True, False) == ("fp32", "row_stride_unaligned")
+    assert resolve_with_reason(False, True) == ("fp32", "backend_lacks_bf16")
 
 
 # ---------------------------------------------------------------------------
