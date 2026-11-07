@@ -7,10 +7,32 @@ extraction, so CI can run them without installing the full sglang runtime.
 
 from __future__ import annotations
 
+import importlib.util
+import pathlib
+
 import numpy as np
 import pytest
 
-from sglang.kernels.jit.csrc.dsa import bf16_capability as cap
+
+def _load_capability_module():
+    """Load bf16_capability.py by path so this test never imports sglang.
+
+    Importing ``sglang.kernels.jit.csrc.dsa`` pulls in the package __init__
+    chain, which needs torch and the full runtime.  The capability helper is a
+    standalone pure-Python module, so load it directly from its file.
+    """
+    here = pathlib.Path(__file__).resolve()
+    repo_root = here.parents[2]
+    path = repo_root / "python" / "sglang" / "kernels" / "jit" / "csrc" / "dsa" / "bf16_capability.py"
+    if not path.is_file():
+        pytest.skip(f"bf16_capability.py not found at {path}")
+    spec = importlib.util.spec_from_file_location("dsa_bf16_capability", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+cap = _load_capability_module()
 
 
 # ---------------------------------------------------------------------------

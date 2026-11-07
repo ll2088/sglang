@@ -1,5 +1,5 @@
-# Minimal dependencies for tests/kernels/test_dsa_topk_bf16.py.
-# Deliberately does NOT install sglang or torch: the BF16 capability tests are
-# pure Python and must run in a small dedicated CI job.
-pytest>=7.0
-numpy>=1.24
+# Minimal deps for the pure-Python DSA top-k capability tests.
+# Deliberately excludes sglang, torch and CUDA packages so CI can run these
+# tests in a clean venv without resolving the full runtime dependency tree.
+numpy
+pytest
