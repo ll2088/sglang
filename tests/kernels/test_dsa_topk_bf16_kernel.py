@@ -24,7 +24,13 @@ cuda_required = pytest.mark.skipif(
 
 
 def _load_extension():
-    """Import the compiled sglang top-k extension, or skip."""
+    """Import the compiled sglang top-k extension, or skip.
+
+    The import is deliberately lazy and guarded: this module must be
+    collectable in a minimal environment where the sglang package (and its
+    heavy dependency tree) is not installed. Only the CUDA kernel tests need
+    the extension; the pure-Python negotiation tests below do not.
+    """
     try:
         import sglang.kernels.jit.csrc.dsa.kpool_topk_transform  # noqa: F401
     except Exception as exc:  # pragma: no cover - environment dependent
