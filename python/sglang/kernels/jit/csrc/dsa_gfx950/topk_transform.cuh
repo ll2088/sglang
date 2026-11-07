@@ -885,6 +885,13 @@ struct TopKTransformKernel {
   /// PTMODE 2 stages a per-block page-table window in LDS.  Page-table strides
   /// too wide for that fixed window use the numerically identical PTMODE 0
   /// global-gather specialization instead.
+  // BF16 logits are read natively when the row stride keeps every row
+  // 16-byte aligned; otherwise the caller upcasts and takes the FP32 kernel.
+  static auto takes_bf16_logits(const tvm::ffi::TensorView& logits) -> bool {
+    return logits.dtype().code == kDLBfloat && logits.dtype().bits == 16 && logits.dtype().lanes == 1 &&
+           logits.stride(0) % 8 == 0;
+  }
+
   static void
   run(const tvm::ffi::TensorView logits,
       const tvm::ffi::TensorView row_ends,

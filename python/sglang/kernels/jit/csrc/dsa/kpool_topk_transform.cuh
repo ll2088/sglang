@@ -11,10 +11,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #ifndef USE_ROCM
 #include <cuda_fp16.h>
+#include <cuda_bf16.h>
 #else
 #include <hip/hip_fp16.h>
+#include <hip/hip_bf16.h>
 #endif
 
 namespace sglang {
@@ -34,13 +37,48 @@ inline constexpr int kThreadsPerBlock = 1024;
 // Keep 4K threshold-bin candidates per round; rescan larger bins without clipping.
 inline constexpr std::size_t kSmem = 8 * 1024 * sizeof(uint32_t);  // 32KB (bytes)
 
+template <typename InT>
 struct FastTopKParams {
-  const float* __restrict__ input;         // [B, input_stride]
+  const InT* __restrict__ input;           // [B, input_stride]
   const int32_t* __restrict__ row_starts;  // [B] or nullptr
   int32_t* __restrict__ indices;           // unused here (kept for layout parity)
   const int32_t* __restrict__ lengths;     // [B]
   int64_t input_stride;
 };
+
+// Elements per 16-byte vector: rows and slices are aligned to this.
+template <typename InT>
+inline constexpr int kVecWidth = 16 / sizeof(InT);
+
+// Ordered 16-bit key of a BF16 score, matching convert_to_uint8's fp16 key.
+__device__ __forceinline__ auto convert_bf16_to_uint8(__nv_bfloat16 x) -> uint8_t {
+  const uint16_t bits = __bfloat16_as_ushort(x);
+  const uint16_t key = (bits & 0x8000) ? static_cast<uint16_t>(~bits) : static_cast<uint16_t>(bits | 0x8000);
+  return static_cast<uint8_t>(key >> 8);
+}
+
+// Coarse bins of the two BF16 scores packed in `w` (low half first), from one
+// packed conversion and key flip.
+__device__ __forceinline__ auto convert_bf16x2_to_uint8x2(uint32_t w) -> uint2 {
+  const __nv_bfloat162 h = __floats2bfloat162_rn(__uint_as_float(w << 16), __uint_as_float(w & 0xFFFF0000u));
+  const uint32_t bits = *reinterpret_cast<const uint32_t*>(&h);
+  const uint32_t sign = bits & 0x80008000u;
+  const uint32_t key = bits ^ ((sign - (sign >> 15)) | 0x80008000u);
+  return make_uint2((key & 0xFFFFu) >> 8, key >> 24);
+}
+
+// Coarse bin of score e of a staged vector: FP32 bins each score, BF16 bins
+// both halves of the packed word with one conversion.
+template <typename InT>
+__device__ __forceinline__ auto vec_coarse_bin(const InT* buf, uint32_t e) -> uint8_t {
+  if constexpr (std::is_same_v<InT, __nv_bfloat16>) {
+    const auto* words = reinterpret_cast<const uint32_t*>(buf);
+    const uint2 bins = convert_bf16x2_to_uint8x2(words[e / 2]);
+    return static_cast<uint8_t>(e % 2 ? bins.y : bins.x);
+  } else {
+    return convert_to_uint8(buf[e]);
+  }
+}
 
 __device__ __forceinline__ auto convert_to_uint8(float x) -> uint8_t {
   __half h = __float2half_rn(x);
@@ -59,9 +97,9 @@ __device__ __forceinline__ auto make_topk_key(float score, int index) -> uint64_
   return (static_cast<uint64_t>(convert_to_uint32(score)) << 32) | ~static_cast<uint32_t>(index);
 }
 
-template <int K>
+template <int K, typename InT>
 __device__ void
-fast_topk_cuda_tl_impl(const float* __restrict__ input, int* __restrict__ index, int row_start, int length) {
+fast_topk_cuda_tl_impl(const InT* __restrict__ input, int* __restrict__ index, int row_start, int length) {
   // We assume length > K here, or it will crash
   int topk = K;
   constexpr auto BLOCK_SIZE = 1024;
@@ -83,7 +121,7 @@ fast_topk_cuda_tl_impl(const float* __restrict__ input, int* __restrict__ index,
   __syncthreads();
 
   for (int idx = tx; idx < length; idx += BLOCK_SIZE) {
-    const auto bin = convert_to_uint8(input[idx + row_start]);
+    const auto bin = vec_coarse_bin(input + row_start, static_cast<uint32_t>(idx));
     ::atomicAdd(&s_histogram[bin], 1);
   }
   __syncthreads();
@@ -119,7 +157,7 @@ fast_topk_cuda_tl_impl(const float* __restrict__ input, int* __restrict__ index,
 
   if (topk == 0) {
     for (int idx = tx; idx < length; idx += BLOCK_SIZE) {
-      const auto bin = static_cast<int>(convert_to_uint8(input[idx + row_start]));
+      const auto bin = static_cast<int>(vec_coarse_bin(input + row_start, static_cast<uint32_t>(idx)));
       if (bin > threshold_bin) {
         const auto pos = ::atomicAdd(&s_counter, 1);
         index[pos] = idx;
@@ -140,7 +178,7 @@ fast_topk_cuda_tl_impl(const float* __restrict__ input, int* __restrict__ index,
       const auto offset = 56 - round * 8;
       for (int idx = tx; idx < length; idx += BLOCK_SIZE) {
         const auto raw_input = input[idx + row_start];
-        if (convert_to_uint8(raw_input) != threshold_bin) continue;
+        if (vec_coarse_bin(input + row_start, static_cast<uint32_t>(idx)) != threshold_bin) continue;
         const auto key = make_topk_key(raw_input, idx);
         const bool prefix_matches = round == 0 || (key >> (64 - round * 8)) == prefix;
         if (prefix_matches) ::atomicAdd(&s_histogram[(key >> offset) & 0xFF], 1);
@@ -161,7 +199,7 @@ fast_topk_cuda_tl_impl(const float* __restrict__ input, int* __restrict__ index,
         __syncthreads();
         for (int idx = tx; idx < length; idx += BLOCK_SIZE) {
           const auto raw_input = input[idx + row_start];
-          const auto coarse_bin = convert_to_uint8(raw_input);
+          const auto coarse_bin = vec_coarse_bin(input + row_start, static_cast<uint32_t>(idx));
           const auto key_prefix = make_topk_key(raw_input, idx) >> (64 - prefix_bits);
           if (coarse_bin > threshold_bin || (coarse_bin == threshold_bin && key_prefix > selected_prefix)) {
             const auto pos = ::atomicAdd(&s_counter, 1);
@@ -193,7 +231,7 @@ fast_topk_cuda_tl_impl(const float* __restrict__ input, int* __restrict__ index,
 
     for (int idx = tx; idx < length; idx += BLOCK_SIZE) {
       const auto raw_input = input[idx + row_start];
-      const auto bin = static_cast<int>(convert_to_uint8(raw_input));
+      const auto bin = static_cast<int>(vec_coarse_bin(input + row_start, static_cast<uint32_t>(idx)));
       if (bin > threshold_bin) {
         const auto pos = ::atomicAdd(&s_counter, 1);
         index[pos] = idx;
@@ -291,9 +329,9 @@ __device__ __forceinline__ int32_t transform_kpool_token(
   return raw_token;
 }
 
-template <int K>
+template <int K, typename InT>
 __global__ __launch_bounds__(kThreadsPerBlock) void kpool_topk_transform_kernel(
-    const __grid_constant__ FastTopKParams params,
+    const __grid_constant__ FastTopKParams<InT> params,
     int32_t* __restrict__ dst_token_indices,
     const int64_t dst_stride,
     const int32_t pool_size,
@@ -337,7 +375,7 @@ __global__ __launch_bounds__(kThreadsPerBlock) void kpool_topk_transform_kernel(
   }
 
   __shared__ int s_indices[K];
-  fast_topk_cuda_tl_impl<K>(score, s_indices, row_start, length);
+  fast_topk_cuda_tl_impl<K, InT>(score, s_indices, row_start, length);
   for (int col = tid; col < out_cols; col += kThreadsPerBlock) {
     if (col < history_len) {
       const auto group_rank = col / pool_size;
@@ -363,7 +401,15 @@ const T* optional_data_ptr(const tvm::ffi::Optional<tvm::ffi::TensorView>& opt) 
 }
 
 struct KpoolTopKTransformKernel {
-  static constexpr auto kernel = kpool_topk_transform_kernel<kGroupTopK>;
+  static constexpr auto kernel_fp32 = kpool_topk_transform_kernel<kGroupTopK, float>;
+  static constexpr auto kernel_bf16 = kpool_topk_transform_kernel<kGroupTopK, __nv_bfloat16>;
+
+  // BF16 logits are read natively when the row stride keeps every row 16-byte
+  // aligned; otherwise the caller upcasts and takes the FP32 kernel.
+  static auto takes_bf16_logits(const tvm::ffi::TensorView& score) -> bool {
+    return score.dtype().code == kDLBfloat && score.dtype().bits == 16 && score.dtype().lanes == 1 &&
+           score.stride(0) % kVecWidth<__nv_bfloat16> == 0;
+  }
 
   static void transform(
       const tvm::ffi::TensorView score,
@@ -383,7 +429,13 @@ struct KpoolTopKTransformKernel {
     auto device = SymbolicDevice{};
     device.set_options<kDLGPU>();
 
-    TensorMatcher({B, -1}).with_strides({S, 1}).with_dtype<float>().with_device(device).verify(score);
+    auto score_dtype = SymbolicDType{};
+    score_dtype.set_options<kDLFloat, kDLBfloat>();
+    TensorMatcher({B, -1}).with_strides({S, 1}).with_dtype(score_dtype).with_device(device).verify(score);
+    RuntimeCheck(
+        (score.dtype().code == kDLFloat && score.dtype().bits == 32) ||
+            (score.dtype().code == kDLBfloat && score.dtype().bits == 16),
+        "score must be float32 or bfloat16");
     TensorMatcher({B}).with_dtype<int32_t>().with_device(device).verify(lengths);
     TensorMatcher({B, out_cols_sym}).with_dtype<int32_t>().with_device(device).verify(dst_token_indices);
 
@@ -441,28 +493,59 @@ struct KpoolTopKTransformKernel {
       TensorMatcher({B}).with_dtype<int32_t>().with_device(device).verify(page_table_row_index_opt.value());
     }
 
-    const auto params = FastTopKParams{
+    const auto input_stride = static_cast<int64_t>(S.unwrap());
+    const auto dst_stride = static_cast<int64_t>(dst_token_indices.strides()[0]);
+    const auto* page_table_row_index_ptr = optional_data_ptr<int32_t>(page_table_row_index_opt);
+    const auto* topk_indices_offset_ptr = optional_data_ptr<int32_t>(topk_indices_offset_opt);
+    const auto* seq_lens_ptr = optional_data_ptr<int32_t>(seq_lens_opt);
+    const auto* row_starts_ptr = optional_data_ptr<int32_t>(row_starts_opt);
+
+    if (takes_bf16_logits(score)) {
+      const auto params = FastTopKParams<__nv_bfloat16>{
+          .input = static_cast<const __nv_bfloat16*>(score.data_ptr()),
+          .row_starts = row_starts_ptr,
+          .indices = nullptr,
+          .lengths = static_cast<const int32_t*>(lengths.data_ptr()),
+          .input_stride = input_stride,
+      };
+      runtime::set_max_dynamic_smem_per_device<kernel_bf16>(device.unwrap().device_id, kSmem);
+      LaunchKernel(batch_size, kThreadsPerBlock, device.unwrap(), kSmem)(
+          kernel_bf16,
+          params,
+          static_cast<int32_t*>(dst_token_indices.data_ptr()),
+          dst_stride,
+          static_cast<int32_t>(pool_size),
+          token_topk,
+          out_cols,
+          page_table_ptr,
+          page_table_stride,
+          page_table_row_index_ptr,
+          topk_indices_offset_ptr,
+          seq_lens_ptr);
+      return;
+    }
+
+    const auto params = FastTopKParams<float>{
         .input = static_cast<const float*>(score.data_ptr()),
-        .row_starts = optional_data_ptr<int32_t>(row_starts_opt),
+        .row_starts = row_starts_ptr,
         .indices = nullptr,
         .lengths = static_cast<const int32_t*>(lengths.data_ptr()),
-        .input_stride = static_cast<int64_t>(S.unwrap()),
+        .input_stride = input_stride,
     };
-
-    runtime::set_max_dynamic_smem_per_device<kernel>(device.unwrap().device_id, kSmem);
+    runtime::set_max_dynamic_smem_per_device<kernel_fp32>(device.unwrap().device_id, kSmem);
     LaunchKernel(batch_size, kThreadsPerBlock, device.unwrap(), kSmem)(
-        kernel,
+        kernel_fp32,
         params,
         static_cast<int32_t*>(dst_token_indices.data_ptr()),
-        static_cast<int64_t>(dst_token_indices.strides()[0]),
+        dst_stride,
         static_cast<int32_t>(pool_size),
         token_topk,
         out_cols,
         page_table_ptr,
         page_table_stride,
-        optional_data_ptr<int32_t>(page_table_row_index_opt),
-        optional_data_ptr<int32_t>(topk_indices_offset_opt),
-        optional_data_ptr<int32_t>(seq_lens_opt));
+        page_table_row_index_ptr,
+        topk_indices_offset_ptr,
+        seq_lens_ptr);
   }
 };
 
