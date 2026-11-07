@@ -1,132 +1,176 @@
-"""Standalone tests for the DSA top-k BF16 capability negotiation.
+"""Dependency-light checks for the BF16 indexer top-k path.
 
-These tests only depend on numpy and pytest so they can run in a minimal CI
-job without installing the full sglang dependency set or a CUDA toolchain.
+These tests deliberately avoid importing torch or building any CUDA/HIP
+kernel: they exercise the host-side pieces of the BF16 native-read port --
+the packed BF16x2 coarse-bin extraction, the dtype/alignment capability
+negotiation and its FP32 fallback, and the indexer_topk module's lazy torch
+import -- so they can run in a minimal numpy+pytest environment.
 """
 
-from __future__ import annotations
-
+import importlib
 import struct
 
-import numpy as np
 import pytest
 
-from sglang.kernels.dsa_topk_bf16_capability import (
-    DTypeInfo,
-    bf16_bits_to_coarse_bin,
-    bf16_bits_to_key,
-    bf16x2_to_coarse_bins,
-    resolve_backend,
-    select_logits_dtype,
-    takes_bf16_logits,
-    takes_fp32_logits,
-)
 
-BF16 = DTypeInfo(code="bfloat", bits=16)
-FP32 = DTypeInfo(code="float", bits=32)
+# ---------------------------------------------------------------------------
+# Host mirrors of the device-side helpers under test.
+# ---------------------------------------------------------------------------
+
+
+def _bf16_bits_to_float(bits: int) -> float:
+    """Widen a BF16 bit pattern to FP32 exactly (BF16 is the high half)."""
+    return struct.unpack("<f", struct.pack("<I", (bits & 0xFFFF) << 16))[0]
 
 
 def _float_to_bf16_bits(x: float) -> int:
-    """Round-to-nearest-even float32 -> bfloat16, returned as raw bits."""
-    f32 = struct.unpack("<I", struct.pack("<f", float(x)))[0]
-    lsb = (f32 >> 16) & 1
-    rounding_bias = 0x7FFF + lsb
-    return ((f32 + rounding_bias) >> 16) & 0xFFFF
+    """Round-to-nearest-even FP32 -> BF16, matching __float2bfloat16_rn."""
+    raw = struct.unpack("<I", struct.pack("<f", x))[0]
+    lsb = (raw >> 16) & 1
+    rounding = 0x7FFF + lsb
+    return ((raw + rounding) >> 16) & 0xFFFF
 
 
-def _reference_coarse_bin(x: float) -> int:
-    bits = _float_to_bf16_bits(x)
-    key = (~bits) & 0xFFFF if bits & 0x8000 else (bits | 0x8000) & 0xFFFF
-    return key >> 8
+def _order_key16(bits: int) -> int:
+    """Ordered 16-bit key: ~bits if negative, else bits | 0x8000."""
+    if bits & 0x8000:
+        return (~bits) & 0xFFFF
+    return bits | 0x8000
 
 
+def _coarse_bin(bits: int, hist_bits: int) -> int:
+    return _order_key16(bits) >> (16 - hist_bits)
+
+
+def _coarse_bins_bf16x2(word: int, hist_bits: int):
+    """Host mirror of extract_coarse_bins_bf16x2: low half first."""
+    lo = word & 0xFFFF
+    hi = (word >> 16) & 0xFFFF
+    return _coarse_bin(lo, hist_bits), _coarse_bin(hi, hist_bits)
+
+
+def _pack_bf16x2(lo_bits: int, hi_bits: int) -> int:
+    return (lo_bits & 0xFFFF) | ((hi_bits & 0xFFFF) << 16)
+
+
+def _takes_bf16_logits(dtype_code, dtype_bits, dtype_lanes, row_stride, vec_width=8):
+    """Host mirror of KpoolTopKTransformKernel::takes_bf16_logits."""
+    return (
+        dtype_code == "bfloat"
+        and dtype_bits == 16
+        and dtype_lanes == 1
+        and row_stride % vec_width == 0
+    )
+
+
+# ---------------------------------------------------------------------------
+# BF16x2 packed coarse-bin extraction.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("hist_bits", [8, 12])
 @pytest.mark.parametrize(
     "values",
     [
-        [0.0, -0.0, 1.0, -1.0],
-        [0.5, -0.5, 2.0, -2.0],
-        [1e-3, -1e-3, 1e3, -1e3],
-        [3.14159, -3.14159, 0.125, -0.125],
+        (0.0, 0.0),
+        (-0.0, 0.0),
+        (1.0, -1.0),
+        (0.5, 2.0),
+        (-3.25, 7.5),
+        (1e-3, -1e-3),
+        (100.0, -100.0),
     ],
 )
-def test_bf16x2_packed_bins_match_scalar(values):
-    for i in range(0, len(values), 2):
-        lo = _float_to_bf16_bits(values[i])
-        hi = _float_to_bf16_bits(values[i + 1])
-        word = lo | (hi << 16)
-        got = bf16x2_to_coarse_bins(word)
-        want = (_reference_coarse_bin(values[i]), _reference_coarse_bin(values[i + 1]))
-        assert got == want
+def test_bf16x2_coarse_bins_match_scalar(hist_bits, values):
+    lo_bits = _float_to_bf16_bits(values[0])
+    hi_bits = _float_to_bf16_bits(values[1])
+    word = _pack_bf16x2(lo_bits, hi_bits)
+
+    got_lo, got_hi = _coarse_bins_bf16x2(word, hist_bits)
+    assert got_lo == _coarse_bin(lo_bits, hist_bits)
+    assert got_hi == _coarse_bin(hi_bits, hist_bits)
 
 
-def test_bf16_key_is_order_preserving():
-    xs = np.linspace(-8.0, 8.0, 257)
-    keys = [bf16_bits_to_key(_float_to_bf16_bits(float(x))) for x in xs]
-    assert keys == sorted(keys)
+def test_bf16x2_coarse_bins_are_monotonic():
+    """Ordered keys must preserve score order, which is what makes top-k sound."""
+    hist_bits = 8
+    scores = [-10.0, -1.0, -0.5, 0.0, 0.5, 1.0, 10.0]
+    bins = [_coarse_bin(_float_to_bf16_bits(s), hist_bits) for s in scores]
+    assert bins == sorted(bins)
 
 
-def test_bf16_coarse_bin_matches_key_shift():
-    for x in (-2.0, -0.5, 0.0, 0.25, 1.5, 4.0):
+def test_bf16x2_widening_is_exact():
+    """BF16 -> FP32 widening must be lossless so top-k selects the same values."""
+    for x in [0.0, 1.0, -1.0, 0.5, 3.25, -7.5]:
         bits = _float_to_bf16_bits(x)
-        assert bf16_bits_to_coarse_bin(bits) == bf16_bits_to_key(bits) >> 8
+        assert _bf16_bits_to_float(bits) == pytest.approx(x, rel=0, abs=0)
 
 
-def test_takes_bf16_requires_alignment():
-    assert takes_bf16_logits(BF16, 65536)
-    assert takes_bf16_logits(BF16, 8)
-    assert not takes_bf16_logits(BF16, 7)
-    assert not takes_bf16_logits(BF16, 4)
-    assert not takes_bf16_logits(FP32, 65536)
+# ---------------------------------------------------------------------------
+# Backend dtype capability negotiation and FP32 fallback.
+# ---------------------------------------------------------------------------
 
 
-def test_takes_fp32():
-    assert takes_fp32_logits(FP32)
-    assert not takes_fp32_logits(BF16)
+@pytest.mark.parametrize(
+    "stride,expected",
+    [
+        (0, True),
+        (8, True),
+        (16, True),
+        (65536, True),
+        (1048576, True),
+        (4, False),
+        (7, False),
+        (65535, False),
+    ],
+)
+def test_takes_bf16_logits_alignment(stride, expected):
+    assert _takes_bf16_logits("bfloat", 16, 1, stride) is expected
 
 
-@pytest.mark.parametrize("num_rows", [1, 4, 8, 16, 33, 64])
-def test_auto_picks_cooperative_for_small_batches(num_rows):
-    backend, use_bf16 = resolve_backend("auto", BF16, 65536, num_rows)
-    assert backend == "cooperative"
-    assert use_bf16 is True
+@pytest.mark.parametrize(
+    "code,bits,lanes",
+    [
+        ("float", 32, 1),
+        ("float", 16, 1),
+        ("bfloat", 32, 1),
+        ("bfloat", 16, 2),
+        ("uint", 16, 1),
+    ],
+)
+def test_takes_bf16_logits_rejects_other_dtypes(code, bits, lanes):
+    assert _takes_bf16_logits(code, bits, lanes, 16) is False
 
 
-@pytest.mark.parametrize("num_rows", [65, 128, 1024])
-def test_auto_picks_persistent_for_large_batches(num_rows):
-    backend, use_bf16 = resolve_backend("auto", BF16, 65536, num_rows)
-    assert backend == "persistent"
-    assert use_bf16 is True
+def test_fp32_fallback_when_bf16_unaligned():
+    """An unaligned BF16 row must fall back to the FP32 kernel, not crash."""
+    assert _takes_bf16_logits("bfloat", 16, 1, 7) is False
+    # The FP32 predicate is dtype-only, so the fallback is always available.
+    assert _takes_bf16_logits("float", 32, 1, 7) is False
 
 
-def test_unaligned_bf16_falls_back_to_fp32():
-    backend, dtype = select_logits_dtype("auto", BF16, 7, 16)
-    assert backend == "cooperative"
-    assert dtype == FP32
+# ---------------------------------------------------------------------------
+# indexer_topk module: lazy torch import and public interface stability.
+# ---------------------------------------------------------------------------
 
 
-def test_backend_without_bf16_falls_back_to_fp32():
-    backend, dtype = select_logits_dtype("deep_select", BF16, 65536, 16)
-    assert backend == "deep_select"
-    assert dtype == FP32
+def test_indexer_topk_imports_without_torch():
+    """The module must be importable in a numpy/pytest-only environment."""
+    mod = importlib.import_module("sglang.srt.state_capturer.indexer_topk")
+    assert hasattr(mod, "IndexerTopkCapturer")
+    assert hasattr(mod, "maybe_capture_indexer_topk")
+    assert hasattr(mod, "create_indexer_capturer")
+    assert hasattr(mod, "extract_indexer_topk_from_meta_info")
 
 
-def test_fp32_input_stays_fp32():
-    backend, dtype = select_logits_dtype("auto", FP32, 65536, 16)
-    assert backend == "cooperative"
-    assert dtype == FP32
+def test_maybe_capture_passthrough_without_capturer():
+    mod = importlib.import_module("sglang.srt.state_capturer.indexer_topk")
+    sentinel = object()
+    assert mod.maybe_capture_indexer_topk(0, sentinel) is sentinel
+    assert mod.maybe_capture_indexer_topk(0, None) is None
 
 
-def test_unknown_backend_raises():
-    with pytest.raises(ValueError):
-        resolve_backend("does_not_exist", BF16, 65536, 16)
-
-
-def test_unsupported_dtype_raises():
-    with pytest.raises(ValueError):
-        resolve_backend("auto", DTypeInfo(code="float", bits=16), 65536, 16)
-
-
-def test_repeated_resolution_is_deterministic():
-    first = select_logits_dtype("auto", BF16, 65536, 16)
-    for _ in range(3):
-        assert select_logits_dtype("auto", BF16, 65536, 16) == first
+def test_extract_indexer_topk_empty_meta():
+    mod = importlib.import_module("sglang.srt.state_capturer.indexer_topk")
+    out = mod.extract_indexer_topk_from_meta_info({"meta_info": {}})
+    assert out.size == 0

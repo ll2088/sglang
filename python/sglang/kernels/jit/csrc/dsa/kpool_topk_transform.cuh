@@ -444,6 +444,13 @@ struct KpoolTopKTransformKernel {
            score.stride(0) % kVecWidth<__nv_bfloat16> == 0;
   }
 
+  // Host-side mirror of the BF16 native-read predicate, kept free of tensor
+  // types so the dtype/alignment negotiation can be unit-tested without CUDA.
+  static auto takes_bf16_logits_for(int dtype_code, int dtype_bits, int dtype_lanes, int64_t row_stride) -> bool {
+    return dtype_code == kDLBfloat && dtype_bits == 16 && dtype_lanes == 1 &&
+           row_stride % kVecWidth<__nv_bfloat16> == 0;
+  }
+
   // FP32 logits are always readable; kept as a named capability so the
   // dispatcher can negotiate dtype without duplicating the predicate.
   static auto takes_fp32_logits(const tvm::ffi::TensorView& score) -> bool {
