@@ -45,6 +45,9 @@ class Qwen3VLArchConfig(TextEncoderArchConfig):
     head_dim: int | None = None
     hidden_state_skip_layer: int = 2
     text_len: int = 2048
+    # The Qwen3-VL image/video processors rescale and normalize uint8 RGB pixels
+    # per channel, so the encoder can reproduce that with one device lookup table.
+    vision_gpu_normalize: bool = False
 
     stacked_params_mapping: list[tuple[str, str, str]] = field(
         default_factory=lambda: [

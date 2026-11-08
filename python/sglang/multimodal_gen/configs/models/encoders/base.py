@@ -22,6 +22,10 @@ if TYPE_CHECKING:
 class EncoderArchConfig(ArchConfig):
     _fsdp_shard_conditions: list = field(default_factory=lambda: [])
     architectures: list[str] = field(default_factory=lambda: [])
+    # Keep uint8 pixels after resize and let the vision encoder normalize them on
+    # device right before the patch embedding (see `VisionNormalization`). Off by
+    # default: the CPU normalization stays the reference and the fallback.
+    vision_gpu_normalize: bool = False
     _supported_attention_backends: set[AttentionBackendEnum] = field(
         default_factory=lambda: {
             AttentionBackendEnum.FA,

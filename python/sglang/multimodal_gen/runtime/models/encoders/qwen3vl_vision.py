@@ -14,6 +14,11 @@ from sglang.multimodal_gen.runtime.models.encoders.qwen_vl_vision import (
     PackedSequenceMetadata,
     QwenVLVisionAttention,
 )
+from sglang.multimodal_gen.runtime.models.encoders.vision import (
+    VisionNormalization,
+    build_vision_pixel_lookup_table,
+    normalize_vision_pixels,
+)
 from sglang.srt.models.qwen3_vl import (
     Qwen3_VisionMLP,
     Qwen3VLMoeVisionPatchMerger,
@@ -248,6 +253,10 @@ class Qwen3VLVisionTransformer(nn.Module):
             layer_idx: merger_idx
             for merger_idx, layer_idx in enumerate(self.deepstack_visual_indexes)
         }
+        # Device-side pixel normalization is opt-in: the preprocessing stage keeps
+        # uint8 pixels and records the processor statistics here (None = CPU path).
+        self._vision_normalization: VisionNormalization | None = None
+        self._vision_lookup_table: torch.Tensor | None = None
 
     @property
     def dtype(self) -> torch.dtype:
@@ -256,6 +265,27 @@ class Qwen3VLVisionTransformer(nn.Module):
     @property
     def device(self) -> torch.device:
         return self.patch_embed.proj.weight.device
+
+    def set_vision_normalization(
+        self, normalization: VisionNormalization | None
+    ) -> None:
+        """Normalize uint8 pixels on device with `normalization` instead of the host.
+
+        Pass ``None`` to keep the CPU path. The lookup table is built lazily on
+        the first forward, so nothing happens during setup.
+        """
+        self._vision_normalization = normalization
+        self._vision_lookup_table = None
+
+    def _normalize_pixels(self, pixels: torch.Tensor) -> torch.Tensor:
+        normalization = self._vision_normalization
+        if normalization is None or pixels.dtype != torch.uint8:
+            return pixels
+        table = self._vision_lookup_table
+        if table is None or table.device != pixels.device:
+            table = build_vision_pixel_lookup_table(normalization, pixels.device)
+            self._vision_lookup_table = table
+        return normalize_vision_pixels(pixels, normalization, table)
 
     def _interpolate_position_embeddings(self, grid_thw: torch.Tensor) -> torch.Tensor:
         indices, weights = _vision_bilinear_indices_and_weights(
@@ -278,7 +308,8 @@ class Qwen3VLVisionTransformer(nn.Module):
         grid_thw: torch.Tensor,
         **_: Any,
     ) -> Qwen3VLVisionOutput:
-        hidden_states = hidden_states.to(device=self.device, dtype=self.dtype)
+        hidden_states = self._normalize_pixels(hidden_states.to(self.device))
+        hidden_states = hidden_states.to(dtype=self.dtype)
         grid_thw = grid_thw.to(self.device)
         hidden_states = self.patch_embed(hidden_states)
         position_embeddings = self._interpolate_position_embeddings(grid_thw)
