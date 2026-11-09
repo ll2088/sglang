@@ -63,15 +63,22 @@ def is_sm90_fp8_kv_mma(
 
 
 def normalize_kv_descale(descale, *, batch: int, heads: int):
-    """Normalize a K/V descale to a contiguous f32 (batch, heads) tensor."""
+    """Normalize a K/V descale to a contiguous f32 (batch, heads) tensor.
+
+    Kept torch-optional: a scalar descale is returned as a plain float so the
+    routing policy stays importable on a CPU-only runner without torch.
+    """
     if descale is None:
         return None
-    import torch
-
     if isinstance(descale, (int, float)):
-        return torch.full(
-            (batch, heads), float(descale), dtype=torch.float32, device="cpu"
-        )
+        return float(descale)
+    try:
+        import torch
+    except ImportError as exc:  # pragma: no cover - torch is a hard dep in-tree
+        raise RuntimeError(
+            "normalize_kv_descale needs torch for tensor descales"
+        ) from exc
+
     if not isinstance(descale, torch.Tensor):
         raise ValueError(f"Unsupported descale type: {type(descale)!r}")
     t = descale.to(dtype=torch.float32)

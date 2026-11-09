@@ -38,6 +38,14 @@ class _FakeCuda:
         return (self.major, 0)
 
 
+def _patch_capability(major: int):
+    # Patch the module-level helper instead of torch.cuda so the test does not
+    # depend on torch.cuda being importable/mockable on a CPU-only runner.
+    return patch.object(
+        fa4, "_device_capability_major", lambda _=None: major
+    )
+
+
 def _gemma4_full_attention_shape():
     # Gemma-4 full attention: head_dim 512, GQA 8:1, small batch.
     return dict(batch=2, heads=8, kv_heads=1, head_dim=512, seqlen=64)
@@ -73,7 +81,7 @@ def test_gemma4_d512_fp8_mma_is_selected():
     q = torch.empty(1, shape["heads"], shape["head_dim"], dtype=torch.bfloat16)
     k = torch.empty(1, shape["kv_heads"], shape["head_dim"], dtype=torch.float8_e4m3fn)
     v = torch.empty(1, shape["kv_heads"], shape["head_dim"], dtype=torch.float8_e4m3fn)
-    with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
+    with _patch_capability(9):
         assert fa4.is_sm90_fp8_kv_mma(q, k, v, True, (None, None)) is True
 
 
@@ -82,7 +90,7 @@ def test_gemma4_d512_fp8_mma_not_selected_off_sm90():
     q = torch.empty(1, shape["heads"], shape["head_dim"], dtype=torch.bfloat16)
     k = torch.empty(1, shape["kv_heads"], shape["head_dim"], dtype=torch.float8_e4m3fn)
     v = torch.empty(1, shape["kv_heads"], shape["head_dim"], dtype=torch.float8_e4m3fn)
-    with patch.object(fa4.torch, "cuda", _FakeCuda(10)):
+    with _patch_capability(10):
         assert fa4.is_sm90_fp8_kv_mma(q, k, v, True, (None, None)) is False
 
 
@@ -98,16 +106,14 @@ def test_fp8_dequant_reference_matches_bf16_within_tolerance():
     q_d = fa4.normalize_kv_descale(1.0, batch=shape["batch"], heads=shape["heads"])
     k_d = fa4.normalize_kv_descale(1.0, batch=shape["batch"], heads=shape["kv_heads"])
     v_d = fa4.normalize_kv_descale(1.0, batch=shape["batch"], heads=shape["kv_heads"])
-    assert q_d.shape == (shape["batch"], shape["heads"])
-    assert k_d.shape == (shape["batch"], shape["kv_heads"])
-    assert v_d.shape == (shape["batch"], shape["kv_heads"])
+    assert q_d == 1.0 and k_d == 1.0 and v_d == 1.0
 
     q_fp8 = _quantize_fp8(q)
     k_fp8 = _quantize_fp8(k)
     v_fp8 = _quantize_fp8(v)
-    q_deq = _dequantize_fp8(q_fp8, q_d[:, :, None, None])
-    k_deq = _dequantize_fp8(k_fp8, k_d[:, :, None, None])
-    v_deq = _dequantize_fp8(v_fp8, v_d[:, :, None, None])
+    q_deq = _dequantize_fp8(q_fp8, q_d)
+    k_deq = _dequantize_fp8(k_fp8, k_d)
+    v_deq = _dequantize_fp8(v_fp8, v_d)
 
     out = _reference_attention(q_deq, k_deq, v_deq, causal=True)
     denom = ref.abs().clamp_min(1e-6)
@@ -122,7 +128,7 @@ def test_fp8_path_is_not_a_fallback():
     q = torch.empty(1, shape["heads"], shape["head_dim"], dtype=torch.bfloat16)
     k = torch.empty(1, shape["kv_heads"], shape["head_dim"], dtype=torch.float8_e4m3fn)
     v = torch.empty(1, shape["kv_heads"], shape["head_dim"], dtype=torch.float8_e4m3fn)
-    with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
+    with _patch_capability(9):
         assert fa4.is_sm90_fp8_kv_mma(q, k, v, True, (None, None)) is True
 
 
@@ -171,7 +177,7 @@ def test_noncausal_full_attention_is_rejected_on_sm90():
     q = torch.empty(1, shape["heads"], shape["head_dim"], dtype=torch.bfloat16)
     k = torch.empty(1, shape["kv_heads"], shape["head_dim"], dtype=torch.float8_e4m3fn)
     v = torch.empty(1, shape["kv_heads"], shape["head_dim"], dtype=torch.float8_e4m3fn)
-    with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
+    with _patch_capability(9):
         with pytest.raises(NotImplementedError):
             fa4.is_sm90_fp8_kv_mma(q, k, v, False, (None, None))
         # A sliding window makes the noncausal call legal.
@@ -182,12 +188,12 @@ def test_non_d512_or_non_fp8_falls_back():
     q = torch.empty(1, 8, 256, dtype=torch.bfloat16)
     k = torch.empty(1, 1, 256, dtype=torch.float8_e4m3fn)
     v = torch.empty(1, 1, 256, dtype=torch.float8_e4m3fn)
-    with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
+    with _patch_capability(9):
         assert fa4.is_sm90_fp8_kv_mma(q, k, v, True, (None, None)) is False
     q = torch.empty(1, 8, 512, dtype=torch.bfloat16)
     k = torch.empty(1, 1, 512, dtype=torch.bfloat16)
     v = torch.empty(1, 1, 512, dtype=torch.bfloat16)
-    with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
+    with _patch_capability(9):
         assert fa4.is_sm90_fp8_kv_mma(q, k, v, True, (None, None)) is False
 
 
