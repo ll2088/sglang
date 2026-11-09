@@ -89,6 +89,22 @@ def _delta_frame_template(
     return prefix, infix, suffix
 
 
+def _can_use_delta_template(
+    request: CompletionRequest, continuous_usage_stats: bool
+) -> bool:
+    """Whether every non-terminal chunk of this request is a plain delta.
+
+    Requests that can emit echo text, logprobs, token ids or per-chunk usage
+    keep the model serialization path so their frames stay unchanged.
+    """
+    return (
+        not request.echo
+        and request.logprobs is None
+        and not request.return_token_ids
+        and not continuous_usage_stats
+    )
+
+
 class OpenAIServingCompletion(OpenAIServingBase):
     """Handler for /v1/completion requests"""
 
@@ -299,12 +315,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
             # Requests that can only emit plain delta chunks render them from a
             # per-stream template; everything else uses the model path below.
             delta_template = None
-            if (
-                not request.echo
-                and request.logprobs is None
-                and not request.return_token_ids
-                and not continuous_usage_stats
-            ):
+            if _can_use_delta_template(request, continuous_usage_stats):
                 delta_template = _delta_frame_template(
                     adapted_request.rid or "", created, request.model
                 )

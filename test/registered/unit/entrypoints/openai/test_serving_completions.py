@@ -23,6 +23,7 @@ from sglang.srt.entrypoints.openai.protocol import (
 )
 from sglang.srt.entrypoints.openai.serving_completions import (
     OpenAIServingCompletion,
+    _can_use_delta_template,
     _delta_frame_template,
 )
 from sglang.srt.managers.tokenizer_manager import TokenizerManager
@@ -297,6 +298,183 @@ class ServingCompletionTestCase(unittest.TestCase):
 
     def test_delta_frame_template_none_when_ambiguous(self):
         self.assertIsNone(_delta_frame_template("cmpl-987654321", 1, "m"))
+
+    def test_delta_template_eligibility(self):
+        plain = CompletionRequest(model="x", prompt="Hi", stream=True)
+        self.assertTrue(_can_use_delta_template(plain, False))
+        self.assertFalse(_can_use_delta_template(plain, True))
+        for options in (
+            {"echo": True},
+            {"logprobs": 1},
+            {"return_token_ids": True},
+        ):
+            req = CompletionRequest(model="x", prompt="Hi", stream=True, **options)
+            self.assertFalse(_can_use_delta_template(req, False), options)
+
+    def _run_stream(self, req, chunks):
+        adapted_request, _ = self.sc._convert_to_internal_request(req)
+
+        async def _mock_generate(*args, **kwargs):
+            for chunk in chunks:
+                yield chunk
+
+        self.sc.tokenizer_manager.generate_request = _mock_generate
+
+        async def run_stream():
+            return [
+                chunk
+                async for chunk in self.sc._generate_completion_stream(
+                    adapted_request, req, self.fastapi_request
+                )
+            ]
+
+        return get_or_create_event_loop().run_until_complete(run_stream())
+
+    @staticmethod
+    def _model_frame(request_id, created, model_name, index, text):
+        chunk = CompletionStreamResponse(
+            id=request_id,
+            created=created,
+            object="text_completion",
+            choices=[
+                CompletionResponseStreamChoice(
+                    index=index,
+                    text=text,
+                    logprobs=None,
+                    finish_reason=None,
+                    matched_stop=None,
+                    token_ids=None,
+                    prompt_token_ids=None,
+                )
+            ],
+            model=model_name,
+        )
+        return f"data: {chunk.model_dump_json()}\n\n"
+
+    def test_stream_plain_delta_frames_are_byte_identical(self):
+        """First, middle and terminal frames must match model serialization."""
+        texts = ["", 'a "q" \\b\\ ', "line\nbreak\r\ttab", "unicode é 日本語 🚀"]
+        chunks = [
+            {
+                "text": text,
+                "meta_info": {
+                    "id": "cmpl-byte-eq",
+                    "prompt_tokens": 2,
+                    "completion_tokens": i + 1,
+                    "cached_tokens": 0,
+                    "finish_reason": {"type": "stop"} if i == len(texts) - 1 else None,
+                },
+                "index": 0,
+            }
+            for i, text in enumerate(texts)
+        ]
+        req = CompletionRequest(model="m", prompt="Hi", max_tokens=10, stream=True)
+        raw = self._run_stream(req, chunks)
+        self.assertEqual(raw[-1], "data: [DONE]\n\n")
+        frames = raw[:-1]
+        self.assertEqual(len(frames), len(texts))
+        created = json.loads(frames[0][len("data: ") :])["created"]
+        for i, (frame, text) in enumerate(zip(frames, texts)):
+            if i == len(texts) - 1:
+                # Terminal chunk keeps the model path (finish_reason set).
+                self.assertIn('"finish_reason":"stop"', frame)
+                continue
+            self.assertEqual(
+                frame, self._model_frame("cmpl-byte-eq", created, "m", 0, text)
+            )
+
+    def test_stream_fallback_for_usage_logprobs_and_multi_choice(self):
+        """Non-plain requests must keep the model path and full fields."""
+        chunks = [
+            {
+                "text": "tok",
+                "meta_info": {
+                    "id": "cmpl-fallback",
+                    "prompt_tokens": 2,
+                    "completion_tokens": 1,
+                    "cached_tokens": 0,
+                    "finish_reason": None,
+                    "output_token_logprobs": [(-0.1, 3, "tok")],
+                    "output_token_logprobs_length": 1,
+                    "output_top_logprobs": [],
+                },
+                "index": 0,
+            },
+            {
+                "text": "tok",
+                "meta_info": {
+                    "id": "cmpl-fallback",
+                    "prompt_tokens": 2,
+                    "completion_tokens": 1,
+                    "cached_tokens": 0,
+                    "finish_reason": None,
+                    "output_token_logprobs": [(-0.1, 3, "tok")],
+                    "output_token_logprobs_length": 1,
+                    "output_top_logprobs": [],
+                },
+                "index": 1,
+            },
+        ]
+        for options in (
+            {"logprobs": 1},
+            {"stream_options": {"include_usage": True, "continuous_usage_stats": True}},
+            {"n": 2},
+        ):
+            with self.subTest(options=options):
+                req = CompletionRequest(
+                    model="m", prompt="Hi", max_tokens=10, stream=True, **options
+                )
+                raw = self._run_stream(req, chunks)
+                payloads = [
+                    json.loads(c[len("data: ") :])
+                    for c in raw
+                    if c.startswith("data: ") and c.strip() != "data: [DONE]"
+                ]
+                self.assertTrue(payloads)
+                for payload in payloads:
+                    for choice in payload.get("choices", []):
+                        self.assertIn("logprobs", choice)
+                        self.assertIn("finish_reason", choice)
+                if options.get("stream_options", {}).get("continuous_usage_stats"):
+                    self.assertTrue(any("usage" in p for p in payloads))
+                if options.get("n") == 2:
+                    self.assertEqual(
+                        sorted(c["index"] for p in payloads for c in p["choices"]),
+                        [0, 1],
+                    )
+
+    def test_delta_template_serialization_microbenchmark(self):
+        """Template rendering must not be slower than model serialization."""
+        import statistics
+        import time as _time
+
+        created = 1706000000
+        template = _delta_frame_template("cmpl-bench", created, "m")
+        self.assertIsNotNone(template)
+        prefix, infix, suffix = template
+        text = "benchmark delta text"
+        encoded = json.dumps(text, ensure_ascii=False)
+
+        def template_frame():
+            return f"{prefix}0{infix}{encoded}{suffix}"
+
+        def model_frame():
+            return self._model_frame("cmpl-bench", created, "m", 0, text)
+
+        self.assertEqual(template_frame(), model_frame())
+
+        def measure(fn, rounds=5, iters=2000):
+            samples = []
+            for _ in range(rounds):
+                start = _time.perf_counter()
+                for _ in range(iters):
+                    fn()
+                samples.append((_time.perf_counter() - start) / iters)
+            return statistics.median(samples)
+
+        template_us = measure(template_frame) * 1e6
+        model_us = measure(model_frame) * 1e6
+        self.assertLess(template_us, model_us * 1.1, (template_us, model_us))
 
     def test_streaming_abort_yields_error(self):
         """Test that an abort finish reason during streaming correctly yields an error and stops."""
