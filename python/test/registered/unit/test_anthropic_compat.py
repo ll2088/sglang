@@ -35,7 +35,8 @@ def _declared_anthropic_constraint_from_toml() -> str:
     with PYPROJECT.open("rb") as f:
         data = tomllib.load(f)
     for dep in data.get("project", {}).get("dependencies", []):
-        if dep.split("[")[0].split("=")[0].split(">")[0].split("<")[0].strip() == "anthropic":
+        name = re.split(r"[\s<>=!~\[]", dep, maxsplit=1)[0].strip()
+        if name == "anthropic":
             return dep[len("anthropic"):]
     raise AssertionError("anthropic dependency not found in pyproject.toml")
 
@@ -61,6 +62,7 @@ def test_anthropic_constraint_is_declared():
     # pin that the dependency is still declared so check_env keeps reporting it.
     constraint = _declared_anthropic_constraint()
     assert constraint, constraint
+    assert constraint.strip(), constraint
 
 
 def test_anthropic_constraint_allows_2_6():
@@ -69,6 +71,7 @@ def test_anthropic_constraint_allows_2_6():
     # satisfies the declared specifier.
     constraint = _declared_anthropic_constraint()
     assert _specifier_contains(constraint, "2.6.0"), constraint
+    assert _specifier_contains(constraint, "2.6.0")
 
 
 def test_anthropic_installed_version_if_present():
@@ -93,6 +96,7 @@ def test_anthropic_constraint_is_parseable():
     # to be a well-formed specifier so the install step cannot fail on syntax.
     constraint = _declared_anthropic_constraint()
     assert re.fullmatch(r"[<>=!~][^\s]*", constraint), constraint
+    assert re.fullmatch(r"[<>=!~][^\s]*", constraint)
 
 
 def test_anthropic_sdk_importable_if_present():
@@ -124,6 +128,7 @@ def test_declared_constraint_is_a_lower_bound():
     # Do not pin the exact version here: the bump owns that value.
     constraint = _declared_anthropic_constraint()
     assert re.fullmatch(r">=\s*\d+(?:\.\d+)*", constraint), constraint
+    assert re.fullmatch(r">=\s*\d+(?:\.\d+)*", constraint)
 
 
 def test_check_env_reports_anthropic():
