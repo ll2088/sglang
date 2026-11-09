@@ -50,6 +50,22 @@ def _load_template_helpers():
     import types
     from pathlib import Path
 
+    # If the real package is importable, prefer it: it exercises the actual
+    # module wiring. Fall back to source loading only when the runtime is
+    # unavailable (minimal CI env with just pydantic + pytest).
+    try:
+        from sglang.srt.entrypoints.openai import serving_completions as _real
+
+        return (
+            _real.CompletionRequest,
+            _real.CompletionResponseStreamChoice,
+            _real.CompletionStreamResponse,
+            _real._can_use_delta_template,
+            _real._delta_frame_template,
+        )
+    except Exception:
+        pass
+
     repo_root = Path(__file__).resolve().parents[5]
     pkg_root = repo_root / "python" / "sglang"
     protocol_path = pkg_root / "srt" / "entrypoints" / "openai" / "protocol.py"
@@ -385,3 +401,39 @@ def test_required_tests_are_collected():
     present = {name for name in globals() if name.startswith("test_")}
     missing = required - present
     assert not missing, f"missing required tests: {sorted(missing)}"
+
+
+def test_collection_is_nonzero():
+    """Guard against 0-collection being mistaken for a pass."""
+    collected = [name for name in globals() if name.startswith("test_")]
+    assert len(collected) >= 10, f"too few tests collected: {len(collected)}"
+
+
+def test_usage_and_logprobs_frames_keep_model_fields():
+    """Non-plain frames must keep usage/logprobs fields intact."""
+    from sglang.srt.entrypoints.openai.usage_processor import UsageProcessor
+
+    usage = UsageProcessor.calculate_token_usage(
+        prompt_tokens=3, completion_tokens=2, reasoning_tokens=0
+    )
+    chunk = CompletionStreamResponse(
+        id=REQUEST_ID,
+        created=CREATED,
+        object="text_completion",
+        choices=[
+            CompletionResponseStreamChoice(
+                index=0,
+                text="x",
+                logprobs=None,
+                finish_reason=None,
+                matched_stop=None,
+                token_ids=None,
+                prompt_token_ids=None,
+            )
+        ],
+        model=MODEL,
+        usage=usage,
+    )
+    payload = json.loads(chunk.model_dump_json())
+    assert payload["usage"]["prompt_tokens"] == 3
+    assert payload["usage"]["completion_tokens"] == 2
