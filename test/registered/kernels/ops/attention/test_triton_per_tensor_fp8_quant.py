@@ -68,6 +68,53 @@ def test_min_descale_is_positive():
     assert _MIN_DESCALE > 0
 
 
+def test_rejects_four_inputs():
+    fn = _import_quant()
+    x = torch.zeros((1, 1, 1), dtype=torch.bfloat16)
+    with pytest.raises(ValueError):
+        fn(x, x, x, x)
+
+
+def test_rejects_non_bf16_fp16_input():
+    fn = _import_quant()
+    x = torch.zeros((1, 1, 1), dtype=torch.float32)
+    with pytest.raises(AssertionError):
+        fn(x)
+
+
+def test_rejects_bad_out_shape():
+    fn = _import_quant()
+    x = torch.zeros((4, 8, 16), dtype=torch.bfloat16)
+    bad = torch.empty((4, 8, 15), dtype=torch.float8_e4m3fn)
+    with pytest.raises(AssertionError):
+        fn(x, out=[bad])
+
+
+def test_rejects_non_contiguous_out():
+    fn = _import_quant()
+    x = torch.zeros((4, 8, 16), dtype=torch.bfloat16)
+    bad = torch.empty((4, 16, 8), dtype=torch.float8_e4m3fn).transpose(1, 2)
+    assert not bad.is_contiguous()
+    with pytest.raises(AssertionError):
+        fn(x, out=[bad])
+
+
+def test_accepts_strided_view_input():
+    """A strided view with a contiguous inner dim must pass validation."""
+    fn = _import_quant()
+    full = torch.zeros((4, 8, 32), dtype=torch.bfloat16)
+    view = full[..., 16:]
+    assert view.stride(2) == 1
+    # Validation only; the kernel launch itself needs a GPU.
+    from sglang.kernels.ops.attention.triton_per_tensor_fp8_quant import (
+        _shape_stride,
+    )
+
+    shape, stride = _shape_stride(view)
+    assert shape == (8, 16)
+    assert stride[2] == 1
+
+
 def test_registry_query_is_stable():
     from sglang.kernels.registry import registry
 
