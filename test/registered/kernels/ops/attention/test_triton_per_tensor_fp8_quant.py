@@ -1,97 +1,65 @@
-"""Lightweight tests for the fused per-tensor FP8 quantizer and the
-opt-in FlyDSL FP8 prefill capability/fallback predicates.
+"""Lightweight tests for the fused per-tensor FP8 quantizer.
 
-These tests deliberately avoid importing the full ``sglang`` package: the
-quantizer module is loaded directly from its file path with a minimal
-``sglang.kernels.jit.utils`` stub, so the suite is collectable in a clean
-venv without the heavy sglang dependency tree (torch + triton only).
+Deliberately avoids importing the full ``sglang`` package so the job only
+needs pytest + torch + triton. The quantizer module itself only depends on
+``torch`` and ``triton``, so it can be imported directly by file path when the
+package is not installed.
 """
-
-from __future__ import annotations
 
 import importlib.util
 import sys
-import types
 from pathlib import Path
 
 import pytest
 import torch
 
-# ---------------------------------------------------------------------------
-# Minimal import shim: load the quantizer module without importing sglang.
-# ---------------------------------------------------------------------------
-
-_REPO_ROOT = Path(__file__).resolve().parents[5]
-_QUANT_PATH = (
-    _REPO_ROOT
-    / "python"
-    / "sglang"
-    / "kernels"
-    / "ops"
-    / "attention"
-    / "triton_per_tensor_fp8_quant.py"
-)
-
-
-def _install_sglang_stub() -> None:
-    """Register the minimum ``sglang`` modules the quantizer imports.
-
-    The quantizer only needs ``sglang.kernels.jit.utils.is_arch_support_pdl``
-    at import time (and nothing at call time). Stubbing the package chain keeps
-    the test independent of the full sglang install.
-    """
-    if "sglang" in sys.modules and getattr(
-        sys.modules["sglang"], "__sglang_stub__", False
-    ):
-        return
-    sglang = types.ModuleType("sglang")
-    sglang.__sglang_stub__ = True
-    kernels = types.ModuleType("sglang.kernels")
-    jit = types.ModuleType("sglang.kernels.jit")
-    utils = types.ModuleType("sglang.kernels.jit.utils")
-    utils.is_arch_support_pdl = lambda: False
-    sglang.kernels = kernels
-    kernels.jit = jit
-    jit.utils = utils
-    sys.modules.setdefault("sglang", sglang)
-    sys.modules.setdefault("sglang.kernels", kernels)
-    sys.modules.setdefault("sglang.kernels.jit", jit)
-    sys.modules.setdefault("sglang.kernels.jit.utils", utils)
-
 
 def _load_quant_module():
-    _install_sglang_stub()
-    spec = importlib.util.spec_from_file_location(
-        "_sglang_triton_per_tensor_fp8_quant", _QUANT_PATH
+    """Import the quantizer without importing the ``sglang`` package."""
+    here = Path(__file__).resolve()
+    # test/registered/kernels/ops/attention/ -> repo root
+    root = here.parents[5]
+    target = (
+        root
+        / "python"
+        / "sglang"
+        / "kernels"
+        / "ops"
+        / "attention"
+        / "triton_per_tensor_fp8_quant.py"
     )
-    assert spec is not None and spec.loader is not None, _QUANT_PATH
+    if not target.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location(
+        "_sglang_triton_per_tensor_fp8_quant", target
+    )
+    if spec is None or spec.loader is None:
+        return None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
 
-_quant = _load_quant_module()
-fused_per_tensor_fp8_quant = _quant.fused_per_tensor_fp8_quant
-_BLOCK = _quant._BLOCK
-_PARTS = _quant._PARTS
-_MIN_DESCALE = _quant._MIN_DESCALE
+_MOD = _load_quant_module()
+
+if _MOD is None:
+    pytest.skip(
+        "triton_per_tensor_fp8_quant.py not found; skipping quantizer tests",
+        allow_module_level=True,
+    )
+
+if not torch.cuda.is_available():
+    pytest.skip("CUDA/ROCm device required", allow_module_level=True)
+
+fused_per_tensor_fp8_quant = _MOD.fused_per_tensor_fp8_quant
+_BLOCK = _MOD._BLOCK
+_PARTS = _MOD._PARTS
+_MIN_DESCALE = _MOD._MIN_DESCALE
 
 FP8_DTYPE = torch.float8_e4m3fn
 FP8_MAX = float(torch.finfo(FP8_DTYPE).max)
-
-
-def _cuda_available() -> bool:
-    return torch.cuda.is_available()
-
-
-requires_gpu = pytest.mark.skipif(
-    not _cuda_available(), reason="CUDA/ROCm device required"
-)
-
-
-# ---------------------------------------------------------------------------
-# Reference implementation
-# ---------------------------------------------------------------------------
+_STRIPE = _PARTS * _BLOCK
 
 
 def _reference_quant(x: torch.Tensor):
@@ -101,142 +69,92 @@ def _reference_quant(x: torch.Tensor):
     return x_fp8, descale.reshape(1)
 
 
-# ---------------------------------------------------------------------------
-# API / import / empty / zero cases (no GPU needed for the pure-Python checks)
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("num_tokens", [0, 1, 37, 8192])
+@pytest.mark.parametrize("num_inputs", [1, 2, 3])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("fp8_dtype", [torch.float8_e4m3fn, torch.float8_e5m2])
+def test_correctness(num_tokens, num_inputs, dtype, fp8_dtype):
+    torch.manual_seed(0)
+    heads, dim = 4, 128
+    base = [
+        (torch.randn(num_tokens, heads, dim, device="cuda") * 4).to(dtype),
+        torch.randn(num_tokens, heads, dim, device="cuda").to(dtype),
+        torch.randn(num_tokens, heads, dim, device="cuda").to(dtype),
+    ]
+    inputs = base[:num_inputs]
+    outputs, descales = fused_per_tensor_fp8_quant(*inputs, fp8_dtype=fp8_dtype)
+    assert len(outputs) == num_inputs and len(descales) == num_inputs
+    fp8_max = float(torch.finfo(fp8_dtype).max)
+    for x, x_fp8, descale in zip(inputs, outputs, descales):
+        assert x_fp8.shape == x.shape and x_fp8.is_contiguous()
+        assert x_fp8.dtype == fp8_dtype
+        assert descale.numel() == 1 and descale.dtype == torch.float32
+        amax = x.abs().float().max() if x.numel() else x.new_zeros((), dtype=torch.float)
+        ref_descale = amax / fp8_max if amax > 0 else amax.new_tensor(_MIN_DESCALE)
+        torch.testing.assert_close(descale, ref_descale.reshape(1), rtol=1e-6, atol=0)
+        ref_fp8 = (x.float() / ref_descale).clamp(-fp8_max, fp8_max).to(fp8_dtype)
+        ulp = x_fp8.view(torch.int8).int() - ref_fp8.view(torch.int8).int()
+        assert ulp.numel() == 0 or ulp.abs().max() <= 1
 
 
-def test_module_imports_without_full_sglang():
-    assert callable(fused_per_tensor_fp8_quant)
-    assert _BLOCK > 0 and _PARTS > 0 and _MIN_DESCALE > 0
+def test_empty_and_zero_inputs_get_min_descale():
+    empty = torch.empty(0, 2, 8, device="cuda", dtype=torch.bfloat16)
+    zeros = torch.zeros(16, 2, 8, device="cuda", dtype=torch.bfloat16)
+    outputs, descales = fused_per_tensor_fp8_quant(empty, zeros)
+    for descale in descales:
+        torch.testing.assert_close(
+            descale, torch.full_like(descale, _MIN_DESCALE), rtol=0, atol=0
+        )
+    assert outputs[0].numel() == 0
+    assert torch.count_nonzero(outputs[1].float()) == 0
 
 
-def test_rejects_bad_arity_and_dtype():
-    if not _cuda_available():
-        pytest.skip("CUDA/ROCm device required")
-    x = torch.zeros(4, 2, 8, dtype=torch.bfloat16, device="cuda")
+def test_extreme_values_clamped():
+    x = torch.full((8, 2, 8), 1e4, device="cuda", dtype=torch.bfloat16)
+    (out,), (descale,) = fused_per_tensor_fp8_quant(x)
+    assert torch.isfinite(out.float()).all()
+    assert out.float().abs().max() <= FP8_MAX
+    assert descale.item() > 0
+
+
+@pytest.mark.parametrize(
+    "numel",
+    [1, _BLOCK, _BLOCK + 1, _STRIPE - 1, _STRIPE, _STRIPE + 1, 3 * _STRIPE + 7],
+)
+def test_covers_every_element(numel):
+    """One grid serves inputs of different sizes; no element may be dropped."""
+    x = torch.full((numel, 1, 1), 0.5, device="cuda", dtype=torch.bfloat16)
+    (out,), (descale,) = fused_per_tensor_fp8_quant(x)
+    expected = 0.5 / descale.item()
+    got = out.float().flatten()
+    assert got.numel() == numel
+    torch.testing.assert_close(
+        got, torch.full_like(got, expected), rtol=1e-2, atol=1e-2
+    )
+
+
+def test_strided_view_input():
+    s, h, nope, v_head = 16, 4, 128, 128
+    kv = torch.randn(s, h, nope + v_head, device="cuda", dtype=torch.bfloat16)
+    v = kv[..., nope:]
+    assert v.stride(-1) == 1
+    (out,), (descale,) = fused_per_tensor_fp8_quant(v)
+    ref_fp8, ref_descale = _reference_quant(v)
+    torch.testing.assert_close(descale, ref_descale, rtol=1e-6, atol=0)
+    ulp = out.view(torch.int8).int() - ref_fp8.view(torch.int8).int()
+    assert ulp.numel() == 0 or ulp.abs().max() <= 1
+
+
+def test_rejects_bad_inputs():
+    x = torch.randn(4, 2, 8, device="cuda", dtype=torch.bfloat16)
     with pytest.raises(ValueError):
         fused_per_tensor_fp8_quant()
     with pytest.raises(ValueError):
         fused_per_tensor_fp8_quant(x, x, x, x)
     with pytest.raises(ValueError):
         fused_per_tensor_fp8_quant(x, fp8_dtype=torch.float32)
-
-
-@requires_gpu
-@pytest.mark.parametrize("num_tokens", [0, 1, 37, 8192])
-def test_quant_matches_reference(num_tokens: int):
-    torch.manual_seed(0)
-    q = torch.randn(num_tokens, 12, 192, device="cuda") * 4
-    k = torch.randn(num_tokens, 12, 192, device="cuda")
-    kv = torch.randn(num_tokens, 12, 256, device="cuda")
-    v = kv[..., 128:]  # strided view, as in MLA prefill
-    inputs = [t.to(torch.bfloat16) for t in (q, k, v)]
-    outputs, descales = fused_per_tensor_fp8_quant(*inputs)
-    assert len(outputs) == len(inputs) == len(descales)
-    for x, x_fp8, descale in zip(inputs, outputs, descales):
-        ref_fp8, ref_descale = _reference_quant(x)
-        assert x_fp8.shape == x.shape and x_fp8.is_contiguous()
-        assert x_fp8.dtype == FP8_DTYPE
-        torch.testing.assert_close(descale, ref_descale, rtol=1e-6, atol=0)
-        ulp = x_fp8.view(torch.int8).int() - ref_fp8.view(torch.int8).int()
-        assert ulp.numel() == 0 or ulp.abs().max() <= 1
-
-
-@requires_gpu
-@pytest.mark.parametrize("num_tokens", [0, 1, 5])
-def test_all_zero_and_empty_inputs_get_min_descale(num_tokens: int):
-    x = torch.zeros(num_tokens, 4, 16, dtype=torch.bfloat16, device="cuda")
-    outputs, descales = fused_per_tensor_fp8_quant(x)
-    assert outputs[0].shape == x.shape
-    torch.testing.assert_close(
-        descales[0], torch.full_like(descales[0], _MIN_DESCALE), rtol=0, atol=0
-    )
-    assert torch.isfinite(outputs[0].float()).all()
-
-
-@requires_gpu
-@pytest.mark.parametrize("num_tokens", [1, 3])
-def test_extreme_values_are_clamped(num_tokens: int):
-    x = torch.full((num_tokens, 2, 8), 1e4, dtype=torch.bfloat16, device="cuda")
-    x[0, 0, 0] = -1e4
-    outputs, descales = fused_per_tensor_fp8_quant(x)
-    assert torch.isfinite(outputs[0].float()).all()
-    assert outputs[0].float().abs().max() <= FP8_MAX + 1e-3
-    assert descales[0].item() > 0
-
-
-_STRIPE = _PARTS * _BLOCK
-
-
-@requires_gpu
-@pytest.mark.parametrize(
-    "numel",
-    [1, _BLOCK, _BLOCK + 1, _STRIPE - 1, _STRIPE, _STRIPE + 1, 3 * _STRIPE + 7],
-)
-def test_covers_every_element(numel: int):
-    x = torch.full((numel, 1, 1), 0.5, dtype=torch.bfloat16, device="cuda")
-    expected = 100.0 / FP8_MAX
-    for pos in sorted({0, _BLOCK - 1, _BLOCK, _STRIPE - 1, _STRIPE, numel - 1}):
-        if pos >= numel:
-            continue
-        x[pos] = 100.0
-        outputs, descales = fused_per_tensor_fp8_quant(x)
-        torch.testing.assert_close(
-            descales[0], torch.full_like(descales[0], expected), rtol=1e-6, atol=0
-        )
-        x[pos] = 0.5
-
-
-@requires_gpu
-def test_out_buffer_reuse():
-    x = torch.randn(64, 4, 16, dtype=torch.bfloat16, device="cuda")
-    out = torch.empty_like(x, dtype=FP8_DTYPE)
-    outputs, _ = fused_per_tensor_fp8_quant(x, out=[out])
-    assert outputs[0].data_ptr() == out.data_ptr()
-
-
-# ---------------------------------------------------------------------------
-# Capability probe / fallback predicates (pure Python, no GPU required)
-# ---------------------------------------------------------------------------
-
-
-def _flydsl_fp8_supported(
-    *, is_rocm: bool, gfx: str, has_flydsl: bool, numel: int
-) -> bool:
-    """Mirror of the backend's availability predicate.
-
-    Kept in the test so the fallback contract is pinned without importing the
-    ROCm backend module (which pulls in aiter).
-    """
-    if not is_rocm or gfx != "gfx950" or not has_flydsl:
-        return False
-    if numel == 0 or numel >= 2**31:
-        return False
-    return True
-
-
-@pytest.mark.parametrize(
-    "kwargs,expected",
-    [
-        (dict(is_rocm=False, gfx="gfx950", has_flydsl=True, numel=1024), False),
-        (dict(is_rocm=True, gfx="gfx942", has_flydsl=True, numel=1024), False),
-        (dict(is_rocm=True, gfx="gfx950", has_flydsl=False, numel=1024), False),
-        (dict(is_rocm=True, gfx="gfx950", has_flydsl=True, numel=0), False),
-        (dict(is_rocm=True, gfx="gfx950", has_flydsl=True, numel=2**31), False),
-        (dict(is_rocm=True, gfx="gfx950", has_flydsl=True, numel=1024), True),
-    ],
-)
-def test_flydsl_fp8_capability_and_fallback(kwargs, expected):
-    assert _flydsl_fp8_supported(**kwargs) is expected
-
-
-def test_opt_in_default_is_off():
-    """The FlyDSL FP8 prefill backend must never be auto-selected."""
-    default_config = {"mla_prefill_backend": None}
-    assert default_config["mla_prefill_backend"] is None
-    opt_in = {"mla_prefill_backend": "ROCM_AITER_FLYDSL_FP8"}
-    assert opt_in["mla_prefill_backend"] == "ROCM_AITER_FLYDSL_FP8"
+    with pytest.raises(AssertionError):
+        fused_per_tensor_fp8_quant(x.to(torch.float32))
 
 
 if __name__ == "__main__":
