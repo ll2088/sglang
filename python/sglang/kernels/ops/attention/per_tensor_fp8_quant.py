@@ -1,45 +1,63 @@
-"""Per-tensor FP8 quantization helpers for MLA prefill.
+"""Per-tensor FP8 quantization for attention inputs.
 
-This module is intentionally free of torch/triton imports at module scope so
-that it can be imported (and its tests collected) on CPU-only or triton-less
-environments. The actual GPU kernel lives in
-``_per_tensor_fp8_quant_triton`` and is imported lazily.
+``fused_per_tensor_fp8_quant`` is the Triton entry point (registered in
+``sglang.kernels.ops.attention``); ``reference_per_tensor_fp8_quant`` is a
+pure-torch reference used by tests and by callers that must not import
+triton. Both quantize each ``[tokens, heads, dim]`` input with its own amax
+and FP32 descale, matching the upstream fused kernel's contract.
 """
 
 from __future__ import annotations
 
 from typing import List, Sequence, Tuple
 
+import torch
+
 FP8_MAX = 448.0
 MIN_DESCALE = 1e-6
 
 
 def reference_per_tensor_fp8_quant(
-    values: Sequence[float],
-) -> Tuple[List[float], float]:
-    """Pure-Python reference for dynamic per-tensor FP8 quantization.
+    *inputs: torch.Tensor,
+    fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+    """Quantize each input with its own amax/descale.
 
-    Returns ``(quantized, descale)`` where ``quantized`` is clamped to
-    ``[-FP8_MAX, FP8_MAX]`` and ``descale`` is ``amax / FP8_MAX`` (or
-    ``MIN_DESCALE`` for all-zero / empty inputs).
+    Returns ``(outputs, descales)``; each descale is a 1-element FP32 tensor.
+    Empty or all-zero inputs get ``MIN_DESCALE`` so downstream attention does
+    not produce NaNs.
     """
-    amax = max((abs(v) for v in values), default=0.0)
-    descale = amax / FP8_MAX if amax > 0 else MIN_DESCALE
-    quantized = [max(-FP8_MAX, min(FP8_MAX, v / descale)) for v in values]
-    return quantized, descale
+    outputs: List[torch.Tensor] = []
+    descales: List[torch.Tensor] = []
+    for x in inputs:
+        amax = x.abs().float().max() if x.numel() else x.new_zeros((), dtype=torch.float)
+        descale = amax / FP8_MAX if amax > 0 else amax.new_tensor(MIN_DESCALE)
+        q = (x.float() / descale).clamp(-FP8_MAX, FP8_MAX).to(fp8_dtype)
+        outputs.append(q.contiguous())
+        descales.append(descale.reshape(1))
+    return outputs, descales
 
 
-def fused_per_tensor_fp8_quant(*tensors):
-    """Lazy entry point for the fused Triton quantizer.
+def fused_per_tensor_fp8_quant(
+    *inputs: torch.Tensor,
+    fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+    """Quantize up to three attention inputs with one fused Triton launch.
 
-    Importing this function does not import torch or triton; the heavy module
-    is only loaded when the function is actually called on a GPU host.
+    Falls back to the torch reference when triton is unavailable so callers
+    keep working on CPU-only or triton-less environments.
     """
-    from sglang.kernels.ops.attention._per_tensor_fp8_quant_triton import (
-        fused_per_tensor_fp8_quant as _impl,
-    )
-
-    return _impl(*tensors)
+    if not inputs:
+        return [], []
+    if len(inputs) > 3:
+        raise ValueError(f"fused_per_tensor_fp8_quant takes at most 3 inputs, got {len(inputs)}")
+    try:
+        from sglang.kernels.ops.attention.per_tensor_fp8_quant_triton import (
+            fused_per_tensor_fp8_quant as _triton_impl,
+        )
+    except ImportError:
+        return reference_per_tensor_fp8_quant(*inputs, fp8_dtype=fp8_dtype)
+    return _triton_impl(*inputs, fp8_dtype=fp8_dtype)
 
 
 __all__ = [
