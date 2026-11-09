@@ -82,9 +82,16 @@ and `No tests matched` (exit `3`) means the selection was empty.
 To verify the runner without installing the full sglang dependency set:
 
 ```bash
-python -m pip install -r test/unit/requirements.txt
+bash test/unit/setup_env.sh
 python test/unit/verify_run_suite.py
 ```
+
+`test/unit/setup_env.sh` installs only `test/unit/requirements.txt` (pytest)
+and self-checks `import pytest` / `pytest --version`, so an environment
+problem is reported as an environment failure instead of being mistaken for a
+test failure. Do not run `pip install -e python` for these checks: it resolves
+the full sglang dependency set (torch, kernels, ...) and can fail before any
+test runs.
 
 `verify_run_suite.py` is the CI entrypoint for these checks. It runs the
 collect-diagnostics, exit-codes, tests and usability dimensions, prints the

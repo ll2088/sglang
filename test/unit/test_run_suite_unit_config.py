@@ -90,6 +90,27 @@ def test_readme_exit_code_keywords_present():
         assert keyword in text, f"README missing exit-code keyword: {keyword}"
 
 
+def test_setup_env_script_is_pytest_only():
+    """The lightweight setup script must not install the full sglang deps.
+
+    CI environment preparation previously ran `pip install -e python`, which
+    resolves the full sglang dependency set (torch, kernels, ...) and can fail
+    before any test runs. The setup script must install only
+    test/unit/requirements.txt and self-check pytest.
+    """
+    script = os.path.join(UNIT_DIR, "setup_env.sh")
+    assert os.path.exists(script)
+    with open(script, encoding="utf-8") as f:
+        text = f.read()
+    assert "test/unit/requirements.txt" in text
+    # Must not trigger full dependency resolution.
+    assert "pip install -e python" not in text
+    assert "pip install -e ./python" not in text
+    # Must self-check pytest so env failures are distinguishable.
+    assert "import pytest" in text
+    assert "pytest --version" in text
+
+
 def test_verify_run_suite_entrypoint_exists():
     """README documents verify_run_suite.py as the CI entrypoint; it must exist."""
     entrypoint = os.path.join(UNIT_DIR, "verify_run_suite.py")
@@ -116,6 +137,9 @@ def test_verify_run_suite_entrypoint_exists():
     # The entrypoint must not shell out to a full sglang install; it is the
     # lightweight path CI uses instead of `pip install -e python`.
     assert "pip install -e python" not in text
+    # The entrypoint must point at the pytest-only setup entry so CI does not
+    # fall back to resolving the full sglang dependency set.
+    assert "test/unit/setup_env.sh" in text
 
 
 def test_verify_run_suite_importable_without_pytest_runtime():
