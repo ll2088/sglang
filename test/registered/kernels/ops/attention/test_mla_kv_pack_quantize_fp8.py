@@ -16,6 +16,8 @@ except ImportError:  # pragma: no cover - torch is a hard dep in CI
     torch = None
 
 _HAS_GPU = torch is not None and torch.cuda.is_available()
+if not _HAS_GPU:
+    pytest.skip("mla_kv_pack_quantize_fp8 requires a CUDA/ROCm device", allow_module_level=True)
 _HAS_TRITON = False
 if _HAS_GPU:
     try:

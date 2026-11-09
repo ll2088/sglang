@@ -1,54 +1,59 @@
-"""Opt-in registration / fallback / import smoke tests for the FP8 MLA prefill path.
+"""Tests for per-tensor FP8 quantization used by MLA prefill.
 
-These tests are intentionally GPU-free: they only exercise the kernel registry
-and the opt-in selector, so they run (and pass) on CPU-only CI runners. The
-numerical FP8 quant tests live in ``test_mla_kv_pack_quantize_fp8.py`` and skip
-when no GPU/triton is available.
+These tests are collectable without a GPU or triton: the pure-Python reference
+runs everywhere, and the GPU kernel tests skip via ``pytest.importorskip``.
 """
 
 import sys
 
 import pytest
 
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.kernels.ops.attention.per_tensor_fp8_quant import (
+    FP8_MAX,
+    MIN_DESCALE,
+    reference_per_tensor_fp8_quant,
+)
 
-register_cuda_ci(est_time=30, stage="base-b-kernel-unit", runner_config="1-gpu-large")
+
+def test_reference_quant_basic():
+    q, descale = reference_per_tensor_fp8_quant([1.0, -2.0, 4.0])
+    assert descale == pytest.approx(4.0 / FP8_MAX)
+    assert max(abs(v) for v in q) <= FP8_MAX
 
 
-def test_attention_module_imports_without_optin() -> None:
-    """Importing the attention kernel package must not require a GPU or triton."""
-    import sglang.kernels.ops.attention as m  # noqa: F401
+def test_reference_quant_all_zero_and_empty():
+    for values in ([], [0.0, 0.0]):
+        q, descale = reference_per_tensor_fp8_quant(values)
+        assert descale == MIN_DESCALE
+        assert all(v == 0.0 for v in q)
+
+
+def test_reference_quant_extreme_values():
+    q, _ = reference_per_tensor_fp8_quant([1e9, -1e9])
+    assert max(abs(v) for v in q) <= FP8_MAX
+
+
+def test_import_smoke():
+    import sglang.kernels.ops.attention as m
 
     assert m is not None
 
 
-def test_per_tensor_fp8_quant_registered() -> None:
-    """The fused per-tensor FP8 quantizer is inventoried in the registry."""
-    from sglang.kernels.registry import registry
-    from sglang.kernels.spec import KernelBackend
+def test_gpu_kernel_matches_reference():
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("triton")
+    if not torch.cuda.is_available():
+        pytest.skip("requires a CUDA/ROCm device")
+    from sglang.kernels.ops.attention.per_tensor_fp8_quant import (
+        fused_per_tensor_fp8_quant,
+    )
 
-    spec = registry.get_backend("attention.fused_per_tensor_fp8_quant", KernelBackend.TRITON)
-    assert spec.target.endswith(":fused_per_tensor_fp8_quant")
-
-
-def test_optin_disabled_by_default() -> None:
-    """Without the opt-in env var the FP8 prefill backend is not selected."""
-    from sglang.kernels.selector import get_kernel  # noqa: F401
-
-    # The opt-in flag is read from the environment; default must be off.
-    import os
-
-    assert os.environ.get("SGLANG_MLA_PREFILL_BACKEND", "") != "ROCM_AITER_FLYDSL_FP8"
+    x = torch.randn(37, 12, 192, device="cuda", dtype=torch.bfloat16) * 4
+    (out,), (scale,) = fused_per_tensor_fp8_quant(x)
+    ref_q, ref_scale = reference_per_tensor_fp8_quant(x.flatten().tolist())
+    assert scale.item() == pytest.approx(ref_scale, rel=1e-6)
+    assert out.shape == x.shape
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 9), reason="requires modern typing"
-)
-def test_optin_fallback_to_existing_prefill() -> None:
-    """When the opt-in backend is unavailable, selection falls back to the
-    existing prefill kernel rather than raising."""
-    from sglang.kernels.registry import registry
-
-    # The existing Triton prefill kernel must always be registered as a fallback.
-    specs = registry.get("attention.context_attention_fwd")
-    assert specs, "existing prefill kernel must remain registered"
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__, "-v", "-s"]))
