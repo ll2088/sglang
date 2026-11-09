@@ -1,12 +1,21 @@
 # Copyright (c) 2026, SGLang Team.
 """Routing tests for the FA4 SM90 d512 FP8-MMA path (no GPU required)."""
 
+import importlib.util
+import pathlib
 from unittest.mock import patch
 
 import pytest
 import torch
 
-from sglang.kernels.ops.attention import fa4_sm90_fp8_policy as fa4
+# Load the pure policy module by path so this test does not require the
+# sglang package (or its heavy runtime deps) to be importable.
+_POLICY_PATH = pathlib.Path(__file__).with_name("fa4_sm90_fp8_policy.py")
+_spec = importlib.util.spec_from_file_location(
+    "_fa4_sm90_fp8_policy_under_test", _POLICY_PATH
+)
+fa4 = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(fa4)
 
 _normalize_descale = fa4.normalize_kv_descale
 _select_num_splits = fa4.select_num_splits
@@ -148,3 +157,37 @@ def test_stability_repeated_routing():
     with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
         results = {_call(q, k, v) for _ in range(3)}
     assert results == {True}
+
+
+def test_stability_repeated_descale_and_splits():
+    descale = torch.ones(2, 4)
+    with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
+        for _ in range(3):
+            out = _normalize_descale(descale, batch=2, heads=4)
+            assert out.shape == (2, 4)
+            assert out.dtype == torch.float32
+            splits = _select_num_splits(
+                fa_version=4,
+                max_seqlen_k=4096,
+                num_heads=8,
+                num_kv_heads=1,
+                num_sms=32,
+                is_fp8_mma=True,
+            )
+            assert splits == 4
+
+
+def test_descale_none_passthrough():
+    assert _normalize_descale(None, batch=2, heads=4) is None
+
+
+def test_split_auto_selection_zero_seqlen():
+    splits = _select_num_splits(
+        fa_version=4,
+        max_seqlen_k=0,
+        num_heads=8,
+        num_kv_heads=1,
+        num_sms=32,
+        is_fp8_mma=True,
+    )
+    assert splits == 1
