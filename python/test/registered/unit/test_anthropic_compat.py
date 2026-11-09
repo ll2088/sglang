@@ -13,7 +13,14 @@ from pathlib import Path
 
 import pytest
 
-PYPROJECT = Path(__file__).resolve().parents[3] / "pyproject.toml"
+# Resolve the python/ package root without assuming a fixed depth, so the test
+# works whether it is collected from the repo root or from python/.
+_HERE = Path(__file__).resolve()
+PYPROJECT = next(
+    (p for p in _HERE.parents if (p / "pyproject.toml").is_file()),
+    None,
+)
+assert PYPROJECT is not None, "pyproject.toml not found above the test file"
 REPO_ROOT = PYPROJECT.parent
 
 
@@ -112,6 +119,8 @@ def test_repo_has_no_anthropic_sdk_imports():
     # The SDK is an optional runtime dependency only; no module may import it,
     # so the 0.20 -> 2.6 breaking changes cannot affect this repository.
     root = REPO_ROOT / "sglang"
+    if not root.is_dir():
+        pytest.skip("sglang package sources are not present in this checkout")
     offenders = []
     for path in root.rglob("*.py"):
         text = path.read_text(encoding="utf-8", errors="ignore")
