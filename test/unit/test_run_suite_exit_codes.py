@@ -29,6 +29,8 @@ def _install_ci_stubs():
     existing = sys.modules.get("sglang.test.ci.ci_register")
     if existing is not None and getattr(existing, "_run_suite_stub", False) is False:
         return
+    # Mark the stub so re-imports (and importlib.reload of run_suite) keep
+    # using it instead of trying to import the real sglang runtime.
 
     import enum
 
@@ -53,6 +55,7 @@ def _install_ci_stubs():
         return tests
 
     ci_register = types.ModuleType("sglang.test.ci.ci_register")
+    ci_register._run_suite_stub = True
     ci_register.CIRegistry = CIRegistry
     ci_register.HWBackend = HWBackend
     ci_register.auto_partition = auto_partition
