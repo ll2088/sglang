@@ -1,7 +1,17 @@
 """Tests for fused per-tensor FP8 quantization and the opt-in MLA prefill
 backend selector. Skips cleanly when torch/triton or a GPU is unavailable."""
 
+import os
+import sys
+
 import pytest
+
+# The verification commands run from the repo root without `pip install -e python`.
+# Make the in-tree package importable so the tests exercise the real modules.
+_PY = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..", "python")
+_PY = os.path.abspath(_PY)
+if os.path.isdir(_PY) and _PY not in sys.path:
+    sys.path.insert(0, _PY)
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("triton")
@@ -59,6 +69,12 @@ def test_selector_default_off():
     assert resolve_mla_prefill_kernel() is None
 
 
+def test_selector_unknown_backend_falls_back():
+    # Unknown / unsupported names must not raise and must not select a kernel.
+    assert select_mla_prefill_backend("NOT_A_BACKEND") is None
+    assert resolve_mla_prefill_kernel("NOT_A_BACKEND") is None
+
+
 def test_selector_opt_in_requires_support():
     # On non-gfx950 or without aiter, opt-in must fall back to the existing path.
     result = select_mla_prefill_backend(BACKEND_NAME)
@@ -72,3 +88,41 @@ def test_import_smoke():
     import sglang.kernels.ops.attention as m
 
     assert hasattr(m, "register_kernel")
+
+
+def test_import_smoke_without_opt_in():
+    # Importing the attention package and resolving the default selector must not
+    # require the optional FlyDSL/AITER stack.
+    import sglang.kernels.ops.attention as m  # noqa: F401
+    from sglang.kernels.ops.attention.mla_prefill_fp8_selector import (
+        resolve_mla_prefill_kernel,
+    )
+
+    assert resolve_mla_prefill_kernel() is None
+
+
+@pytest.mark.parametrize("numel", [0, 1, 37, 8192])
+def test_perf_quant_median_latency(numel):
+    """Performance dimension: record median latency of the fused quantizer.
+
+    This is a smoke-level measurement (no baseline kernel in-tree yet); it fails
+    only if the fused path is pathologically slow, and always prints the median
+    so CI logs carry a number for the acceptance record.
+    """
+    import statistics
+    import time
+
+    x = (torch.randn(numel, device="cuda") * 4).to(torch.bfloat16)
+    # warmup
+    for _ in range(5):
+        fused_per_tensor_fp8_quant(x)
+    torch.cuda.synchronize()
+    samples = []
+    for _ in range(20):
+        t0 = time.perf_counter()
+        fused_per_tensor_fp8_quant(x)
+        torch.cuda.synchronize()
+        samples.append(time.perf_counter() - t0)
+    median = statistics.median(samples)
+    print(f"perf numel={numel} median_ms={median * 1e3:.4f}")
+    assert median < 1.0, f"fused quantizer unexpectedly slow: {median:.3f}s"
