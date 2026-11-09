@@ -100,10 +100,6 @@ def test_anthropic_constraint_is_declared():
     # The declared lower bound must be at least 2.6.0 so the upgraded SDK is
     # allowed by the install step; the exact value is owned by the bump.
     assert _specifier_contains(constraint, "2.6.0"), constraint
-    # Guard against a stale 0.20 pin sneaking back in.
-    assert not _specifier_contains(constraint, "0.20.0") or _specifier_contains(
-        constraint, "2.6.0"
-    ), constraint
 
 
 def test_anthropic_constraint_allows_2_6():
@@ -146,7 +142,11 @@ def test_anthropic_sdk_importable_if_present():
     assert hasattr(anthropic, "AsyncAnthropic")
     # Constructing a client must not require network access or credentials
     # beyond the explicit api_key; this pins the 2.x keyword-only signature.
-    client = anthropic.Anthropic(api_key="test-key")
+    # Guard against SDKs that validate credentials eagerly at construction.
+    try:
+        client = anthropic.Anthropic(api_key="test-key")
+    except TypeError as e:
+        pytest.fail(f"Anthropic(api_key=...) signature changed: {e}")
     assert client is not None
 
 
@@ -237,7 +237,7 @@ def test_benchmark_and_cli_modules_do_not_reference_anthropic():
     ):
         path = root / Path(rel).relative_to("sglang")
         if not path.is_file():
-            pytest.skip(f"{rel} is not present in this checkout")
+            continue
         text = path.read_text(encoding="utf-8")
         assert "anthropic" not in text.lower(), rel
 
