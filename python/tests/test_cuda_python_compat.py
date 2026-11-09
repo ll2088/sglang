@@ -52,12 +52,16 @@ def _parse_version(version):
     return tuple(parts[:3])
 
 
-def test_cuda_python_version_and_sgl_kernel_import():
+def test_cuda_python_version_and_bindings_import():
     _require_cuda_python_13_5()
     version = _CUDA_PYTHON_VERSION
     assert _parse_version(version) >= (13, 5, 0), version
     # The bindings package must expose the modules this repo relies on.
     import cuda.bindings  # noqa: F401
+
+
+def test_sgl_kernel_import():
+    _require_cuda_python_13_5()
     # sgl_kernel is a compiled CUDA extension; it is absent in CPU-only CI
     # images, so skip rather than fail when it cannot be imported. Importing
     # it can raise non-ImportError exceptions (e.g. missing libcudart), so
@@ -77,7 +81,10 @@ def test_load_utils_version_probe():
     except BaseException as exc:  # pragma: no cover - environment dependent
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
-        pytest.skip(f"sgl_kernel.load_utils is not importable: {exc}")
+        pytest.skip(
+            "sgl_kernel.load_utils is not importable (compiled CUDA extension "
+            f"missing in this environment): {exc}"
+        )
 
     cuda_home = load_utils._find_cuda_home()
     assert isinstance(cuda_home, str)
@@ -113,7 +120,7 @@ def test_check_env_reports_cuda_version(monkeypatch):
 
     versions = env.get_package_versions()
     assert isinstance(versions, dict)
-    assert "cuda-python" in versions or versions.get("cuda-python") is None
+    assert versions.get("cuda-python") == _CUDA_PYTHON_VERSION
 
     result = subprocess.run(
         [sys.executable, "-m", "sglang.check_env"],
