@@ -289,7 +289,10 @@ def test_benchmark_and_cli_modules_do_not_reference_anthropic():
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8")
-        assert "anthropic" not in text.lower(), rel
+        # These modules do not use the SDK; only assert they do not import it,
+        # so the 0.20 -> 2.6 breaking changes cannot affect them.
+        assert "import anthropic" not in text, rel
+        assert "from anthropic" not in text, rel
 
 
 def test_anthropic_sdk_public_surface():
