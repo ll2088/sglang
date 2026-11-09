@@ -1,32 +1,31 @@
 # Copyright (c) 2026, SGLang Team.
-"""Minimal-dependency entry point for the FA4 SM90 FP8 routing tests.
+"""Standalone entry point for the FA4 SM90 FP8 routing tests.
 
-CI can run this without `pip install -e python`: it only needs pytest and
-CPU torch, and it loads the pure policy module by path.
+Runs the routing/descale/split tests without installing the sglang package
+and without initializing CUDA, so CI does not need `pip install -e python`.
 
 Usage:
     python python/sglang/kernels/ops/attention/run_fa4_fp8_routing_tests.py
 """
 
+from __future__ import annotations
+
 import pathlib
 import sys
 
-HERE = pathlib.Path(__file__).resolve().parent
-TESTS = [
-    HERE / "test_flash_attention_v4_fp8_routing.py",
-    HERE / "test_fa4_sm90_fp8_mma_numerics.py",
-    HERE / "test_bench_flash_attention_fp8_output.py",
-]
+_HERE = pathlib.Path(__file__).resolve().parent
 
 
-def main() -> int:
-    import pytest
+def main(argv: list[str] | None = None) -> int:
+    try:
+        import pytest
+    except ImportError:  # pragma: no cover - CI installs pytest
+        print("pytest is required to run the FA4 FP8 routing tests", file=sys.stderr)
+        return 2
 
-    args = [str(p) for p in TESTS if p.is_file()]
-    if not args:
-        print("no routing tests found", file=sys.stderr)
-        return 1
-    return pytest.main(["-q", "-p", "no:randomly", *args])
+    args = list(sys.argv[1:] if argv is None else argv)
+    target = str(_HERE / "test_flash_attention_v4_fp8_routing.py")
+    return pytest.main(["-q", "-p", "no:randomly", target, *args])
 
 
 if __name__ == "__main__":

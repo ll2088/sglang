@@ -10,6 +10,9 @@ import pytest
 
 torch = pytest.importorskip("torch", reason="torch is required for routing tests")
 
+# The policy module is loaded by path below; it must never import torch at
+# module scope so that this file stays runnable without the sglang package.
+
 # This test intentionally avoids importing the sglang package: CI installs
 # sglang from PyPI and that step can fail before pytest runs. Loading the
 # pure policy module by path keeps the routing checks runnable standalone.
@@ -161,6 +164,19 @@ def test_non_fp8_fallback_keeps_original_kernel():
     v = _tensor(torch.bfloat16)
     with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
         assert _call(q, k, v) is False
+
+
+def test_non_sm90_d512_fp8_falls_back():
+    q = _tensor(torch.bfloat16)
+    k = _tensor(torch.float8_e4m3fn)
+    v = _tensor(torch.float8_e4m3fn)
+    with patch.object(fa4.torch, "cuda", _FakeCuda(10)):
+        assert _call(q, k, v) is False
+
+
+def test_policy_module_does_not_import_torch_at_module_scope():
+    # Guards the CI fix: importing the policy module must not require torch.
+    assert "torch" not in getattr(fa4, "__dict__", {})
 
 
 def test_stability_repeated_routing():

@@ -7,7 +7,10 @@ without a GPU or a compiled flash-attention extension.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
+    import torch
 
 # NOTE: This module must stay importable without the sglang package or a
 # compiled flash-attention extension so routing can be unit-tested on CPU.
@@ -21,9 +24,9 @@ SPLIT_KV_TILE_N = 128
 
 
 def is_sm90_fp8_kv_mma(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
+    q: "torch.Tensor",
+    k: "torch.Tensor",
+    v: "torch.Tensor",
     causal: bool,
     window_size,
     *,
@@ -54,11 +57,11 @@ def is_sm90_fp8_kv_mma(
 
 
 def normalize_kv_descale(
-    descale: Optional[torch.Tensor],
+    descale: Optional["torch.Tensor"],
     *,
     batch: int,
     heads: int,
-) -> Optional[torch.Tensor]:
+) -> Optional["torch.Tensor"]:
     """Normalize a K/V descale tensor to the (batch, heads) f32 layout.
 
     Accepts scalars, (heads,), (batch, heads) and (batch, heads, 1, 1)
