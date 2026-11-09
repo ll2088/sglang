@@ -26,14 +26,8 @@ import pytest
 
 
 def _install_minimal_stubs() -> None:
-    """Install lightweight stubs for heavy runtime modules before any
-    ``sglang`` import, so these pure-helper tests are collected even when the
-    full runtime dependency chain is not installed in CI.
-
-    Only modules that the helpers under test do not actually use are stubbed;
-    ``protocol`` and ``serving_completions`` are still loaded from source.
-    """
-    # Package stubs are installed by conftest.py before this module loads.
+    """No-op kept for readability: the helpers are loaded from source below,
+    so no runtime module stubs are needed."""
     return
 
 
@@ -46,28 +40,9 @@ def _load_template_helpers():
     tests still execute instead of being skipped.
     """
     _install_minimal_stubs()
-    try:
-        from sglang.srt.entrypoints.openai.protocol import (
-            CompletionRequest,
-            CompletionResponseStreamChoice,
-            CompletionStreamResponse,
-        )
-        from sglang.srt.entrypoints.openai.serving_completions import (
-            _can_use_delta_template,
-            _delta_frame_template,
-        )
-
-        return (
-            CompletionRequest,
-            CompletionResponseStreamChoice,
-            CompletionStreamResponse,
-            _can_use_delta_template,
-            _delta_frame_template,
-        )
-    except Exception:  # pragma: no cover - exercised only in minimal envs
-        pass
-
     import importlib.util
+    import sys
+    import types
     from pathlib import Path
 
     repo_root = Path(__file__).resolve().parents[5]
@@ -83,15 +58,6 @@ def _load_template_helpers():
         mod = types.ModuleType(name)
         mod.__path__ = [str(path)]
         sys.modules[name] = mod
-
-    # Drop the empty stubs installed above so the real package paths win.
-    for name in (
-        "sglang.srt.entrypoints.openai",
-        "sglang.srt.entrypoints",
-        "sglang.srt",
-        "sglang",
-    ):
-        sys.modules.pop(name, None)
 
     for name, path in (
         ("sglang", pkg_root),
@@ -362,3 +328,23 @@ def test_microbench_template_not_slower_than_model():
         f"speedup={model_us / template_us:.2f}x"
     )
     assert template_us <= model_us * 1.10
+
+
+def test_serialization_field_order_and_escapes():
+    """Field order and escaping must match the model serializer exactly."""
+    template = _delta_frame_template(REQUEST_ID, CREATED, MODEL)
+    assert template is not None
+    for text in ('a"b', "a\\b", "a\nb", "é 日本語 🚀"):
+        frame = template_frame(template, 0, text)
+        assert frame == model_frame(REQUEST_ID, MODEL, 0, text)
+        payload = json.loads(frame[len("data: ") : -2])
+        assert list(payload) == ["id", "object", "created", "model", "choices"]
+        assert list(payload["choices"][0]) == [
+            "index",
+            "text",
+            "logprobs",
+            "finish_reason",
+            "matched_stop",
+            "token_ids",
+            "prompt_token_ids",
+        ]
