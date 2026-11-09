@@ -108,6 +108,11 @@ def test_verify_run_suite_entrypoint_exists():
         "usability",
     ):
         assert dimension in text, f"verify_run_suite missing dimension: {dimension}"
+    # The entrypoint must be runnable without the full sglang dependency set:
+    # pytest is imported lazily so `--help` and the environment banner work
+    # even when pytest is missing (that case exits 2, not 1).
+    assert "import pytest" in text
+    assert "NOT INSTALLED" in text
 
 
 def test_verify_run_suite_importable_without_pytest_runtime():
@@ -124,3 +129,35 @@ def test_verify_run_suite_importable_without_pytest_runtime():
     assert module.EXIT_DIMENSION_FAILURE == 1
     assert module.EXIT_INFRA_FAILURE == 2
     assert len(module.DIMENSIONS) == 4
+    # Every dimension must point at existing test files so a CI job cannot
+    # silently run zero tests for a dimension.
+    for name, targets in module.DIMENSIONS.items():
+        assert targets, f"dimension {name} has no targets"
+        for target in targets:
+            assert os.path.exists(target), f"{name}: missing {target}"
+
+
+def test_verify_run_suite_dimensions_cover_required_checks():
+    """The four dimensions must cover the acceptance checks from the plan."""
+    import importlib.util
+
+    entrypoint = os.path.join(UNIT_DIR, "verify_run_suite.py")
+    spec = importlib.util.spec_from_file_location(
+        "verify_run_suite_dimensions_under_test", entrypoint
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    exit_codes = module.DIMENSIONS["exit-codes"]
+    assert any(
+        os.path.basename(p) == "test_run_suite_exit_codes.py" for p in exit_codes
+    )
+    collect = module.DIMENSIONS["collect-diagnostics"]
+    assert any(
+        os.path.basename(p) == "test_run_suite_collect_diagnostics.py"
+        for p in collect
+    )
+    usability = module.DIMENSIONS["usability"]
+    assert any(
+        os.path.basename(p) == "test_run_suite_unit_config.py" for p in usability
+    )
