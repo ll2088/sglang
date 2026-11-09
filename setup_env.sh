@@ -1,26 +1,19 @@
 #!/usr/bin/env bash
-# Repository-root environment preparation entry.
+# Repository-root environment preparation entry for the run_suite checks.
 #
-# CI environment preparation for the run_suite verification dimensions must not
-# resolve the full sglang dependency set (`pip install -e python`), which pulls
-# torch/kernels and can fail before any test runs. This entry delegates to the
-# pytest-only setup script so whichever path CI calls, the lightweight install
-# is the one that actually runs.
-#
-# Usage (from the repository root):
-#
-#     bash setup_env.sh
+# CI previously ran `pip install -e python`, which resolves the full sglang
+# dependency set (torch, kernels, ...) and can fail before any test runs.
+# This script delegates to the pytest-only entry so whichever setup path CI
+# calls, it lands on the lightweight install.
 set -euo pipefail
 
-echo "[setup] using $(realpath "$0")"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET="${SCRIPT_DIR}/test/unit/setup_env.sh"
+LIGHTWEIGHT="${SCRIPT_DIR}/test/unit/setup_env.sh"
 
-if [ ! -f "${TARGET}" ]; then
-    echo "[setup] missing ${TARGET}" >&2
-    exit 1
+if [[ ! -f "${LIGHTWEIGHT}" ]]; then
+  echo "[setup] ERROR: lightweight setup entry not found: ${LIGHTWEIGHT}" >&2
+  exit 1
 fi
 
-echo "[setup] delegating to ${TARGET}"
-exec bash "${TARGET}" "$@"
+echo "[setup] using $(realpath "${LIGHTWEIGHT}")"
+exec bash "${LIGHTWEIGHT}" "$@"

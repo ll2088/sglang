@@ -239,6 +239,35 @@ def test_root_setup_env_delegates_to_lightweight_script():
     assert os.access(root_script, os.X_OK), "setup_env.sh must be executable"
 
 
+def test_setup_env_scripts_are_cwd_independent():
+    """Both setup entries must resolve paths from their own location.
+
+    CI may invoke the script from an arbitrary working directory; a relative
+    path would silently miss the lightweight entry and fall back to the full
+    `pip install -e python` resolution.
+    """
+    for script in (
+        os.path.join(REPO_ROOT, "setup_env.sh"),
+        os.path.join(UNIT_DIR, "setup_env.sh"),
+    ):
+        with open(script, encoding="utf-8") as f:
+            text = f.read()
+        assert "BASH_SOURCE" in text, f"{script} must resolve its own dir"
+        assert "SCRIPT_DIR" in text, f"{script} must use an absolute dir"
+
+
+def test_setup_env_scripts_reject_editable_install():
+    """Neither setup entry may shell out to an editable sglang install."""
+    for script in (
+        os.path.join(REPO_ROOT, "setup_env.sh"),
+        os.path.join(UNIT_DIR, "setup_env.sh"),
+    ):
+        with open(script, encoding="utf-8") as f:
+            text = f.read()
+        assert "pip install -e" not in text, f"{script} must not editable-install"
+        assert "-e python" not in text, f"{script} must not editable-install"
+
+
 def test_verify_run_suite_help_works_without_pytest():
     """--help must work even when pytest is missing (exit 0, no import)."""
     import subprocess
