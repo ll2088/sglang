@@ -14,6 +14,11 @@ from pathlib import Path
 
 import pytest
 
+# This module intentionally depends only on the standard library and pytest so
+# it can run in a minimal CI job without installing sglang's full dependency
+# set (torch, quack-kernels, py-spy, ...). Do not add imports of sglang or the
+# anthropic SDK at module scope; use importlib inside tests instead.
+
 
 def _specifier_contains(constraint: str, version: str) -> bool:
     """Minimal PEP 440 lower-bound check without importing packaging.
@@ -30,25 +35,33 @@ def _specifier_contains(constraint: str, version: str) -> bool:
     return parts >= lower
 
 
+# Resolve the python/ package root without assuming a fixed depth, so the test
+# works whether it is collected from the repo root or from python/. Resolved
+# lazily so collection never fails when the checkout layout differs.
+_HERE = Path(__file__).resolve()
+
+
+def _find_pyproject() -> Path:
+    for parent in _HERE.parents:
+        candidate = parent / "pyproject.toml"
+        if candidate.is_file():
+            return candidate
+    pytest.skip("pyproject.toml not found above the test file")
+
+
+def _repo_root() -> Path:
+    return _find_pyproject().parent
+
+
 def _declared_anthropic_constraint_from_toml() -> str:
     """Read the anthropic specifier from [project].dependencies via tomllib."""
-    with PYPROJECT.open("rb") as f:
+    with _find_pyproject().open("rb") as f:
         data = tomllib.load(f)
     for dep in data.get("project", {}).get("dependencies", []):
         name = re.split(r"[\s<>=!~\[]", dep, maxsplit=1)[0].strip()
         if name == "anthropic":
             return dep[len("anthropic"):]
     raise AssertionError("anthropic dependency not found in pyproject.toml")
-
-# Resolve the python/ package root without assuming a fixed depth, so the test
-# works whether it is collected from the repo root or from python/.
-_HERE = Path(__file__).resolve()
-PYPROJECT = next(
-    (p for p in _HERE.parents if (p / "pyproject.toml").is_file()),
-    None,
-)
-assert PYPROJECT is not None, "pyproject.toml not found above the test file"
-REPO_ROOT = PYPROJECT.parent
 
 
 def _declared_anthropic_constraint() -> str:
@@ -136,7 +149,7 @@ def test_check_env_reports_anthropic():
     # a bare test environment. Verify the contract statically instead of
     # importing the module, so this test does not depend on the full runtime.
     # Skip when the sglang sources are not present in this checkout.
-    path = REPO_ROOT / "sglang" / "check_env.py"
+    path = _repo_root() / "sglang" / "check_env.py"
     if not path.is_file():
         pytest.skip("sglang/check_env.py is not present in this checkout")
     source = path.read_text(encoding="utf-8")
@@ -167,7 +180,7 @@ def test_modules_do_not_import_anthropic(module_path):
     # None of them use the SDK, so the 0.20 -> 2.6 breaking changes cannot
     # affect them; this test pins that fact. Skip when the sglang sources are
     # not present in this checkout (e.g. a bare test environment).
-    path = REPO_ROOT / module_path
+    path = _repo_root() / module_path
     if not path.is_file():
         pytest.skip(f"{module_path} is not present in this checkout")
     source = path.read_text(encoding="utf-8")
@@ -192,7 +205,7 @@ def test_anthropic_sdk_public_surface():
 def test_repo_has_no_anthropic_sdk_imports():
     # The SDK is an optional runtime dependency only; no module may import it,
     # so the 0.20 -> 2.6 breaking changes cannot affect this repository.
-    root = REPO_ROOT / "sglang"
+    root = _repo_root() / "sglang"
     if not root.is_dir():
         pytest.skip("sglang package sources are not present in this checkout")
     offenders = []
@@ -216,7 +229,7 @@ def test_benchmark_and_cli_modules_do_not_reference_anthropic():
         "sglang/benchmark/utils.py",
         "sglang/cli/generate.py",
     ):
-        path = REPO_ROOT / rel
+        path = _repo_root() / rel
         if not path.is_file():
             pytest.skip(f"{rel} is not present in this checkout")
         text = path.read_text(encoding="utf-8")
@@ -227,7 +240,7 @@ def test_check_env_reports_anthropic_without_specifier():
     # check_env must pass a bare distribution name to importlib.metadata so the
     # reported version is the installed one, not a specifier string. Skip when
     # the sglang sources are not present in this checkout.
-    path = REPO_ROOT / "sglang" / "check_env.py"
+    path = _repo_root() / "sglang" / "check_env.py"
     if not path.is_file():
         pytest.skip("sglang/check_env.py is not present in this checkout")
     source = path.read_text(encoding="utf-8")
