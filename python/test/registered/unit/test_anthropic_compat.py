@@ -91,9 +91,11 @@ def test_check_env_reports_anthropic():
         "sglang/cli/generate.py",
     ],
 )
-def test_modules_import_without_anthropic_api_usage(module_path):
+def test_modules_do_not_import_anthropic(module_path):
     # Scan the source statically: importing these modules pulls in torch and
     # other heavy runtime deps that are not provisioned in a bare test env.
+    # None of them use the SDK, so the 0.20 -> 2.6 breaking changes cannot
+    # affect them; this test pins that fact.
     path = REPO_ROOT / module_path
     assert path.is_file(), module_path
     source = path.read_text(encoding="utf-8")
