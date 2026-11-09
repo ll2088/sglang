@@ -13,14 +13,15 @@ import types
 # The stubs are only installed when the real modules are not already
 # importable, so a full sglang checkout keeps using the real implementation.
 def _install_ci_stubs() -> None:
+    # Always install the lightweight stubs for test/unit. These tests only
+    # exercise run_suite's exit-code and collection-diagnostic branches, so
+    # they must not depend on the full sglang runtime being installed (the CI
+    # environment only guarantees pytest). A real sglang checkout is still
+    # fine: the stubs are scoped to this pytest session's sys.modules and are
+    # replaced by the real modules in any other process.
     existing = sys.modules.get("sglang.test.ci.ci_register")
-    if existing is not None and not getattr(existing, "_run_suite_stub", False):
+    if existing is not None and getattr(existing, "_run_suite_stub", False):
         return
-    # Also treat a partially-installed real package as "not usable": if the
-    # real ci_register imported but ci_utils did not, fall through and install
-    # the stubs so run_suite's module-level imports still resolve.
-    if existing is not None and "sglang.test.ci.ci_utils" not in sys.modules:
-        pass
 
     class HWBackend(enum.Enum):
         CPU = "cpu"
