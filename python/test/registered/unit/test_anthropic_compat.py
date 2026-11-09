@@ -9,6 +9,7 @@ break the declared version constraint or the environment report.
 import importlib
 import importlib.metadata
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,16 @@ def _specifier_contains(constraint: str, version: str) -> bool:
     parts = tuple(int(p) for p in re.findall(r"\d+", version)[: len(lower)])
     return parts >= lower
 
+
+def _declared_anthropic_constraint_from_toml() -> str:
+    """Read the anthropic specifier from [project].dependencies via tomllib."""
+    with PYPROJECT.open("rb") as f:
+        data = tomllib.load(f)
+    for dep in data.get("project", {}).get("dependencies", []):
+        if dep.split("[")[0].split("=")[0].split(">")[0].split("<")[0].strip() == "anthropic":
+            return dep[len("anthropic"):]
+    raise AssertionError("anthropic dependency not found in pyproject.toml")
+
 # Resolve the python/ package root without assuming a fixed depth, so the test
 # works whether it is collected from the repo root or from python/.
 _HERE = Path(__file__).resolve()
@@ -40,14 +51,9 @@ REPO_ROOT = PYPROJECT.parent
 
 
 def _declared_anthropic_constraint() -> str:
-    text = PYPROJECT.read_text(encoding="utf-8")
-    # Only look inside the [project] dependencies array so a stray mention in
-    # comments or other tables cannot satisfy the check.
-    match = re.search(
-        r'^\s*"anthropic([^"]*)"', text, re.MULTILINE
-    )
-    assert match is not None, "anthropic dependency not found in pyproject.toml"
-    return match.group(1)
+    # Parse the TOML with the standard library so the check does not depend on
+    # packaging or on the exact formatting of the dependencies array.
+    return _declared_anthropic_constraint_from_toml()
 
 
 def test_anthropic_constraint_is_declared():
