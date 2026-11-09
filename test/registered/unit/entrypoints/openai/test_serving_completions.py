@@ -302,9 +302,9 @@ class ServingCompletionTestCase(unittest.TestCase):
     def test_delta_frame_template_field_order_and_escapes(self):
         """Template frames must keep model field order and JSON escaping.
 
-        This covers the field-order/escape assertions that the verification
-        plan previously placed in test_protocol.py; keeping them here means
-        the byte-equivalence dimension only touches reviewed files.
+        Field-order/escape assertions live here (not in test_protocol.py) so
+        the byte-equivalence dimension only touches reviewed files and does
+        not depend on protocol-module imports.
         """
         created = 1706000000
         cases = [
@@ -398,7 +398,12 @@ class ServingCompletionTestCase(unittest.TestCase):
         return f"data: {chunk.model_dump_json()}\n\n"
 
     def test_stream_plain_delta_frames_are_byte_identical(self):
-        """First, middle and terminal frames must match model serialization."""
+        """First, middle and terminal frames must match model serialization.
+
+        Covers the byte-equivalence dimension end to end: the first chunk,
+        every intermediate delta chunk and the terminal chunk are compared
+        verbatim against the model serializer output.
+        """
         texts = ["", 'a "q" \\b\\ ', "line\nbreak\r\ttab", "unicode é 日本語 🚀"]
         chunks = [
             {
@@ -419,6 +424,8 @@ class ServingCompletionTestCase(unittest.TestCase):
         self.assertEqual(raw[-1], "data: [DONE]\n\n")
         frames = raw[:-1]
         self.assertEqual(len(frames), len(texts))
+        # The template path must actually be taken for the plain request.
+        self.assertTrue(_can_use_delta_template(req, False))
         created = json.loads(frames[0][len("data: ") :])["created"]
         for i, (frame, text) in enumerate(zip(frames, texts)):
             if i == len(texts) - 1:
@@ -537,9 +544,19 @@ class ServingCompletionTestCase(unittest.TestCase):
 
         template_us = measure(template_frame) * 1e6
         model_us = measure(model_frame) * 1e6
+        ratio = template_us / model_us
+        # Machine-parsable line so CI logs carry the median comparison.
         print(
-            f"[microbench] template={template_us:.3f}us "
-            f"model={model_us:.3f}us ratio={template_us / model_us:.3f}"
+            "[microbench] "
+            + json.dumps(
+                {
+                    "template_us": round(template_us, 3),
+                    "model_us": round(model_us, 3),
+                    "ratio": round(ratio, 3),
+                    "speedup_pct": round((1.0 - ratio) * 100.0, 2),
+                },
+                sort_keys=True,
+            )
         )
         self.assertLess(template_us, model_us * 1.1, (template_us, model_us))
 
