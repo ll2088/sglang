@@ -7,7 +7,9 @@ import pytest
 
 # Ensure the test module can be collected even when sglang/sgl_kernel are not
 # importable in the current environment; individual tests skip instead.
-pytestmark = pytest.mark.importorskip("cuda.bindings")
+# Do not use pytest.importorskip at module scope: it imports cuda.bindings
+# during collection, which can fail in CPU-only CI images before any test runs.
+# Each test performs its own guarded import via _import_or_skip instead.
 
 
 def _cuda_python_version():
