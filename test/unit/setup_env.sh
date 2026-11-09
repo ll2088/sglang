@@ -1,37 +1,40 @@
 #!/usr/bin/env bash
 # Minimal environment preparation for the run_suite unit tests.
 #
-# Installs only test/unit/requirements.txt (pytest). The unit tests stub out
-# sglang.test.ci.* in conftest.py, so the full sglang runtime (torch, kernels,
-# ...) is not needed. Never run `pip install -e python` here: it resolves the
-# full dependency set and can fail before pytest starts.
+# Installs only test/unit/requirements.txt (pytest) and self-checks the
+# interpreter, so an environment problem is reported as an environment
+# failure instead of being mistaken for a test failure. Never resolves the
+# full sglang dependency set.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REQUIREMENTS="${SCRIPT_DIR}/requirements.txt"
+PYTHON_BIN="${PYTHON:-python3}"
 
 echo "[setup] using ${SCRIPT_DIR}/setup_env.sh"
 
-# Guard: an editable install would pull the full sglang dependency set.
 for arg in "$@"; do
-  case "${arg}" in
-    -e|--editable|-e=*|--editable=*)
-      echo "[setup] refusing editable install (${arg}); only pytest is required" >&2
-      exit 2
-      ;;
-  esac
+    case "${arg}" in
+        -e|--editable|--editable=*|-e=*)
+            echo "[setup] refusing editable install (${arg}); this script only" >&2
+            echo "[setup] installs ${REQUIREMENTS} (pytest)." >&2
+            exit 2
+            ;;
+    esac
 done
 
-if [[ ! -f "${REQUIREMENTS}" ]]; then
-  echo "[setup] missing requirements file: ${REQUIREMENTS}" >&2
-  exit 2
+if [ ! -f "${REQUIREMENTS}" ]; then
+    echo "[setup] missing ${REQUIREMENTS}" >&2
+    exit 2
 fi
 
-python -m pip install -r "${REQUIREMENTS}"
+echo "[setup] installing ${REQUIREMENTS}"
+"${PYTHON_BIN}" -m pip install --disable-pip-version-check -r "${REQUIREMENTS}"
 
-# Self-check so an environment problem is reported as an environment failure
-# instead of being mistaken for a test failure.
-python -c "import pytest"
-python -m pytest --version
+echo "[setup] self-check: import pytest"
+"${PYTHON_BIN}" -c "import pytest"
 
-echo "[setup] pytest ready"
+echo "[setup] self-check: pytest --version"
+"${PYTHON_BIN}" -m pytest --version
+
+echo "[setup] ready"

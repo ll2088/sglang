@@ -91,6 +91,9 @@ def test_setup_env_guard_precedes_pip_install():
     # The guard must reject editable installs explicitly rather than silently
     # falling through to the full sglang dependency resolution.
     assert "exit 2" in text
+    # The guard must match the short form too, so `setup_env.sh -e` cannot
+    # slip past into the full dependency resolution.
+    assert "-e|--editable" in text
 
 
 def test_root_setup_env_delegates_to_unit_setup():
@@ -116,6 +119,13 @@ def test_root_setup_env_delegates_to_unit_setup():
     # Any editable flag must be rejected before delegation.
     assert "--editable" in text
     assert "exit 2" in text
+    # The guard must run before the delegate is exec'd, otherwise CI could
+    # still reach the full dependency resolution.
+    guard_pos = text.find("--editable")
+    exec_pos = text.find("exec bash")
+    assert guard_pos != -1
+    assert exec_pos != -1
+    assert guard_pos < exec_pos
 
 
 def test_setup_env_installs_only_minimal_requirements():
@@ -146,6 +156,21 @@ def test_root_setup_env_rejects_editable_flags():
     assert guard_pos != -1
     assert exec_pos != -1
     assert guard_pos < exec_pos
+
+
+def test_setup_env_does_not_resolve_sglang_dependencies():
+    """Neither setup entry may trigger the full sglang dependency resolution."""
+    for script in (
+        os.path.join(REPO_ROOT, "setup_env.sh"),
+        os.path.join(UNIT_DIR, "setup_env.sh"),
+    ):
+        with open(script, encoding="utf-8") as f:
+            text = f.read()
+        assert "pip install -e" not in text
+        assert "pip install --editable" not in text
+        assert "pip install -e python" not in text
+        # The only install target is the pytest-only requirements file.
+        assert "requirements.txt" in text
 
 
 def test_verify_entrypoint_exists_and_uses_distinct_exit_codes():

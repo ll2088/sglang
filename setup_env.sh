@@ -1,40 +1,39 @@
 #!/usr/bin/env bash
 # Root environment-preparation entry for the run_suite verification jobs.
 #
-# This script must stay lightweight: it only installs the pytest-only
-# requirements used by test/unit, never the full sglang dependency set.
-# `pip install -e python` resolves torch/kernels/... and can fail before any
-# test runs, which previously turned every verification dimension into an
-# environment failure instead of a test result.
+# These checks only need pytest: test/unit/conftest.py stubs out
+# sglang.test.ci.* so the full sglang runtime (torch, kernels, ...) is not
+# required. CI must call this script instead of `pip install -e python`,
+# which resolves the full sglang dependency set and can fail before any test
+# runs.
 #
-# It delegates to test/unit/setup_env.sh, resolving paths from this script's
-# own directory so CI can invoke it from any working directory.
+# Usage (from anywhere):
+#
+#     bash setup_env.sh
+#
+# Any editable install request is rejected explicitly so CI cannot silently
+# fall back to the full dependency resolution.
 set -euo pipefail
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNIT_SETUP="${SCRIPT_DIR}/test/unit/setup_env.sh"
 
-# Debug output so CI logs prove which entry was hit and where it delegates.
-echo "[setup] pwd=$(pwd)"
-echo "[setup] script=${BASH_SOURCE[0]}"
-echo "[setup] resolved script dir=${SCRIPT_DIR}"
-echo "[setup] delegating to ${UNIT_SETUP}"
-
-# Reject any editable install request before doing anything else: the full
-# sglang dependency resolution is exactly what this entry must avoid.
 for arg in "$@"; do
-    case "$arg" in
-        -e|--editable|-e=*|--editable=*)
-            echo "[setup] error: editable installs are not supported by this entry;" >&2
-            echo "[setup] use 'bash test/unit/setup_env.sh' for the pytest-only setup." >&2
+    case "${arg}" in
+        -e|--editable|--editable=*|-e=*)
+            echo "[setup] refusing editable install (${arg}): this entry installs" >&2
+            echo "[setup] only test/unit/requirements.txt (pytest). Use" >&2
+            echo "[setup] 'pip install -e python' explicitly if you really need" >&2
+            echo "[setup] the full sglang dependency set." >&2
             exit 2
             ;;
     esac
 done
 
-if [ ! -f "$UNIT_SETUP" ]; then
-    echo "[setup] error: missing delegate ${UNIT_SETUP}" >&2
+if [ ! -f "${UNIT_SETUP}" ]; then
+    echo "[setup] missing ${UNIT_SETUP}" >&2
     exit 2
 fi
 
-exec bash "$UNIT_SETUP" "$@"
+echo "[setup] delegating to ${UNIT_SETUP}"
+exec bash "${UNIT_SETUP}" "$@"
