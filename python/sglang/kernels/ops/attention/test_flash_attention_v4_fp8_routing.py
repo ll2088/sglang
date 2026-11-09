@@ -8,6 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
+# The pure policy module is loaded by path below and must not import torch or
+# sglang at module scope, so the routing checks run on a CPU-only runner.
 torch = pytest.importorskip("torch", reason="torch is required for routing tests")
 
 # The policy module is loaded by path and must not import sglang or CUDA at
