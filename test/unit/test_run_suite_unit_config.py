@@ -107,7 +107,12 @@ def test_root_setup_env_delegates_to_unit_setup():
     # invoke it from any CWD, and must exec the unit script rather than
     # duplicating install logic.
     assert "BASH_SOURCE" in text
+    assert "SCRIPT_DIR" in text
     assert "exec bash" in text
+    # Fail fast and surface the resolved paths so CI logs prove the lightweight
+    # entry was hit instead of a full editable install.
+    assert "set -euo pipefail" in text
+    assert "[setup]" in text
     # Any editable flag must be rejected before delegation.
     assert "--editable" in text
     assert "exit 2" in text
@@ -126,6 +131,21 @@ def test_setup_env_installs_only_minimal_requirements():
     # as an environment failure instead of a test failure.
     assert "import pytest" in text
     assert "pytest --version" in text
+
+
+def test_root_setup_env_rejects_editable_flags():
+    """The root entry must reject -e/--editable before delegating."""
+    script = os.path.join(REPO_ROOT, "setup_env.sh")
+    with open(script, encoding="utf-8") as f:
+        text = f.read()
+    # Both short and long editable forms must be matched by the guard.
+    assert "-e|--editable" in text
+    # The guard must run before the delegate is exec'd.
+    guard_pos = text.find("-e|--editable")
+    exec_pos = text.find("exec bash")
+    assert guard_pos != -1
+    assert exec_pos != -1
+    assert guard_pos < exec_pos
 
 
 def test_verify_entrypoint_exists_and_uses_distinct_exit_codes():
