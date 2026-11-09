@@ -12,68 +12,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # in the full sglang runtime, which is not available in the lightweight unit
 # test environment. Stub the two symbols run_suite needs so the exit-code and
 # collection-diagnostic branches can be exercised without the runtime deps.
-def _install_ci_stubs():
-    """Install lightweight sglang.test.ci stubs so run_suite imports cleanly.
-
-    run_suite imports sglang.test.ci.* at module import time; those modules pull
-    in the full sglang runtime (torch, kernels, ...). The exit-code and
-    collection-diagnostic branches under test only need the two symbols
-    run_suite references, so we always inject stubs into sys.modules. This
-    keeps the unit test runnable in a lightweight CI environment where the
-    full sglang dependency set is not installed.
-
-    Idempotent: if a real (non-stub) ci_register module is already imported we
-    leave it alone; if only a stub is present we re-install it so the test is
-    robust to import order across the unit test session.
-    """
-    existing = sys.modules.get("sglang.test.ci.ci_register")
-    if existing is not None and getattr(existing, "_run_suite_stub", False) is False:
-        return
-    # Mark the stub so re-imports (and importlib.reload of run_suite) keep
-    # using it instead of trying to import the real sglang runtime.
-
-    import enum
-
-    class HWBackend(enum.Enum):
-        CPU = "cpu"
-        CUDA = "cuda"
-        AMD = "amd"
-        MUSA = "musa"
-        NPU = "npu"
-        XPU = "xpu"
-        MLX = "mlx"
-        MPS = "mps"
-        PPU = "ppu"
-
-    class CIRegistry:  # pragma: no cover - structural stub
-        pass
-
-    def collect_tests(files, sanity_check=True):  # pragma: no cover
-        raise RuntimeError("collect_tests stub not patched")
-
-    def auto_partition(tests, part_id, part_size, live_est=None):
-        return tests
-
-    ci_register = types.ModuleType("sglang.test.ci.ci_register")
-    ci_register._run_suite_stub = True
-    ci_register.CIRegistry = CIRegistry
-    ci_register.HWBackend = HWBackend
-    ci_register.auto_partition = auto_partition
-    ci_register.collect_tests = collect_tests
-    ci_utils = types.ModuleType("sglang.test.ci.ci_utils")
-    ci_utils.run_unittest_files = lambda *a, **k: 0
-    sglang_mod = types.ModuleType("sglang")
-    sglang_test_mod = types.ModuleType("sglang.test")
-    sglang_ci_mod = types.ModuleType("sglang.test.ci")
-    sys.modules.setdefault("sglang", sglang_mod)
-    sys.modules.setdefault("sglang.test", sglang_test_mod)
-    sys.modules.setdefault("sglang.test.ci", sglang_ci_mod)
-    sys.modules["sglang.test.ci.ci_register"] = ci_register
-    sys.modules["sglang.test.ci.ci_utils"] = ci_utils
-
-
-_install_ci_stubs()
-
+# The sglang.test.ci stubs are installed by test/unit/conftest.py before
+# pytest collects this module, so run_suite imports cleanly even when the
+# full sglang runtime is not installed.
 import run_suite  # noqa: E402
 
 
