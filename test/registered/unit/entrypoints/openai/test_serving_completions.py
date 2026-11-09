@@ -104,21 +104,11 @@ def _load_template_helpers():
     import types
     from pathlib import Path
 
-    # If the real package is importable, prefer it: it exercises the actual
-    # module wiring. Fall back to source loading only when the runtime is
-    # unavailable (minimal CI env with just pydantic + pytest).
-    try:
-        from sglang.srt.entrypoints.openai import serving_completions as _real
-
-        return (
-            _real.CompletionRequest,
-            _real.CompletionResponseStreamChoice,
-            _real.CompletionStreamResponse,
-            _real._can_use_delta_template,
-            _real._delta_frame_template,
-        )
-    except Exception:
-        _install_minimal_stubs()
+    # Always load from source with stubs: importing the real package pulls in
+    # the full sglang runtime (quack-kernels, torch, ...), which is exactly the
+    # dependency chain that fails during `pip install -e python` in CI. The
+    # helpers under test only need the protocol models and `json`.
+    _install_minimal_stubs()
 
     repo_root = Path(__file__).resolve().parents[5]
     pkg_root = repo_root / "python" / "sglang"
@@ -159,6 +149,8 @@ def _load_template_helpers():
     assert getattr(sys.modules["sglang"], "__file__", None) is None, (
         "sglang package top level must not be imported by these tests"
     )
+    assert serving._delta_frame_template is not None
+    assert serving._can_use_delta_template is not None
     return (
         protocol.CompletionRequest,
         protocol.CompletionResponseStreamChoice,
@@ -465,11 +457,13 @@ def test_collection_is_nonzero():
 
 def test_usage_and_logprobs_frames_keep_model_fields():
     """Non-plain frames must keep usage/logprobs fields intact."""
-    from sglang.srt.entrypoints.openai.usage_processor import UsageProcessor
-
-    usage = UsageProcessor.calculate_token_usage(
-        prompt_tokens=3, completion_tokens=2, reasoning_tokens=0
-    )
+    # UsageProcessor is stubbed in minimal CI; build a plain dict with the
+    # same shape the model serializer would emit.
+    usage = {
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+        "total_tokens": 5,
+    }
     chunk = CompletionStreamResponse(
         id=REQUEST_ID,
         created=CREATED,
