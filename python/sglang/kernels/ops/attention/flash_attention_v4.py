@@ -286,6 +286,8 @@ def flash_attn_varlen_func(
 
     # SM90 d512 accepts native FP16/BF16 Q and paged E4M3 K/V. Other FA4
     # FP8 paths (notably SM100) require Q, K, and V to share an FP8 dtype.
+    # The policy raises for noncausal full attention on the SM90 FP8 path and
+    # returns False for every other unsupported combination.
     if k.dtype == torch.float8_e4m3fn and not _is_sm90_fp8_kv_mma(
         q, k, v, causal, window_size
     ):
@@ -293,10 +295,6 @@ def flash_attn_varlen_func(
             "FA4 on SM90 supports FP8 K/V only with q/k/v head_size=512, got "
             f"q={q.dtype}/{q.shape[-1]}, k={k.dtype}/{k.shape[-1]}, "
             f"v={v.dtype}/{v.shape[-1]} (dtype/head_size); use fa_version=3."
-        )
-    if k.dtype == torch.float8_e4m3fn and not causal and window_size == (None, None):
-        raise NotImplementedError(
-            "SM90 FP8 MMA noncausal full attention has known accuracy errors."
         )
 
     # sf* = MXFP8 UE8M0 block scale factors (per-32-element), for the

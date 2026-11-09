@@ -203,6 +203,10 @@ def test_policy_module_does_not_import_torch_at_module_scope():
     assert fa4.SM90_FP8_MMA_HEAD_DIM == 512
 
 
+def test_policy_module_does_not_import_sglang_at_module_scope():
+    assert "sglang" not in getattr(fa4, "__dict__", {})
+
+
 def test_policy_module_does_not_import_sglang():
     # Guards the CI fix: the policy module must not pull in the sglang package.
     assert "sglang" not in getattr(fa4, "__dict__", {})
@@ -326,7 +330,20 @@ def test_split_auto_selection_never_exceeds_tiles():
         num_sms=1024,
         is_fp8_mma=True,
     )
-    assert splits == 2
+    # 4 KV tiles, capped by SM90_FP8_MMA_MAX_SPLITS=4.
+    assert splits == 4
+
+
+def test_split_auto_selection_respects_sm_budget():
+    splits = _select_num_splits(
+        fa_version=4,
+        max_seqlen_k=4096,
+        num_heads=8,
+        num_kv_heads=1,
+        num_sms=8,
+        is_fp8_mma=True,
+    )
+    assert splits == 1
 
 
 @requires_torch
