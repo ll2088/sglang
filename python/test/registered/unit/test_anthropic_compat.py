@@ -45,12 +45,18 @@ def test_anthropic_constraint_is_declared():
 def test_anthropic_installed_version_if_present():
     # The SDK is optional; when it is installed, it must satisfy the declared
     # lower bound. Skip (not fail) when absent so the suite runs in a bare env.
+    # The lower bound is read from pyproject.toml rather than hardcoded, so the
+    # dependency bump remains the single source of truth for the version.
     try:
         version = importlib.metadata.version("anthropic")
     except importlib.metadata.PackageNotFoundError:
         pytest.skip("anthropic is not installed in this environment")
-    parts = tuple(int(p) for p in re.findall(r"\d+", version)[:3])
-    assert parts >= (2, 6, 0), version
+    constraint = _declared_anthropic_constraint()
+    match = re.fullmatch(r">=\s*(\d+(?:\.\d+)*)", constraint)
+    assert match is not None, constraint
+    lower = tuple(int(p) for p in match.group(1).split("."))
+    parts = tuple(int(p) for p in re.findall(r"\d+", version)[: len(lower)])
+    assert parts >= lower, (version, constraint)
 
 
 def test_anthropic_constraint_is_parseable():
@@ -75,8 +81,9 @@ def test_anthropic_sdk_importable_if_present():
 def test_declared_constraint_is_a_lower_bound():
     # The constraint is managed by the dependency bump; assert it is expressed
     # as a lower bound so the installed SDK is never older than declared.
+    # Do not pin the exact version here: the bump owns that value.
     constraint = _declared_anthropic_constraint()
-    assert constraint.startswith(">="), constraint
+    assert re.fullmatch(r">=\s*\d+(?:\.\d+)*", constraint), constraint
 
 
 def test_check_env_reports_anthropic():
