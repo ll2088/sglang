@@ -12,20 +12,6 @@ import pytest
 # sglang at module scope, so the routing checks run on a CPU-only runner.
 torch = pytest.importorskip("torch", reason="torch is required for routing tests")
 
-# The policy module is loaded by path and must not import sglang or CUDA at
-# module scope, so these routing checks run on a CPU-only runner.
-
-# This module must not import sglang or initialize CUDA: CI installs sglang
-# from PyPI and that step can fail before pytest runs. The policy module is
-# loaded by path below and stays torch-free at module scope.
-
-# The policy module is loaded by path below; it must never import torch at
-# module scope so that this file stays runnable without the sglang package.
-
-# This test intentionally avoids importing the sglang package: CI installs
-# sglang from PyPI and that step can fail before pytest runs. Loading the
-# pure policy module by path keeps the routing checks runnable standalone.
-
 # Load the pure policy module by path so this test does not require the
 # sglang package (or its heavy runtime deps) to be importable. The module is
 # registered in sys.modules before exec so dataclasses/typing introspection
@@ -187,6 +173,7 @@ def test_policy_module_does_not_import_torch_at_module_scope():
     # Guards the CI fix: importing the policy module must not require torch.
     # torch is imported lazily inside helpers, so it must not be a module attr.
     assert "torch" not in getattr(fa4, "__dict__", {})
+    assert fa4.SM90_FP8_MMA_HEAD_DIM == 512
 
 
 def test_policy_module_does_not_import_sglang():

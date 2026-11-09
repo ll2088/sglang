@@ -294,6 +294,10 @@ def flash_attn_varlen_func(
             f"q={q.dtype}/{q.shape[-1]}, k={k.dtype}/{k.shape[-1]}, "
             f"v={v.dtype}/{v.shape[-1]} (dtype/head_size); use fa_version=3."
         )
+    if k.dtype == torch.float8_e4m3fn and not causal and window_size == (None, None):
+        raise NotImplementedError(
+            "SM90 FP8 MMA noncausal full attention has known accuracy errors."
+        )
 
     # sf* = MXFP8 UE8M0 block scale factors (per-32-element), for the
     # block-scaled QK^T / V-dequant path. *_descale = the legacy per-tensor
