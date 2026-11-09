@@ -20,7 +20,7 @@ runtime_common = [
   "IPython",
   "aiohttp",
   "anthropic>=0.20.0",
-  "blobfile==3.0.0",
+  "blobfile==3.3.0",
   "build",
   "compressed-tensors",
   "decord2",
