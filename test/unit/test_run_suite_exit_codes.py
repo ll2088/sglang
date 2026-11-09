@@ -143,3 +143,18 @@ def test_readme_documents_exit_codes():
         text = f.read()
     for keyword in ("Collection failure", "Test execution failure", "No tests matched"):
         assert keyword in text, f"README missing exit-code keyword: {keyword}"
+
+
+def test_collect_failure_diagnostic_names_file_and_reason(monkeypatch, capsys):
+    """A collection exception must surface the failing file and reason."""
+
+    def boom(files, sanity_check=True):
+        raise RuntimeError("cannot import test/registered/core/test_broken.py")
+
+    _patch_collect(monkeypatch, boom)
+    code = run_suite.run_a_suite(_make_args())
+    out = capsys.readouterr().out
+    assert code == run_suite.EXIT_COLLECT_FAILURE
+    assert "COLLECTION FAILED" in out
+    assert "test/registered/core/test_broken.py" in out
+    assert "RuntimeError" in out

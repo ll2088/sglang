@@ -232,6 +232,45 @@ def test_setup_env_script_has_dependency_smoke_guard():
     assert "LOG_FILE" in text
 
 
+def test_setup_env_scripts_reject_editable_before_install():
+    """The editable guard must run before any pip invocation.
+
+    CI previously failed during environment preparation because the full
+    sglang dependency set was resolved. The guard must therefore appear before
+    the pip install line in both setup entries, so an accidental editable
+    install is rejected with exit 2 instead of continuing.
+    """
+    for script in (
+        os.path.join(REPO_ROOT, "setup_env.sh"),
+        os.path.join(UNIT_DIR, "setup_env.sh"),
+    ):
+        with open(script, encoding="utf-8") as f:
+            text = f.read()
+        guard_pos = text.find("--editable")
+        install_pos = text.find("pip install")
+        assert guard_pos != -1, f"{script} missing editable guard"
+        assert install_pos != -1, f"{script} missing pip install"
+        assert guard_pos < install_pos, (
+            f"{script}: editable guard must precede pip install"
+        )
+
+
+def test_setup_env_scripts_print_resolved_path():
+    """Both setup entries must print the resolved script path.
+
+    CI logs must prove the lightweight entry was hit instead of a full
+    `pip install -e python`; the `[setup] using` banner is the marker.
+    """
+    for script in (
+        os.path.join(REPO_ROOT, "setup_env.sh"),
+        os.path.join(UNIT_DIR, "setup_env.sh"),
+    ):
+        with open(script, encoding="utf-8") as f:
+            text = f.read()
+        assert "[setup] using" in text, script
+        assert "BASH_SOURCE" in text, script
+
+
 def test_root_setup_env_delegates_to_lightweight_script():
     """The repo-root setup entry must delegate to the pytest-only script.
 
