@@ -1,35 +1,45 @@
 #!/usr/bin/env bash
 # Minimal environment preparation for the run_suite unit tests.
 #
-# Installs only test/unit/requirements.txt (pytest) and self-checks pytest so
-# an environment problem is reported as an environment failure instead of
-# being mistaken for a test failure. Must never trigger the full sglang
-# dependency resolution (`pip install -e python`).
+# These tests only exercise run_suite.py's exit-code and collection-diagnostic
+# branches; conftest.py stubs out sglang.test.ci.* so the full sglang runtime
+# (torch, kernels, ...) is not needed. CI verification jobs should call this
+# script instead of `pip install -e python`, which resolves the full dependency
+# set and can fail during environment preparation.
+#
+# The script is cwd-independent, prints the resolved path so CI logs prove the
+# lightweight entry was hit, and rejects editable sglang installs so the full
+# dependency set cannot silently come back.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 REQUIREMENTS="${SCRIPT_DIR}/requirements.txt"
 
+for arg in "$@"; do
+    case "${arg}" in
+        -e|--editable|-e=*|--editable=*)
+            echo "[setup] ERROR: editable installs are not supported by this entry" >&2
+            echo "[setup] use test/unit/requirements.txt (pytest only) instead" >&2
+            exit 2
+            ;;
+    esac
+done
+
 if [[ ! -f "${REQUIREMENTS}" ]]; then
-  echo "[setup] ERROR: requirements file not found: ${REQUIREMENTS}" >&2
-  exit 1
+    echo "[setup] ERROR: missing ${REQUIREMENTS}" >&2
+    exit 2
 fi
 
-echo "[setup] using $(realpath "${BASH_SOURCE[0]}")"
-echo "[setup] requirements: $(realpath "${REQUIREMENTS}")"
-
-# Guard: the minimal requirements file must stay pytest-only. If the full
-# sglang dependency set sneaks back in, fail fast instead of resolving it.
 if grep -Eq '^(sglang==|quack-kernels)' "${REQUIREMENTS}"; then
-  echo "[setup] ERROR: ${REQUIREMENTS} must stay pytest-only" >&2
-  exit 1
+    echo "[setup] ERROR: ${REQUIREMENTS} must stay pytest-only" >&2
+    exit 2
 fi
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+echo "[setup] using ${REQUIREMENTS}"
+python -m pip install --disable-pip-version-check -r "${REQUIREMENTS}"
 
-"${PYTHON_BIN}" -m pip install --disable-pip-version-check -r "${REQUIREMENTS}"
-
-"${PYTHON_BIN}" -c 'import pytest; print("[setup] pytest", pytest.__version__)'
-"${PYTHON_BIN}" -m pytest --version
-
-echo "[setup] OK"
+python - <<'PY'
+import pytest
+print("[setup] pytest", pytest.__version__)
+PY
+python -m pytest --version

@@ -266,6 +266,45 @@ def test_setup_env_scripts_reject_editable_install():
             text = f.read()
         assert "pip install -e" not in text, f"{script} must not editable-install"
         assert "-e python" not in text, f"{script} must not editable-install"
+        # The guard must fail fast (non-zero) when an editable arg is passed,
+        # so a CI entry that misses the lightweight path cannot silently fall
+        # back to resolving the full sglang dependency set.
+        assert "--editable" in text, f"{script} must reject --editable"
+        assert "exit 2" in text, f"{script} must exit non-zero on editable"
+
+
+def test_setup_env_scripts_do_not_resolve_sglang_deps():
+    """The setup entries must not trigger sglang dependency resolution.
+
+    CI logs previously showed py-spy / pybase64 / quack-kernels being
+    downloaded during environment preparation, which means the lightweight
+    entry was not hit. The scripts must only install the pytest-only
+    requirements file.
+    """
+    for script in (
+        os.path.join(REPO_ROOT, "setup_env.sh"),
+        os.path.join(UNIT_DIR, "setup_env.sh"),
+    ):
+        with open(script, encoding="utf-8") as f:
+            text = f.read()
+        assert "requirements.txt" in text, f"{script} must install minimal reqs"
+        assert "sglang==" not in text, f"{script} must not pin sglang"
+        assert "quack-kernels" not in text, f"{script} must not pin kernels"
+        assert "py-spy" not in text, f"{script} must not pin py-spy"
+
+
+def test_setup_env_scripts_are_executable():
+    """Both setup entries must be directly invocable by CI."""
+    for script in (
+        os.path.join(REPO_ROOT, "setup_env.sh"),
+        os.path.join(UNIT_DIR, "setup_env.sh"),
+    ):
+        assert os.path.exists(script), script
+        assert os.access(script, os.X_OK), f"{script} must be executable"
+        with open(script, encoding="utf-8") as f:
+            text = f.read()
+        assert text.startswith("#!/usr/bin/env bash"), script
+        assert "set -euo pipefail" in text, script
 
 
 def test_verify_run_suite_help_works_without_pytest():
