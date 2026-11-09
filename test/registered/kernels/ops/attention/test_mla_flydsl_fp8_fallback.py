@@ -22,7 +22,13 @@ def test_flydsl_fp8_capability_probe_is_safe_without_aiter():
 
 def test_opt_in_default_is_off():
     """The FlyDSL FP8 prefill backend must not be auto-selected by default."""
-    from sglang.srt.environ import envs
+    # Import lazily: sglang.srt.environ pulls in runtime deps that are not
+    # available in the CPU-only CI setup step, and this test must not turn a
+    # missing optional dependency into a collection error.
+    try:
+        from sglang.srt.environ import envs
+    except Exception:  # noqa: BLE001
+        pytest.skip("sglang.srt.environ unavailable in this environment")
 
     # No env var should enable the opt-in backend implicitly.
     for name in dir(envs):
@@ -42,6 +48,42 @@ def test_kernel_registry_query_is_stable():
     assert ops == sorted(ops)
     # Repeated queries must not mutate registry state.
     assert registry.ops() == ops
+
+
+def test_fused_per_tensor_fp8_quant_rejects_bad_arity():
+    """The fused quantizer validates its arity before touching any kernel."""
+    from sglang.kernels.ops.attention.triton_per_tensor_fp8_quant import (
+        fused_per_tensor_fp8_quant,
+    )
+
+    with pytest.raises(ValueError):
+        fused_per_tensor_fp8_quant()
+
+
+def test_fused_per_tensor_fp8_quant_rejects_bad_fp8_dtype():
+    """Only e4m3/e5m2 are accepted; the check runs before any launch."""
+    import torch
+
+    from sglang.kernels.ops.attention.triton_per_tensor_fp8_quant import (
+        fused_per_tensor_fp8_quant,
+    )
+
+    x = torch.zeros((1, 1, 1), dtype=torch.bfloat16)
+    with pytest.raises(ValueError):
+        fused_per_tensor_fp8_quant(x, fp8_dtype=torch.float32)
+
+
+def test_fused_per_tensor_fp8_quant_rejects_non_3d():
+    """Inputs must be [tokens, heads, dim]; the shape check is pure Python."""
+    import torch
+
+    from sglang.kernels.ops.attention.triton_per_tensor_fp8_quant import (
+        fused_per_tensor_fp8_quant,
+    )
+
+    x = torch.zeros((4, 8), dtype=torch.bfloat16)
+    with pytest.raises(AssertionError):
+        fused_per_tensor_fp8_quant(x)
 
 
 if __name__ == "__main__":
