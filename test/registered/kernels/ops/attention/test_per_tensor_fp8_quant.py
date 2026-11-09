@@ -22,6 +22,10 @@ def test_attention_package_imports_without_optional_deps():
     """Importing the attention package must not require torch/triton/aiter."""
     pytest.importorskip("sglang.kernels.ops.attention")
     import sglang.kernels.ops.attention as m  # noqa: F401
+    # The registry must be populated by the package import alone.
+    from sglang.kernels.registry import registry
+
+    assert registry.has("attention.fused_per_tensor_fp8_quant")
 
 
 @pytest.mark.parametrize(
@@ -42,6 +46,9 @@ def test_registry_has_metadata_only_specs(op):
     assert specs, f"no spec registered for {op!r}"
     for spec in specs:
         assert spec.target, f"empty target for {op!r}"
+    # Re-registering the same metadata must be idempotent, not a conflict.
+    for spec in specs:
+        registry.register(spec)
 
 
 def test_mla_prefill_selector_is_opt_in():
@@ -57,3 +64,8 @@ def test_mla_prefill_selector_is_opt_in():
     # Default (no opt-in) must not select the FlyDSL FP8 backend.
     name = sel.select_mla_prefill_backend()
     assert name != "ROCM_AITER_FLYDSL_FP8"
+    # And the resolver must fall back to the existing prefill path.
+    if hasattr(sel, "resolve_mla_prefill_kernel"):
+        resolved = sel.resolve_mla_prefill_kernel()
+        assert resolved is not None
+        assert "flydsl_fp8" not in str(resolved).lower()
