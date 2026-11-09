@@ -75,6 +75,10 @@ exception type, reason and traceback instead of silently passing. The three
 non-zero states are also greppable as `collect-failed`, `exec-failed` and
 `no-tests` so CI logs and docs can be checked mechanically.
 
+In short: `Collection failure` (exit `2`) means the suite could not be
+collected, `Test execution failure` (exit `1`) means collected tests failed,
+and `No tests matched` (exit `3`) means the selection was empty.
+
 To verify the runner without installing the full sglang dependency set:
 
 ```bash

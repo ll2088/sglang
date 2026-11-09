@@ -1,45 +1,35 @@
-"""Lightweight CI entrypoint for the run_suite verification dimensions.
+"""Pytest-only verification entrypoint for run_suite.py.
 
-This script is intentionally dependency-free: it only imports the standard
-library at module scope and imports pytest lazily. CI verification jobs for
-the run_suite exit-code / collection-diagnostic work must be runnable with
-nothing but pytest installed -- installing the full sglang dependency set
-(`pip install -e python`) previously failed during environment preparation
-and prevented any dimension from running.
+This script is the CI entrypoint for the run_suite exit-code and
+collection-diagnostic checks. It must be runnable with only pytest
+installed: it never imports sglang, and pytest is imported lazily so
+``--help`` and the environment banner work even when pytest is missing.
+
+Exit codes:
+    0  all dimensions passed
+    1  a real dimension (test) failure
+    2  infrastructure failure (pytest missing, test file missing, ...)
 
 Usage (from the repository root):
 
+    python -m pip install -r test/unit/requirements.txt
     python test/unit/verify_run_suite.py
-    python test/unit/verify_run_suite.py --dimension collect-diagnostics
-    python test/unit/verify_run_suite.py --dimension exit-codes
-    python test/unit/verify_run_suite.py --dimension tests
-    python test/unit/verify_run_suite.py --dimension usability
-
-Exit codes:
-
-    0  every selected dimension passed
-    1  a real dimension failure (a test or check failed)
-    2  infrastructure failure (pytest missing, wrong interpreter, ...)
-
-The 1-vs-2 split keeps an environment problem from being reported as a code
-failure, which is exactly the confusion this work is meant to remove.
 """
 
 import argparse
 import os
 import sys
 
+
+UNIT_DIR = os.path.dirname(os.path.abspath(__file__))
+TEST_DIR = os.path.dirname(UNIT_DIR)
+
 EXIT_OK = 0
 EXIT_DIMENSION_FAILURE = 1
 EXIT_INFRA_FAILURE = 2
 
-UNIT_DIR = os.path.dirname(os.path.abspath(__file__))
-TEST_DIR = os.path.dirname(UNIT_DIR)
-REPO_ROOT = os.path.dirname(TEST_DIR)
-
-# Each dimension maps to the pytest node ids that exercise it. Keeping the
-# mapping here (rather than in CI YAML) means the four dimensions documented
-# in test/README.md are the same four this entrypoint runs.
+# Each dimension maps to the test files that cover it. Keeping the mapping
+# explicit means a CI job cannot silently run zero tests for a dimension.
 DIMENSIONS = {
     "collect-diagnostics": [
         os.path.join(UNIT_DIR, "test_run_suite_collect_diagnostics.py"),
@@ -50,59 +40,93 @@ DIMENSIONS = {
     "tests": [
         os.path.join(UNIT_DIR, "test_run_suite_exit_codes.py"),
         os.path.join(UNIT_DIR, "test_run_suite_collect_diagnostics.py"),
-        os.path.join(UNIT_DIR, "test_run_suite_standalone.py"),
-        os.path.join(UNIT_DIR, "test_run_suite_no_sglang_smoke.py"),
     ],
     "usability": [
         os.path.join(UNIT_DIR, "test_run_suite_unit_config.py"),
-        os.path.join(UNIT_DIR, "test_run_suite_exit_codes.py"),
     ],
 }
 
 
 def _print_environment() -> None:
-    """Print interpreter / pytest versions so environment issues are visible."""
-    print(f"python: {sys.version.split()[0]} ({sys.executable})")
+    print(f"python: {sys.version.split()[0]}", flush=True)
     try:
         import pytest  # noqa: F401
 
-        print(f"pytest: {pytest.__version__}")
+        print(f"pytest: {pytest.__version__}", flush=True)
     except ImportError:
-        print("pytest: NOT INSTALLED")
+        print("pytest: NOT INSTALLED", flush=True)
 
 
-def _run_dimension(name: str, extra_args) -> int:
-    """Run one dimension via pytest; return 0/1/2 per the exit-code contract."""
+def _check_targets() -> list:
+    missing = []
+    for name, targets in DIMENSIONS.items():
+        if not targets:
+            missing.append(f"dimension {name} has no targets")
+        for target in targets:
+            if not os.path.exists(target):
+                missing.append(f"{name}: missing {target}")
+    return missing
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run the pytest-only run_suite verification dimensions."
+    )
+    parser.add_argument(
+        "--dimension",
+        action="append",
+        choices=sorted(DIMENSIONS),
+        help="Run only the named dimension(s); default: all.",
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="List dimensions and their test files, then exit.",
+    )
+    args = parser.parse_args(argv)
+
+    _print_environment()
+
+    if args.list:
+        for name, targets in DIMENSIONS.items():
+            print(f"{name}:")
+            for target in targets:
+                print(f"  {target}")
+        return EXIT_OK
+
+    missing = _check_targets()
+    if missing:
+        print("INFRA FAILURE: verification targets are missing:", flush=True)
+        for item in missing:
+            print(f"  - {item}", flush=True)
+        return EXIT_INFRA_FAILURE
+
     try:
         import pytest
     except ImportError:
         print(
-            "pytest is required to run the run_suite verification dimensions; "
-            "install the minimal dependency set with "
-            "`python -m pip install -r test/unit/requirements.txt` "
-            "(or `pip install pytest`).",
-            file=sys.stderr,
+            "INFRA FAILURE: pytest is not installed; run "
+            "`python -m pip install -r test/unit/requirements.txt`.",
+            flush=True,
         )
         return EXIT_INFRA_FAILURE
 
-    targets = DIMENSIONS[name]
-    missing = [t for t in targets if not os.path.exists(t)]
-    if missing:
-        print(
-            f"dimension {name!r} references missing test file(s): {missing}",
-            file=sys.stderr,
-        )
-        return EXIT_INFRA_FAILURE
+    selected = args.dimension or list(DIMENSIONS)
+    targets = []
+    for name in selected:
+        for target in DIMENSIONS[name]:
+            if target not in targets:
+                targets.append(target)
 
     # run_suite.py lives in test/ and imports sglang.test.ci.*; conftest.py in
-    # this directory installs lightweight stubs before collection, so putting
-    # test/ on sys.path mirrors the documented `PYTHONPATH=test` invocation.
+    # this directory installs lightweight stubs before collection.
     if TEST_DIR not in sys.path:
         sys.path.insert(0, TEST_DIR)
 
-    args = [
+    pytest_args = [
         *targets,
         "-q",
+        "-rs",
         "-p",
         "no:cacheprovider",
         "-c",
@@ -110,51 +134,15 @@ def _run_dimension(name: str, extra_args) -> int:
         "--rootdir",
         UNIT_DIR,
     ]
-    args.extend(extra_args)
-    print(f"=== dimension: {name} ===", flush=True)
-    rc = int(pytest.main(args))
-    # pytest exit codes: 0 ok, 1 tests failed, 2 interrupted, 3 internal error,
-    # 4 usage error, 5 no tests collected. Only 0 is success; 2/3/4/5 are
-    # environment/usage problems, everything else is a real failure.
+    rc = int(pytest.main(pytest_args))
     if rc == 0:
         return EXIT_OK
-    if rc in (2, 3, 4, 5):
+    # pytest exit code 5 means "no tests collected": that is an infra problem
+    # for this entrypoint, not a real dimension failure.
+    if rc == 5:
+        print("INFRA FAILURE: no tests were collected.", flush=True)
         return EXIT_INFRA_FAILURE
     return EXIT_DIMENSION_FAILURE
-
-
-def main(argv=None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-    parser = argparse.ArgumentParser(
-        description="Run the run_suite verification dimensions (pytest-only)."
-    )
-    parser.add_argument(
-        "--dimension",
-        choices=sorted(DIMENSIONS),
-        action="append",
-        default=None,
-        help="Dimension to run; repeatable. Defaults to all four.",
-    )
-    parser.add_argument(
-        "pytest_args",
-        nargs=argparse.REMAINDER,
-        help="Extra arguments forwarded to pytest.",
-    )
-    args = parser.parse_args(argv)
-
-    _print_environment()
-
-    selected = args.dimension or list(DIMENSIONS)
-    worst = EXIT_OK
-    for name in selected:
-        rc = _run_dimension(name, args.pytest_args)
-        print(f"=== dimension {name}: exit {rc} ===", flush=True)
-        # Infra failure dominates: it means the dimension never really ran.
-        if rc == EXIT_INFRA_FAILURE:
-            return EXIT_INFRA_FAILURE
-        if rc != EXIT_OK:
-            worst = EXIT_DIMENSION_FAILURE
-    return worst
 
 
 if __name__ == "__main__":

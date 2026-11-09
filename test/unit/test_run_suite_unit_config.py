@@ -113,6 +113,9 @@ def test_verify_run_suite_entrypoint_exists():
     # even when pytest is missing (that case exits 2, not 1).
     assert "import pytest" in text
     assert "NOT INSTALLED" in text
+    # The entrypoint must not shell out to a full sglang install; it is the
+    # lightweight path CI uses instead of `pip install -e python`.
+    assert "pip install -e python" not in text
 
 
 def test_verify_run_suite_importable_without_pytest_runtime():
