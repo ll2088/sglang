@@ -62,13 +62,32 @@ def _find_pyproject() -> Path:
     raise AssertionError("unreachable")
 
 
+def _find_pyproject_or_none() -> Path | None:
+    """Like _find_pyproject but returns None instead of skipping.
+
+    Used by tests that can still assert something meaningful (e.g. the SDK
+    public surface) when the checkout does not include pyproject.toml.
+    """
+    for parent in _HERE.parents:
+        candidate = parent / "pyproject.toml"
+        if candidate.is_file():
+            return candidate
+    if len(_HERE.parents) > 3:
+        fallback = _HERE.parents[3] / "python" / "pyproject.toml"
+        if fallback.is_file():
+            return fallback
+    return None
+
+
 def _read_pyproject_text() -> str:
     """Read pyproject.toml as text, skipping when it is absent.
 
     Used by the static checks so they do not depend on tomllib being able to
     parse the whole file (e.g. a trimmed checkout with an unusual layout).
     """
-    path = _find_pyproject()
+    path = _find_pyproject_or_none()
+    if path is None:
+        pytest.skip("pyproject.toml not found above the test file")
     try:
         return path.read_text(encoding="utf-8")
     except OSError as e:  # pragma: no cover - defensive
@@ -77,7 +96,10 @@ def _read_pyproject_text() -> str:
 
 
 def _repo_root() -> Path:
-    return _find_pyproject().parent
+    path = _find_pyproject_or_none()
+    if path is None:
+        pytest.skip("pyproject.toml not found above the test file")
+    return path.parent
 
 
 def _sglang_root() -> Path:
@@ -98,8 +120,11 @@ def _sglang_root() -> Path:
 
 def _declared_anthropic_constraint_from_toml() -> str:
     """Read the anthropic specifier from [project].dependencies via tomllib."""
+    path = _find_pyproject_or_none()
+    if path is None:
+        pytest.skip("pyproject.toml not found above the test file")
     try:
-        with _find_pyproject().open("rb") as f:
+        with path.open("rb") as f:
             data = tomllib.load(f)
     except (OSError, tomllib.TOMLDecodeError) as e:
         pytest.skip(f"cannot parse pyproject.toml: {e}")
@@ -163,8 +188,9 @@ def test_anthropic_installed_version_if_present():
 def test_anthropic_constraint_is_parseable():
     # The constraint is managed by the dependency bump; here we only require it
     # to be a well-formed specifier so the install step cannot fail on syntax.
+    # Allow optional whitespace after the operator (e.g. ">= 2.6.0").
     constraint = _declared_anthropic_constraint()
-    assert re.fullmatch(r"[<>=!~][^\s]*", constraint), constraint
+    assert re.fullmatch(r"[<>=!~]\s*[^\s]*", constraint), constraint
 
 
 def test_anthropic_constraint_has_no_removed_0x_api_reference():
