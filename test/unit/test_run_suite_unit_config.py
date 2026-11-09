@@ -136,6 +136,14 @@ def test_root_setup_env_delegates_to_unit_setup():
     # The root entry must not install anything itself: only the unit script
     # owns the pytest-only requirements install.
     assert "pip install" not in text
+    # The entry marker must be printed unconditionally at the top so CI logs
+    # prove the script was actually invoked (not bypassed by a direct pip
+    # command).
+    assert "entry marker" in text
+    # A --self-check mode must exist as a CI pre-flight gate that performs no
+    # install and exits 0.
+    assert "--self-check" in text
+    assert "self-check: entry reachable" in text
 
 
 def test_setup_env_installs_only_minimal_requirements():
@@ -172,6 +180,10 @@ def test_root_setup_env_rejects_editable_flags():
     # non-zero so CI cannot fall through to the full dependency resolution.
     assert "test/unit/setup_env.sh" in text
     assert "exit 2" in text
+    # The guard must walk $@ so a full `pip install -e python` command line is
+    # caught, not only a bare `-e` token.
+    assert "_args" in text
+    assert "pip)" in text
 
 
 def test_setup_env_guard_covers_pip_install_variants():
@@ -192,6 +204,8 @@ def test_setup_env_guard_covers_pip_install_variants():
         # The guard must exit non-zero so CI cannot continue into a full
         # dependency resolution after a rejected editable install.
         assert "exit 2" in text
+        # The bare `-e.` form (no slash) must be rejected as well.
+        assert "-e." in text
 
 
 def test_setup_env_does_not_resolve_sglang_dependencies():
@@ -244,6 +258,43 @@ def test_unit_setup_env_is_standalone_and_pytest_only():
     # It must never import or install the sglang runtime.
     assert "import sglang" not in text
     assert "pip install -e" not in text
+
+
+def test_root_setup_env_self_check_runs_without_install():
+    """`bash setup_env.sh --self-check` must exit 0 and print the entry marker."""
+    import subprocess
+
+    script = os.path.join(REPO_ROOT, "setup_env.sh")
+    proc = subprocess.run(
+        ["bash", script, "--self-check"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "entry marker" in proc.stdout
+    assert "self-check: entry reachable" in proc.stdout
+    # The self-check must not install anything.
+    assert "pip install" not in proc.stdout
+
+
+def test_root_setup_env_rejects_pip_install_editable_command():
+    """A full `pip install -e python` command line must be rejected with exit 2."""
+    import subprocess
+
+    script = os.path.join(REPO_ROOT, "setup_env.sh")
+    for argv in (
+        ["pip", "install", "-e", "python"],
+        ["pip", "install", "--editable=python"],
+        ["-e", "./python"],
+        ["-e."],
+    ):
+        proc = subprocess.run(
+            ["bash", script, *argv],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 2, (argv, proc.stdout, proc.stderr)
+        assert "editable install requested" in proc.stderr
 
 
 def test_verify_entrypoint_exists_and_uses_distinct_exit_codes():
