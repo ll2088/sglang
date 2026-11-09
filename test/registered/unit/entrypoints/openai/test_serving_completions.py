@@ -17,7 +17,14 @@ from unittest.mock import AsyncMock, Mock
 from fastapi import Request
 
 from sglang.srt.entrypoints.openai.protocol import CompletionRequest
-from sglang.srt.entrypoints.openai.serving_completions import OpenAIServingCompletion
+from sglang.srt.entrypoints.openai.protocol import (
+    CompletionResponseStreamChoice,
+    CompletionStreamResponse,
+)
+from sglang.srt.entrypoints.openai.serving_completions import (
+    OpenAIServingCompletion,
+    _delta_frame_template,
+)
 from sglang.srt.managers.tokenizer_manager import TokenizerManager
 from sglang.srt.runtime_context import get_context, publish, reset_context
 from sglang.srt.server_args import ServerArgs
@@ -251,6 +258,45 @@ class ServingCompletionTestCase(unittest.TestCase):
         self.assertEqual(len(response.choices[0].logprobs.top_logprobs), 0)
         self.assertEqual(response.choices[0].token_ids, [3, 4])
         self.assertEqual(response.choices[0].prompt_token_ids, [1, 2])
+
+    def test_delta_frame_template_matches_model_serialization(self):
+        created = 1706000000
+        for request_id, model_name, index, text in [
+            ("cmpl-abc123", "meta-llama/Llama-3.1-8B", 0, ""),
+            ("cmpl-abc123", "meta-llama/Llama-3.1-8B", 0, "Hello, world"),
+            ('id "with" quotes\\', "модель 🎯", 7, ' "q" \\b\\ '),
+            ("cmpl-abc123", "m", 1, "line\nbreaks\r\ttabs"),
+            ("cmpl-abc123", "m", 2, "\x00\x01\x1f\x7f"),
+            ("cmpl-abc123", "m", 3, "unicode é 日本語 🚀"),
+        ]:
+            template = _delta_frame_template(request_id, created, model_name)
+            self.assertIsNotNone(template)
+            prefix, infix, suffix = template
+            frame = (
+                f"{prefix}{index}{infix}"
+                f"{json.dumps(text, ensure_ascii=False)}{suffix}"
+            )
+            chunk = CompletionStreamResponse(
+                id=request_id,
+                created=created,
+                object="text_completion",
+                choices=[
+                    CompletionResponseStreamChoice(
+                        index=index,
+                        text=text,
+                        logprobs=None,
+                        finish_reason=None,
+                        matched_stop=None,
+                        token_ids=None,
+                        prompt_token_ids=None,
+                    )
+                ],
+                model=model_name,
+            )
+            self.assertEqual(frame, f"data: {chunk.model_dump_json()}\n\n")
+
+    def test_delta_frame_template_none_when_ambiguous(self):
+        self.assertIsNone(_delta_frame_template("cmpl-987654321", 1, "m"))
 
     def test_streaming_abort_yields_error(self):
         """Test that an abort finish reason during streaming correctly yields an error and stops."""

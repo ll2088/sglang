@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import AsyncGenerator
@@ -44,6 +45,48 @@ if TYPE_CHECKING:
     from sglang.srt.parser.template_manager import TemplateManager
 
 logger = logging.getLogger(__name__)
+
+_PROBE_TEXT = "zZ_sglang_sse_probe_Zz"
+_PROBE_INDEX = 987654321
+
+
+def _delta_frame_template(
+    request_id: str, created_time: int, model_name: str
+) -> tuple[str, str, str] | None:
+    """Split a probe chunk into the parts of a plain-delta SSE frame that are
+    constant for a stream, so only index and text are rendered per chunk.
+
+    Taking them from the serializer keeps frames byte-identical to
+    ``model_dump_json()`` if the models gain fields.
+
+    Returns:
+        ``(prefix, infix, suffix)``, or None if the sentinels are ambiguous.
+
+    """
+    probe = CompletionStreamResponse(
+        id=request_id,
+        created=created_time,
+        object="text_completion",
+        choices=[
+            CompletionResponseStreamChoice(
+                index=_PROBE_INDEX,
+                text=_PROBE_TEXT,
+                logprobs=None,
+                finish_reason=None,
+                matched_stop=None,
+                token_ids=None,
+                prompt_token_ids=None,
+            )
+        ],
+        model=model_name,
+    )
+    frame = f"data: {probe.model_dump_json()}\n\n"
+    index, text = str(_PROBE_INDEX), json.dumps(_PROBE_TEXT)
+    if frame.count(index) != 1 or frame.count(text) != 1:
+        return None
+    prefix, rest = frame.split(index, 1)
+    infix, suffix = rest.split(text, 1)
+    return prefix, infix, suffix
 
 
 class OpenAIServingCompletion(OpenAIServingBase):
@@ -253,6 +296,19 @@ class OpenAIServingCompletion(OpenAIServingBase):
                 get_serving().stream_response_default_include_usage,
             )
 
+            # Requests that can only emit plain delta chunks render them from a
+            # per-stream template; everything else uses the model path below.
+            delta_template = None
+            if (
+                not request.echo
+                and request.logprobs is None
+                and not request.return_token_ids
+                and not continuous_usage_stats
+            ):
+                delta_template = _delta_frame_template(
+                    adapted_request.rid or "", created, request.model
+                )
+
             async for content in self.tokenizer_manager.generate_request(
                 adapted_request, raw_request
             ):
@@ -370,6 +426,16 @@ class OpenAIServingCompletion(OpenAIServingBase):
                     )
                     yield f"data: {error}\n\n"
                     break
+
+                if delta_template is not None and finish_reason_type is None:
+                    prefix, infix, suffix = delta_template
+                    yield (
+                        f"{prefix}{index}{infix}"
+                        f"{json.dumps(delta, ensure_ascii=False)}"
+                        f"{suffix}"
+                    )
+                    stream_started = True
+                    continue
 
                 choice_data = CompletionResponseStreamChoice(
                     index=index,
