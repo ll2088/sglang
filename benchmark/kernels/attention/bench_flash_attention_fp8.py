@@ -471,6 +471,15 @@ def main(argv: Iterable[str] | None = None) -> int:
                         )
                 if math.isnan(times.get("FA4-CuTe-FP8", float("nan"))):
                     print("FA4-CuTe-FP8 status: FAILED")
+                else:
+                    bf16_t = times.get("FA4-CuTe-BF16", float("nan"))
+                    fp8_t = times["FA4-CuTe-FP8"]
+                    if not math.isnan(bf16_t) and bf16_t > 0:
+                        print(
+                            "FA4-CuTe-FP8 vs BF16 median latency: "
+                            f"{fp8_t * 1e3:.3f} ms vs {bf16_t * 1e3:.3f} ms "
+                            f"({bf16_t / fp8_t:.2f}x)"
+                        )
 
     if fp8_failures:
         print(f"\nFP8 failures: {len(fp8_failures)} (showing first 5)")
