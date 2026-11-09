@@ -1,35 +1,55 @@
 #!/usr/bin/env bash
-# Lightweight environment preparation for the run_suite verification jobs.
+# Minimal environment setup for the run_suite unit tests.
 #
-# The four verification dimensions (collect-diagnostics, exit-codes, tests,
-# usability) only exercise run_suite.py's exit-code and collection-diagnostic
-# branches. conftest.py stubs out sglang.test.ci.*, so the full sglang runtime
-# (torch, kernels, ...) is NOT needed. Installing the package with
-# `pip install -e python` resolves the full dependency set and can fail during
-# environment preparation (e.g. torch wheel download timeouts), which is what
-# previously made every dimension fail before any test ran.
+# These tests only exercise run_suite.py's exit-code and collection-diagnostic
+# branches; test/unit/conftest.py stubs out sglang.test.ci.* so the full sglang
+# runtime (torch, kernels, ...) is not needed. CI must call this script instead
+# of `pip install -e python`, which resolves the full dependency set and can
+# fail during environment preparation before any test runs.
 #
 # Usage (from the repository root):
 #
 #     bash test/unit/setup_env.sh
-#     PYTHONPATH=test python -m pytest test/unit/test_run_suite_exit_codes.py -q -p no:cacheprovider
-#
-# This script is intentionally dependency-free beyond pip/pytest.
+#     PYTHONPATH=test python test/unit/verify_run_suite.py
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$REPO_ROOT"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REQ_FILE="${SCRIPT_DIR}/requirements.txt"
 
-PYTHON="${PYTHON:-python3}"
+if [[ ! -f "${REQ_FILE}" ]]; then
+    echo "setup_env: missing requirements file: ${REQ_FILE}" >&2
+    exit 2
+fi
 
-# 1) Install only the minimal dependency set (pytest). Never install the full
-#    sglang dependency set here: it is not required by these tests and its
-#    resolution is the failure mode this script exists to avoid.
-"$PYTHON" -m pip install --disable-pip-version-check -r test/unit/requirements.txt
+PYTHON_BIN="${PYTHON:-python3}"
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+    echo "setup_env: python interpreter not found: ${PYTHON_BIN}" >&2
+    exit 2
+fi
 
-# 2) Fast self-check so a dependency problem is reported as an environment
-#    failure instead of being mistaken for a test failure.
-"$PYTHON" -c "import pytest; print('pytest', pytest.__version__)"
-"$PYTHON" -m pytest --version
+echo "setup_env: installing minimal test dependencies from ${REQ_FILE}"
+if ! "${PYTHON_BIN}" -m pip install -r "${REQ_FILE}"; then
+    echo "setup_env: pip install failed for ${REQ_FILE}" >&2
+    exit 2
+fi
 
-echo "run_suite verification environment ready (pytest only)"
+# Self-check: an environment problem must be reported as an environment
+# failure (exit 2), never mistaken for a test failure.
+if ! "${PYTHON_BIN}" -c 'import pytest'; then
+    echo "setup_env: pytest is not importable after install" >&2
+    exit 2
+fi
+if ! "${PYTHON_BIN}" -m pytest --version; then
+    echo "setup_env: pytest --version failed" >&2
+    exit 2
+fi
+
+# Guard against regressions that would pull the full sglang dependency set
+# back into environment preparation.
+if grep -Eq 'sglang==|quack-kernels|^torch' "${REQ_FILE}"; then
+    echo "setup_env: ${REQ_FILE} must stay pytest-only (found full sglang deps)" >&2
+    exit 2
+fi
+
+echo "setup_env: OK (pytest-only environment ready)"

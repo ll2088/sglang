@@ -188,3 +188,37 @@ def test_verify_run_suite_dimensions_cover_required_checks():
     assert any(
         os.path.basename(p) == "test_run_suite_unit_config.py" for p in usability
     )
+    tests = module.DIMENSIONS["tests"]
+    assert any(
+        os.path.basename(p) == "test_run_suite_exit_codes.py" for p in tests
+    )
+
+
+def test_setup_env_script_is_executable_and_guarded():
+    """setup_env.sh must fail fast and self-check pytest."""
+    script = os.path.join(UNIT_DIR, "setup_env.sh")
+    with open(script, encoding="utf-8") as f:
+        text = f.read()
+    assert text.startswith("#!/usr/bin/env bash")
+    assert "set -euo pipefail" in text
+    assert "import pytest" in text
+    assert "pytest --version" in text
+    # The guard must reject the full sglang dependency set coming back.
+    assert "sglang==" in text
+    assert "quack-kernels" in text
+
+
+def test_verify_run_suite_help_works_without_pytest():
+    """--help must work even when pytest is missing (exit 0, no import)."""
+    import subprocess
+    import sys as _sys
+
+    entrypoint = os.path.join(UNIT_DIR, "verify_run_suite.py")
+    proc = subprocess.run(
+        [_sys.executable, entrypoint, "--help"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    for dimension in ("collect-diagnostics", "exit-codes", "tests", "usability"):
+        assert dimension in proc.stdout
