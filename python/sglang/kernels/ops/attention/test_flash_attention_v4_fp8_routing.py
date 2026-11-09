@@ -10,6 +10,10 @@ import pytest
 
 torch = pytest.importorskip("torch", reason="torch is required for routing tests")
 
+# This module must not import sglang or initialize CUDA: CI installs sglang
+# from PyPI and that step can fail before pytest runs. The policy module is
+# loaded by path below and stays torch-free at module scope.
+
 # The policy module is loaded by path below; it must never import torch at
 # module scope so that this file stays runnable without the sglang package.
 
@@ -179,6 +183,27 @@ def test_policy_module_does_not_import_torch_at_module_scope():
     assert "torch" not in getattr(fa4, "__dict__", {})
 
 
+def test_policy_module_imports_without_torch():
+    # Guards the CI fix: the policy module must import even when torch is
+    # unavailable, so routing tests can run on a CPU-only runner.
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _blocked(name, *args, **kwargs):
+        if name == "torch" or name.startswith("torch."):
+            raise ImportError("torch blocked for test")
+        return real_import(name, *args, **kwargs)
+
+    with patch.object(builtins, "__import__", _blocked):
+        spec = importlib.util.spec_from_file_location(
+            "_fa4_sm90_fp8_policy_no_torch", _POLICY_PATH
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    assert mod.SM90_FP8_MMA_HEAD_DIM == 512
+
+
 def test_stability_repeated_routing():
     q = _tensor(torch.bfloat16)
     k = _tensor(torch.float8_e4m3fn)
@@ -234,6 +259,18 @@ def test_split_auto_selection_zero_sms():
     assert splits == 1
 
 
+def test_split_auto_selection_zero_heads():
+    splits = _select_num_splits(
+        fa_version=4,
+        max_seqlen_k=4096,
+        num_heads=0,
+        num_kv_heads=1,
+        num_sms=32,
+        is_fp8_mma=True,
+    )
+    assert splits == 1
+
+
 def test_split_auto_selection_never_exceeds_tiles():
     splits = _select_num_splits(
         fa_version=4,
@@ -259,6 +296,13 @@ def test_descale_layout_rejects_bad_4d_trailing():
 def test_descale_layout_rejects_unsupported_ndim():
     with pytest.raises(ValueError):
         _normalize_descale(torch.ones(2, 4, 1), batch=2, heads=4)
+
+
+def test_descale_layout_accepts_python_scalar():
+    out = _normalize_descale(0.25, batch=2, heads=4)
+    assert out.shape == (2, 4)
+    assert out.dtype == torch.float32
+    assert torch.all(out == 0.25)
 
 
 def test_descale_layout_preserves_values():

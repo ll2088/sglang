@@ -39,7 +39,10 @@ def is_sm90_fp8_kv_mma(
     SM90 and rejects noncausal full attention, which has known accuracy
     issues.
     """
-    import torch
+    try:
+        import torch
+    except ImportError:  # pragma: no cover - CPU-only policy import
+        return False
 
     if k.dtype != torch.float8_e4m3fn:
         return False
@@ -69,7 +72,10 @@ def normalize_kv_descale(
     """
     if descale is None:
         return None
-    import torch
+    try:
+        import torch
+    except ImportError:  # pragma: no cover - CPU-only policy import
+        return None
 
     t = torch.as_tensor(descale, dtype=torch.float32)
     if t.ndim == 0:
@@ -115,6 +121,8 @@ def select_num_splits(
     if not is_fp8_mma:
         return 0
     if max_seqlen_k <= 0 or num_sms <= 0:
+        return 1
+    if num_heads <= 0:
         return 1
     qhead_per_kvhead = max(1, num_heads // max(1, num_kv_heads))
     # One CTA per (kv head, split); aim for at least two KV tiles per split.
