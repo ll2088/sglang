@@ -154,8 +154,10 @@ def test_root_setup_env_rejects_editable_flags():
     script = os.path.join(REPO_ROOT, "setup_env.sh")
     with open(script, encoding="utf-8") as f:
         text = f.read()
-    # Both short and long editable forms must be matched by the guard.
+    # Both short and long editable forms must be matched by the guard, plus
+    # the `-e=...` / `--editable=...` variants CI may pass.
     assert "-e|--editable" in text
+    assert "--editable=*" in text
     # The guard must run before the delegate is exec'd.
     guard_pos = text.find("-e|--editable")
     exec_pos = text.find("exec bash")
@@ -166,6 +168,24 @@ def test_root_setup_env_rejects_editable_flags():
     # non-zero so CI cannot fall through to the full dependency resolution.
     assert "test/unit/setup_env.sh" in text
     assert "exit 2" in text
+
+
+def test_setup_env_guard_covers_pip_install_variants():
+    """The guard must catch the editable forms CI actually passes to pip."""
+    for script in (
+        os.path.join(REPO_ROOT, "setup_env.sh"),
+        os.path.join(UNIT_DIR, "setup_env.sh"),
+    ):
+        with open(script, encoding="utf-8") as f:
+            text = f.read()
+        # `pip install -e python`, `--editable python`, `-e ./python` and
+        # `--editable=./python` must all be rejected by the same case arm.
+        assert "-e|--editable" in text
+        assert "--editable=*" in text
+        assert "-e./*" in text
+        # The guard must exit non-zero so CI cannot continue into a full
+        # dependency resolution after a rejected editable install.
+        assert "exit 2" in text
 
 
 def test_setup_env_does_not_resolve_sglang_dependencies():

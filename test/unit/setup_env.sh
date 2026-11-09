@@ -1,41 +1,38 @@
 #!/usr/bin/env bash
 # Minimal environment preparation for the run_suite unit tests.
 #
-# These tests only exercise run_suite.py's exit-code and collection-diagnostic
-# branches; conftest.py stubs out sglang.test.ci.* so the full sglang runtime
-# (torch, kernels, ...) is not needed. This script installs only
-# test/unit/requirements.txt (pytest) and self-checks the result, so an
-# environment problem is reported as an environment failure instead of being
-# mistaken for a test failure.
+# Installs only test/unit/requirements.txt (pytest) and self-checks the import
+# so an environment problem is reported as an environment failure instead of
+# being mistaken for a test failure. Never resolves the full sglang dependency
+# set (`pip install -e python`).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REQUIREMENTS="${SCRIPT_DIR}/requirements.txt"
 
-# Reject editable installs before any pip invocation: `pip install -e python`
-# resolves the full sglang dependency set and can fail before pytest starts.
+[setup] using "${SCRIPT_DIR}/setup_env.sh"
+
+# Reject editable installs before any pip invocation so the full sglang
+# dependency resolution can never be triggered from this entry point.
 for arg in "$@"; do
     case "${arg}" in
-        -e|--editable|--editable=*|-e=*)
+        -e|--editable|-e=*|--editable=*|-e./*|--editable./*)
             echo "[setup] error: editable installs are not supported here." >&2
-            echo "[setup] install the pytest-only requirements instead:" >&2
-            echo "[setup]   python -m pip install -r ${REQUIREMENTS}" >&2
+            echo "[setup] install the pytest-only requirements with 'bash test/unit/setup_env.sh'." >&2
             exit 2
             ;;
     esac
 done
-
-echo "[setup] using ${SCRIPT_DIR}/setup_env.sh"
 
 if [ ! -f "${REQUIREMENTS}" ]; then
     echo "[setup] error: missing ${REQUIREMENTS}" >&2
     exit 2
 fi
 
+echo "[setup] pip install -r ${REQUIREMENTS}"
 python -m pip install -r "${REQUIREMENTS}"
 
-# Self-check so a broken environment is reported as an environment failure.
-python -c "import pytest"
+python -c 'import pytest'
 python -m pytest --version
 
-echo "[setup] pytest-only environment ready"
+echo "[setup] ready: pytest installed, sglang runtime not required"

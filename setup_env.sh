@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# Lightweight environment-preparation entry for the run_suite verification
-# jobs. It must never resolve the full sglang dependency set: the unit tests
-# under test/unit only need pytest, and `pip install -e python` pulls in torch,
-# kernels and the rest, which fails before pytest ever starts.
+# Lightweight environment preparation entry for the run_suite verification
+# dimensions. It must never resolve the full sglang dependency set: the unit
+# tests under test/unit only need pytest, and `pip install -e python` pulls in
+# torch/kernels/... which can fail before any test runs.
 #
-# Any editable-install request is rejected explicitly and the script delegates
-# to test/unit/setup_env.sh, which installs only test/unit/requirements.txt.
+# Any editable-install request (the historical CI command) is rejected with a
+# clear diagnostic and a non-zero exit code, then the pytest-only unit script
+# is delegated to.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNIT_SETUP="${SCRIPT_DIR}/test/unit/setup_env.sh"
 
-# Reject editable installs before doing anything else. Both the short and long
-# forms are matched so `setup_env.sh -e` cannot slip past into the full
-# dependency resolution.
+[setup] using "${SCRIPT_DIR}/setup_env.sh"
+[setup] delegating to "${UNIT_SETUP}"
+
+# Reject editable installs before anything can reach pip. Match the long and
+# short forms, `python -m pip install -e ...`, and `-e ./python` variants.
 for arg in "$@"; do
     case "${arg}" in
-        -e|--editable|--editable=*|-e=*)
+        -e|--editable|-e=*|--editable=*|-e./*|--editable./*)
             echo "[setup] error: editable installs are not supported here." >&2
-            echo "[setup] 'pip install -e python' resolves the full sglang" >&2
-            echo "[setup] dependency set and fails before pytest starts." >&2
-            echo "[setup] use the pytest-only entry instead:" >&2
-            echo "[setup]   bash test/unit/setup_env.sh" >&2
+            echo "[setup] use 'bash test/unit/setup_env.sh' (pytest only) instead of 'pip install -e python'." >&2
             exit 2
             ;;
     esac
@@ -32,5 +32,4 @@ if [ ! -f "${UNIT_SETUP}" ]; then
     exit 2
 fi
 
-echo "[setup] using ${UNIT_SETUP}"
 exec bash "${UNIT_SETUP}" "$@"
