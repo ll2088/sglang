@@ -91,6 +91,7 @@ def test_no_tests_returns_dedicated_code(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert code == run_suite.EXIT_NO_TESTS
     assert "No tests to run" in out
+    assert "no-tests" in out
 
 
 def test_all_pass_returns_zero(monkeypatch):

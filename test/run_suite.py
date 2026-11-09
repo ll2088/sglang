@@ -476,6 +476,7 @@ def run_a_suite(args):
             f"nightly={nightly}; returning exit code {EXIT_NO_TESTS}.",
             flush=True,
         )
+        print(f"  status: no-tests (exit {EXIT_NO_TESTS})", flush=True)
         return EXIT_NO_TESTS
 
     # None hands the per-file budget over to est_time (see run_unittest_files).
@@ -496,7 +497,9 @@ def run_a_suite(args):
         timeout_overrides=dict(args.timeout_override),
     )
     if result:
+        print(f"  status: exec-failed (exit {EXIT_TEST_FAILURE})", flush=True)
         return EXIT_TEST_FAILURE
+    print(f"  status: ok (exit {EXIT_OK})", flush=True)
     return EXIT_OK
 
 
@@ -504,6 +507,9 @@ def _report_collect_failure(exc: BaseException, files: List[str]) -> None:
     """Print a readable collection-failure diagnostic instead of swallowing it."""
     print("=" * 70, flush=True)
     print("COLLECTION FAILED", flush=True)
+    # Greppable status marker so CI logs can be checked mechanically and a
+    # collection problem is never confused with an execution failure.
+    print(f"  status: collect-failed (exit {EXIT_COLLECT_FAILURE})", flush=True)
     print(f"  error type: {type(exc).__name__}", flush=True)
     reason = str(exc).strip() or "<no message>"
     print(f"  reason: {reason}", flush=True)

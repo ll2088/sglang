@@ -48,6 +48,9 @@ def test_collect_failure_reports_file_and_reason(monkeypatch, capsys):
     assert "ValueError" in out
     assert "invalid suite for test/registered/core/test_x.py" in out
     assert "Traceback" in out
+    # Greppable status marker must be present so CI logs can be checked
+    # mechanically and collection failures are not confused with exec failures.
+    assert "collect-failed" in out
 
 
 def test_validate_all_suites_failure_is_collect_failure(monkeypatch, capsys):
