@@ -22,9 +22,14 @@ import torch
 from einops import rearrange
 from fa4_benchmark_utils import benchmark_forward
 
-from sglang.kernels.ops.attention.flash_attn.cute.interface import (
-    _flash_attn_fwd as flash_attn_cute_fwd,
-)
+try:
+    from sglang.kernels.ops.attention.flash_attn.cute.interface import (
+        _flash_attn_fwd as flash_attn_cute_fwd,
+    )
+    _FA4_IMPORT_ERROR = None
+except Exception as _e:  # pragma: no cover - allows CPU-only format checks
+    flash_attn_cute_fwd = None
+    _FA4_IMPORT_ERROR = _e
 
 try:
     import cudnn
@@ -287,6 +292,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--run-cudnn", action="store_true")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
+    if flash_attn_cute_fwd is None:
+        raise RuntimeError(
+            "FA4 CuTe interface is unavailable; install flash-attn-4 with its "
+            "CUDA/CUTE dependencies before running this benchmark."
+        ) from _FA4_IMPORT_ERROR
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
     major, minor = torch.cuda.get_device_capability()

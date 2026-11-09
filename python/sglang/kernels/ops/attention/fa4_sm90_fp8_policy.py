@@ -11,6 +11,9 @@ from typing import Optional
 
 import torch
 
+# NOTE: This module must stay importable without the sglang package or a
+# compiled flash-attention extension so routing can be unit-tested on CPU.
+
 SM90_FP8_MMA_HEAD_DIM = 512
 SM90_FP8_MMA_ARCH_MAJOR = 9
 FA3_SPLIT_CAP = 32

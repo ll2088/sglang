@@ -9,6 +9,10 @@ from unittest.mock import patch
 import pytest
 import torch
 
+# This test intentionally avoids importing the sglang package: CI installs
+# sglang from PyPI and that step can fail before pytest runs. Loading the
+# pure policy module by path keeps the routing checks runnable standalone.
+
 # Load the pure policy module by path so this test does not require the
 # sglang package (or its heavy runtime deps) to be importable. The module is
 # registered in sys.modules before exec so dataclasses/typing introspection
