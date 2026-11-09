@@ -241,6 +241,27 @@ def _maybe_pass_descales(callable_, **kwargs):
     return {k: v for k, v in kwargs.items() if k in sig.parameters}
 
 
+def format_fp8_vs_bf16_summary(*, fp8_median_ms: float, bf16_median_ms: float) -> str:
+    """Format the FP8-vs-BF16 median latency comparison line.
+
+    Kept as a pure helper so the output format can be unit-tested on CPU.
+    """
+    if bf16_median_ms <= 0:
+        return (
+            f"FA4-CuTe-FP8 vs BF16 median latency: {fp8_median_ms * 1e3:.3f} ms "
+            f"vs {bf16_median_ms * 1e3:.3f} ms (speedup unavailable)"
+        )
+    speedup = bf16_median_ms / fp8_median_ms if fp8_median_ms > 0 else float("inf")
+    line = (
+        f"FA4-CuTe-FP8 vs BF16 median latency: "
+        f"{fp8_median_ms * 1e3:.3f} ms vs {bf16_median_ms * 1e3:.3f} ms "
+        f"({speedup:.2f}x)"
+    )
+    if speedup < 0.9:
+        line += " WARNING: FP8 median latency is >10% slower than the BF16 baseline"
+    return line
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repeats", type=int, default=30)
@@ -475,17 +496,11 @@ def main(argv: Iterable[str] | None = None) -> int:
                     bf16_t = times.get("FA4-CuTe-BF16", float("nan"))
                     fp8_t = times["FA4-CuTe-FP8"]
                     if not math.isnan(bf16_t) and bf16_t > 0:
-                        speedup = bf16_t / fp8_t
                         print(
-                            "FA4-CuTe-FP8 vs BF16 median latency: "
-                            f"{fp8_t * 1e3:.3f} ms vs {bf16_t * 1e3:.3f} ms "
-                            f"({speedup:.2f}x)"
-                        )
-                        if speedup < 0.9:
-                            print(
-                                "WARNING: FP8 median latency is >10% slower "
-                                "than the BF16 baseline for this shape"
+                            format_fp8_vs_bf16_summary(
+                                fp8_median_ms=fp8_t, bf16_median_ms=bf16_t
                             )
+                        )
 
     if fp8_failures:
         print(f"\nFP8 failures: {len(fp8_failures)} (showing first 5)")

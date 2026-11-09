@@ -3,19 +3,26 @@
 
 import importlib.util
 import pathlib
+import sys
 from unittest.mock import patch
 
 import pytest
 import torch
 
 # Load the pure policy module by path so this test does not require the
-# sglang package (or its heavy runtime deps) to be importable.
+# sglang package (or its heavy runtime deps) to be importable. The module is
+# registered in sys.modules before exec so dataclasses/typing introspection
+# inside the module cannot re-trigger a package import.
 _POLICY_PATH = pathlib.Path(__file__).with_name("fa4_sm90_fp8_policy.py")
-_spec = importlib.util.spec_from_file_location(
-    "_fa4_sm90_fp8_policy_under_test", _POLICY_PATH
-)
+_POLICY_MODULE_NAME = "_fa4_sm90_fp8_policy_under_test"
+_spec = importlib.util.spec_from_file_location(_POLICY_MODULE_NAME, _POLICY_PATH)
 fa4 = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(fa4)
+sys.modules[_POLICY_MODULE_NAME] = fa4
+try:
+    _spec.loader.exec_module(fa4)
+except Exception:  # pragma: no cover - keep sys.modules clean on failure
+    sys.modules.pop(_POLICY_MODULE_NAME, None)
+    raise
 
 _normalize_descale = fa4.normalize_kv_descale
 _select_num_splits = fa4.select_num_splits
@@ -191,3 +198,83 @@ def test_split_auto_selection_zero_seqlen():
         is_fp8_mma=True,
     )
     assert splits == 1
+
+
+def test_split_auto_selection_zero_sms():
+    splits = _select_num_splits(
+        fa_version=4,
+        max_seqlen_k=4096,
+        num_heads=8,
+        num_kv_heads=1,
+        num_sms=0,
+        is_fp8_mma=True,
+    )
+    assert splits == 1
+
+
+def test_split_auto_selection_never_exceeds_tiles():
+    splits = _select_num_splits(
+        fa_version=4,
+        max_seqlen_k=256,
+        num_heads=8,
+        num_kv_heads=1,
+        num_sms=1024,
+        is_fp8_mma=True,
+    )
+    assert splits == 2
+
+
+def test_descale_layout_rejects_bad_1d():
+    with pytest.raises(ValueError):
+        _normalize_descale(torch.ones(3), batch=2, heads=4)
+
+
+def test_descale_layout_rejects_bad_4d_trailing():
+    with pytest.raises(ValueError):
+        _normalize_descale(torch.ones(2, 4, 2, 1), batch=2, heads=4)
+
+
+def test_descale_layout_rejects_unsupported_ndim():
+    with pytest.raises(ValueError):
+        _normalize_descale(torch.ones(2, 4, 1), batch=2, heads=4)
+
+
+def test_descale_layout_preserves_values():
+    src = torch.arange(8, dtype=torch.float32).reshape(2, 4)
+    out = _normalize_descale(src, batch=2, heads=4)
+    assert torch.equal(out, src)
+    assert out.dtype == torch.float32
+
+
+def test_sm90_fp8_kv_mma_requires_e4m3_kv():
+    q = _tensor(torch.bfloat16)
+    k = _tensor(torch.float8_e5m2)
+    v = _tensor(torch.float8_e5m2)
+    with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
+        assert _call(q, k, v) is False
+
+
+def test_sm90_fp8_kv_mma_requires_equal_head_dims():
+    q = _tensor(torch.bfloat16, head_dim=512)
+    k = _tensor(torch.float8_e4m3fn, head_dim=512)
+    v = _tensor(torch.float8_e4m3fn, head_dim=256)
+    with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
+        assert _call(q, k, v) is False
+
+
+def test_sm90_fp8_kv_mma_explicit_major_override():
+    q = _tensor(torch.bfloat16)
+    k = _tensor(torch.float8_e4m3fn)
+    v = _tensor(torch.float8_e4m3fn)
+    assert (
+        fa4.is_sm90_fp8_kv_mma(
+            q, k, v, True, (None, None), device_capability_major=9
+        )
+        is True
+    )
+    assert (
+        fa4.is_sm90_fp8_kv_mma(
+            q, k, v, True, (None, None), device_capability_major=10
+        )
+        is False
+    )
