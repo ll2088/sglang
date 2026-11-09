@@ -60,6 +60,7 @@ def test_fused_per_tensor_fp8_quant_rejects_bad_arity():
         fused_per_tensor_fp8_quant()
 
 
+
 def test_fused_per_tensor_fp8_quant_rejects_bad_fp8_dtype():
     """Only e4m3/e5m2 are accepted; the check runs before any launch."""
     import torch
