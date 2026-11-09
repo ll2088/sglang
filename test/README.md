@@ -71,7 +71,21 @@ apart from real test failures:
 | `3` | No tests matched the requested suite/partition |
 
 On a collection failure the runner prints a `COLLECTION FAILED` block with the
-exception type, reason and traceback instead of silently passing.
+exception type, reason and traceback instead of silently passing. The three
+non-zero states are also greppable as `collect-failed`, `exec-failed` and
+`no-tests` so CI logs and docs can be checked mechanically.
+
+To verify the runner without installing the full sglang dependency set:
+
+```bash
+python -m pip install -r test/unit/requirements.txt
+python test/unit/verify_run_suite.py
+```
+
+`verify_run_suite.py` runs the collect-diagnostics, exit-codes, tests and
+usability dimensions, prints the pytest version and installed packages, and
+exits `2` when the environment itself is broken (infra failure) versus `1` for
+a real dimension failure.
 
 ## CI Registration
 

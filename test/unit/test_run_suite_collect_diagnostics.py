@@ -71,6 +71,24 @@ def test_validate_all_suites_failure_is_collect_failure(monkeypatch, capsys):
     assert "not-a-real-suite" in out
 
 
+def test_collect_failure_names_failing_file_and_reason(monkeypatch, capsys):
+    """The diagnostic must name the failing file path and the error summary."""
+
+    def boom(files, sanity_check=True):
+        raise RuntimeError(
+            "cannot import test/registered/core/test_broken.py: NameError"
+        )
+
+    monkeypatch.setattr(run_suite, "collect_tests", boom)
+    code = run_suite.run_a_suite(_make_args())
+    out = capsys.readouterr().out
+    assert code == run_suite.EXIT_COLLECT_FAILURE
+    assert "COLLECTION FAILED" in out
+    assert "test/registered/core/test_broken.py" in out
+    assert "NameError" in out
+    assert "RuntimeError" in out
+
+
 def test_collect_failure_does_not_run_tests(monkeypatch):
     """Collection failure must short-circuit before executing any test."""
     called = {"run": False}
