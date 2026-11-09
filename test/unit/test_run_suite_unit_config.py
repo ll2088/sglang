@@ -103,6 +103,14 @@ def test_root_setup_env_delegates_to_unit_setup():
     # The root entry must never resolve the full sglang dependency set.
     assert "pip install -e" not in text
     assert "pip install --editable" not in text
+    # Delegation must resolve paths from the script's own directory so CI can
+    # invoke it from any CWD, and must exec the unit script rather than
+    # duplicating install logic.
+    assert "BASH_SOURCE" in text
+    assert "exec bash" in text
+    # Any editable flag must be rejected before delegation.
+    assert "--editable" in text
+    assert "exit 2" in text
 
 
 def test_setup_env_installs_only_minimal_requirements():
