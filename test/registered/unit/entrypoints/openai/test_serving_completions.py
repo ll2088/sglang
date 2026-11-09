@@ -19,12 +19,20 @@ These tests only touch the protocol models and the pure helpers in
 """
 
 import json
+import os
 import statistics
 import sys
 import time
 import types
 
 import pytest
+
+# CI 的 setup 步骤会执行 `pip install -e python`，在缺少 GPU/编译依赖的
+# 环境里可能失败。本文件不依赖 sglang 运行时，因此允许在安装失败时继续
+# 收集与执行：只要 pytest 与 pydantic 可用即可。
+if os.environ.get("SGLANG_SKIP_RUNTIME_INSTALL") == "1":
+    # 显式声明：本模块通过源码加载 + stub 运行，不导入 sglang 顶层。
+    pass
 
 # This module must be collectable with only pydantic + pytest installed.
 # It never imports the `sglang` package top level (whose __init__ pulls in
@@ -88,6 +96,21 @@ def _install_minimal_stubs() -> None:
             setattr(mod, attr, value)
         sys.modules[name] = mod
 
+    # 顶层包也必须是 stub，否则 `import sglang.srt...` 会触发真实
+    # __init__（torch、quack-kernels 等），在最小 CI 环境中直接失败。
+    for pkg_name in (
+        "sglang",
+        "sglang.srt",
+        "sglang.srt.entrypoints",
+        "sglang.srt.entrypoints.openai",
+    ):
+        if pkg_name not in sys.modules or getattr(
+            sys.modules[pkg_name], "__file__", None
+        ) is not None:
+            pkg = types.ModuleType(pkg_name)
+            pkg.__path__ = []
+            sys.modules[pkg_name] = pkg
+
 
 def _load_template_helpers():
     """Import the pure helpers, stubbing heavy runtime deps if needed.
@@ -108,6 +131,12 @@ def _load_template_helpers():
 
     repo_root = Path(__file__).resolve().parents[5]
     pkg_root = repo_root / "python" / "sglang"
+    if not (pkg_root / "srt" / "entrypoints" / "openai" / "protocol.py").is_file():
+        pytest.skip(
+            f"sglang source tree not found under {pkg_root}; "
+            "run from the repository root",
+            allow_module_level=True,
+        )
     protocol_path = pkg_root / "srt" / "entrypoints" / "openai" / "protocol.py"
     serving_path = (
         pkg_root / "srt" / "entrypoints" / "openai" / "serving_completions.py"
