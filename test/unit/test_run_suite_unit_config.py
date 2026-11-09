@@ -88,3 +88,39 @@ def test_readme_exit_code_keywords_present():
         "No tests matched",
     ):
         assert keyword in text, f"README missing exit-code keyword: {keyword}"
+
+
+def test_verify_run_suite_entrypoint_exists():
+    """README documents verify_run_suite.py as the CI entrypoint; it must exist."""
+    entrypoint = os.path.join(UNIT_DIR, "verify_run_suite.py")
+    assert os.path.exists(entrypoint)
+    with open(entrypoint, encoding="utf-8") as f:
+        text = f.read()
+    # The entrypoint must be pytest-only: no sglang import, and it must expose
+    # the infra-vs-test exit-code distinction the README promises.
+    assert "import sglang" not in text
+    assert "EXIT_INFRA_FAILURE = 2" in text
+    assert "EXIT_DIMENSION_FAILURE = 1" in text
+    for dimension in (
+        "collect-diagnostics",
+        "exit-codes",
+        "tests",
+        "usability",
+    ):
+        assert dimension in text, f"verify_run_suite missing dimension: {dimension}"
+
+
+def test_verify_run_suite_importable_without_pytest_runtime():
+    """The entrypoint must import cleanly (pytest is imported lazily)."""
+    import importlib.util
+
+    entrypoint = os.path.join(UNIT_DIR, "verify_run_suite.py")
+    spec = importlib.util.spec_from_file_location(
+        "verify_run_suite_under_test", entrypoint
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.EXIT_OK == 0
+    assert module.EXIT_DIMENSION_FAILURE == 1
+    assert module.EXIT_INFRA_FAILURE == 2
+    assert len(module.DIMENSIONS) == 4
