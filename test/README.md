@@ -86,6 +86,12 @@ bash test/unit/setup_env.sh
 python test/unit/verify_run_suite.py
 ```
 
+`verify_run_suite.py` accepts optional dimension names
+(`collect-diagnostics`, `exit-codes`, `tests`, `usability`) and runs all four
+when none are given. CI must call `test/unit/setup_env.sh` for environment
+preparation instead of `pip install -e python`; the latter resolves the full
+sglang dependency set and can fail before any test runs.
+
 `test/unit/setup_env.sh` installs only `test/unit/requirements.txt` (pytest)
 and self-checks `import pytest` / `pytest --version`, so an environment
 problem is reported as an environment failure instead of being mistaken for a

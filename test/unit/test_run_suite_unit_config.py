@@ -48,7 +48,8 @@ def test_unit_launcher_documents_minimal_install():
         text = f.read()
     # The diagnostic must point at a pytest-only install path and must not
     # send CI back to the full sglang dependency resolution.
-    assert "pip install pytest" in text
+    assert "test/unit/requirements.txt" in text
+    assert "setup_env.sh" in text
     assert "pip install -e python" not in text
 
 
@@ -87,6 +88,9 @@ def test_setup_env_guard_precedes_pip_install():
     assert guard_pos != -1
     assert install_pos != -1
     assert guard_pos < install_pos
+    # The guard must reject editable installs explicitly rather than silently
+    # falling through to the full sglang dependency resolution.
+    assert "exit 2" in text
 
 
 def test_setup_env_installs_only_minimal_requirements():
@@ -98,6 +102,10 @@ def test_setup_env_installs_only_minimal_requirements():
     # The full sglang dependency resolution must never be triggered here.
     assert "pip install -e" not in text
     assert "pip install --editable" not in text
+    # The script must self-check pytest so an environment problem is reported
+    # as an environment failure instead of a test failure.
+    assert "import pytest" in text
+    assert "pytest --version" in text
 
 
 def test_verify_entrypoint_exists_and_uses_distinct_exit_codes():
@@ -110,3 +118,12 @@ def test_verify_entrypoint_exists_and_uses_distinct_exit_codes():
     assert "EXIT_DIMENSION_FAILURE = 1" in text
     assert "pytest.main" in text
     assert "import sglang" not in text
+    # All four verification dimensions must be wired into the entrypoint so CI
+    # can run them through one command instead of ad-hoc pytest invocations.
+    for dimension in (
+        "collect-diagnostics",
+        "exit-codes",
+        "tests",
+        "usability",
+    ):
+        assert dimension in text, f"verify entry missing dimension: {dimension}"
