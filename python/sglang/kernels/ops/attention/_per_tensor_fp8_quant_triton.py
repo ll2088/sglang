@@ -10,10 +10,8 @@ import torch
 import triton
 import triton.language as tl
 
-from sglang.kernels.ops.attention.per_tensor_fp8_quant import (
-    FP8_MAX,
-    MIN_DESCALE,
-)
+FP8_MAX = 448.0
+MIN_DESCALE = 1e-6
 
 _BLOCK = 4096
 _PARTS = 256
@@ -95,4 +93,12 @@ def fused_per_tensor_fp8_quant(*tensors):
     return outputs, descales
 
 
-__all__ = ["fused_per_tensor_fp8_quant"]
+def reference_per_tensor_fp8_quant(x: torch.Tensor):
+    """Torch reference used by tests; returns (fp8 tensor, descale [1])."""
+    amax = x.abs().float().max() if x.numel() else x.new_zeros((), dtype=torch.float)
+    descale = amax / FP8_MAX if amax > 0 else amax.new_tensor(MIN_DESCALE)
+    x_fp8 = (x.float() / descale).clamp(-FP8_MAX, FP8_MAX).to(torch.float8_e4m3fn)
+    return x_fp8, descale.reshape(1)
+
+
+__all__ = ["fused_per_tensor_fp8_quant", "reference_per_tensor_fp8_quant"]

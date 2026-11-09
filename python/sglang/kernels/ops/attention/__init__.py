@@ -62,8 +62,8 @@ _TRITON_KERNELS = [
     ("aiter_unified_page_table", "scatter_req_to_token_to_page_table_kernel"),
     ("fused_qk_rope_reshape_and_cache", "fused_qk_rope_reshape_and_cache"),
     ("mla_qk_prep", "concat_and_cast_mha_k_triton"),
-    ("per_tensor_fp8_quant", "fused_per_tensor_fp8_quant"),
-    ("per_tensor_fp8_quant", "reference_per_tensor_fp8_quant"),
+    ("_per_tensor_fp8_quant_triton", "fused_per_tensor_fp8_quant"),
+    ("_per_tensor_fp8_quant_triton", "reference_per_tensor_fp8_quant"),
     ("mla_kv_pack_quantize_fp8", "mla_kv_pack_quantize_fp8"),
     # Opt-in FlyDSL FP8 MLA prefill (gfx950); resolved lazily by
     # sglang.kernels.ops.attention.mla_prefill_fp8_selector.
