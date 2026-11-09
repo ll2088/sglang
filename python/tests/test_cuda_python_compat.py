@@ -56,6 +56,8 @@ def test_cuda_python_version_and_sgl_kernel_import():
     _require_cuda_python_13_5()
     version = _CUDA_PYTHON_VERSION
     assert _parse_version(version) >= (13, 5, 0), version
+    # The bindings package must expose the modules this repo relies on.
+    import cuda.bindings  # noqa: F401
     # sgl_kernel is a compiled CUDA extension; it is absent in CPU-only CI
     # images, so skip rather than fail when it cannot be imported. Importing
     # it can raise non-ImportError exceptions (e.g. missing libcudart), so
@@ -84,6 +86,9 @@ def test_load_utils_version_probe():
     capability = load_utils._get_compute_capability()
     assert capability is None or isinstance(capability, int)
 
+    # _preload_cuda_library must be a no-op-safe probe even without a GPU.
+    load_utils._preload_cuda_library()
+
 
 def test_check_env_reports_cuda_version(monkeypatch):
     _require_cuda_python_13_5()
@@ -108,6 +113,7 @@ def test_check_env_reports_cuda_version(monkeypatch):
 
     versions = env.get_package_versions()
     assert isinstance(versions, dict)
+    assert "cuda-python" in versions or versions.get("cuda-python") is None
 
     result = subprocess.run(
         [sys.executable, "-m", "sglang.check_env"],
