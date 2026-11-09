@@ -61,7 +61,9 @@ def test_check_env_reports_anthropic():
     # environment is not fully provisioned instead of failing the suite.
     check_env = pytest.importorskip("sglang.check_env")
     assert "anthropic" in check_env.PACKAGE_LIST
-    versions = check_env.BaseEnv().get_package_versions()
+    # Exercise the version-reporting logic without instantiating BaseEnv, which
+    # is abstract and would raise TypeError on the new major version.
+    versions = check_env.BaseEnv.get_package_versions(check_env.BaseEnv.__new__(check_env.BaseEnv))
     assert "anthropic" in versions
     assert isinstance(versions["anthropic"], str)
     # Either a real version string or the explicit not-found marker.
@@ -88,6 +90,16 @@ def test_modules_import_without_anthropic_api_usage(module_name):
     source = Path(module.__file__).read_text(encoding="utf-8")
     assert "import anthropic" not in source
     assert "from anthropic" not in source
+
+
+def test_anthropic_sdk_public_surface():
+    # Pin the public entry points the repository would rely on if it ever
+    # adopted the SDK, so a future major bump is caught here.
+    anthropic = pytest.importorskip("anthropic")
+    assert hasattr(anthropic, "Anthropic")
+    assert hasattr(anthropic, "AsyncAnthropic")
+    assert hasattr(anthropic, "APIStatusError")
+    assert hasattr(anthropic, "APIError")
 
 
 def test_repo_has_no_anthropic_sdk_imports():
