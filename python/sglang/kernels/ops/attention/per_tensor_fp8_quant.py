@@ -8,8 +8,13 @@ needed and the ops are CUDA-graph safe. Compile-time specialization does not
 depend on the token counts (only the grid size does), so varying batch shapes
 do not recompile.
 
-Adapted from the fused QKV quantizer in ROCm/ATOM (MIT license) via
-vllm-project/vllm#59124.
+One grid covers all the inputs in each launch, so a program can land past the
+end of a smaller input. Such programs do no work and compute no address, and
+every load and store is masked regardless, so no out-of-range pointer is formed
+or dereferenced.
+
+Adapted from the fused QKV quantizer in ROCm/ATOM (atom/model_ops/
+triton_fused_qkv_quant.py, MIT license).
 """
 
 from __future__ import annotations
@@ -25,11 +30,6 @@ _PARTS = 256
 # Descale for all-zero or empty inputs. A positive value keeps downstream
 # attention kernels from producing NaNs.
 _MIN_DESCALE = 1e-6
-
-_FP8_DTYPE_MAP = {
-    torch.float8_e4m3fn: tl.float8e4nv,
-    torch.float8_e5m2: tl.float8e5,
-}
 
 
 @triton.jit
@@ -54,6 +54,8 @@ def _partial_amax(
     PARTS: tl.constexpr,
     BLOCK: tl.constexpr,
 ):
+    # The grid is fixed at PARTS, so the trip count is per-program: it drops to
+    # zero once this program's stripe starts past the end of this input.
     start = tl.program_id(0) * BLOCK
     acc = tl.zeros((BLOCK,), tl.float32)
     for step in range(tl.cdiv(N - start, PARTS * BLOCK)):
@@ -100,6 +102,9 @@ def _quant(
     FP8_MAX: tl.constexpr,
     MIN_DESCALE: tl.constexpr,
 ):
+    # One grid covers all inputs, so it is sized for the largest. Programs
+    # past this input's end do nothing; program 0 still writes the descale,
+    # which is what an empty input needs.
     start = tl.program_id(0) * BLOCK
     if start < N or start == 0:
         offsets = start + tl.arange(0, BLOCK)
@@ -108,15 +113,14 @@ def _quant(
         descale = tl.maximum(amax / FP8_MAX, MIN_DESCALE)
         if start == 0:
             tl.store(Scale, descale)
-        y = (x / descale).to(tl.float8e4nv if FP8_MAX == 448.0 else tl.float8e5)
-        heads, dim = SHAPE
-        offsets = offsets.to(tl.int64)
+        y = x / descale
+        y = tl.clamp(y, -FP8_MAX, FP8_MAX)
         physical = (
-            offsets // (heads * dim) * STRIDE[0]
-            + offsets // dim % heads * STRIDE[1]
-            + offsets % dim * STRIDE[2]
+            offsets.to(tl.int64) // (SHAPE[0] * SHAPE[1]) * STRIDE[0]
+            + offsets.to(tl.int64) // SHAPE[1] % SHAPE[0] * STRIDE[1]
+            + offsets.to(tl.int64) % SHAPE[1] * STRIDE[2]
         )
-        tl.store(Y + physical, y, offsets < N)
+        tl.store(Y + physical, y.to(Y.dtype.element_ty), offsets < N)
 
 
 @triton.jit
@@ -141,75 +145,92 @@ def _fused_quant_kernel(
 ):
     idx = tl.program_id(1)
     if idx == 0:
-        _quant(X0, Y0, Partial, Scale, N0, SHAPES[0], STRIDES[0], PARTS, BLOCK, FP8_MAX, MIN_DESCALE)
+        _quant(
+            X0, Y0, Partial, Scale, N0, SHAPES[0], STRIDES[0],
+            PARTS, BLOCK, FP8_MAX, MIN_DESCALE,
+        )
     elif idx == 1:
-        _quant(X1, Y1, Partial + PARTS, Scale + 1, N1, SHAPES[1], STRIDES[1], PARTS, BLOCK, FP8_MAX, MIN_DESCALE)
+        _quant(
+            X1, Y1, Partial + PARTS, Scale + 1, N1, SHAPES[1], STRIDES[1],
+            PARTS, BLOCK, FP8_MAX, MIN_DESCALE,
+        )
     else:
-        _quant(X2, Y2, Partial + 2 * PARTS, Scale + 2, N2, SHAPES[2], STRIDES[2], PARTS, BLOCK, FP8_MAX, MIN_DESCALE)
+        _quant(
+            X2, Y2, Partial + 2 * PARTS, Scale + 2, N2, SHAPES[2], STRIDES[2],
+            PARTS, BLOCK, FP8_MAX, MIN_DESCALE,
+        )
 
 
-def _shape_stride(x: torch.Tensor) -> Tuple[Tuple[int, int], Tuple[int, int, int]]:
-    assert x.dim() == 3, f"expected 3D input, got {tuple(x.shape)}"
-    assert x.stride(-1) == 1, "inner dim must be contiguous"
-    return (x.shape[1], x.shape[2]), (x.stride(0), x.stride(1), x.stride(2))
+def _fp8_max(dtype: torch.dtype) -> float:
+    return float(torch.finfo(dtype).max)
 
 
 def fused_per_tensor_fp8_quant(
     *inputs: torch.Tensor,
     fp8_dtype: torch.dtype = torch.float8_e4m3fn,
-    out: Optional[Sequence[Optional[torch.Tensor]]] = None,
+    out: Optional[Sequence[torch.Tensor]] = None,
 ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
-    """Dynamically quantize 1-3 ``[tokens, heads, dim]`` tensors per-tensor.
+    """Dynamically quantize 1-3 ``[tokens, heads, dim]`` tensors per-tensor to FP8.
 
-    Returns ``(outputs, descales)`` where each output is a contiguous FP8 tensor
-    with the same shape as its input and each descale is a 1-element FP32 tensor
-    (``x_fp8 = x / descale``). Empty inputs get ``_MIN_DESCALE``.
+    Returns ``(outputs, descales)`` where ``outputs[i]`` is a contiguous FP8
+    tensor with the same shape as ``inputs[i]`` and ``descales[i]`` is a
+    one-element FP32 tensor such that ``inputs[i] ~= outputs[i] * descales[i]``.
+    Empty inputs get a positive descale (``_MIN_DESCALE``) so downstream
+    attention does not produce NaNs.
     """
     if not 1 <= len(inputs) <= 3:
         raise ValueError(f"expected 1-3 inputs, got {len(inputs)}")
-    if fp8_dtype not in _FP8_DTYPE_MAP:
+    if fp8_dtype not in (torch.float8_e4m3fn, torch.float8_e5m2):
         raise ValueError(f"unsupported fp8 dtype {fp8_dtype}")
     device = inputs[0].device
     for x in inputs:
-        assert x.device == device, "all inputs must be on the same device"
-        assert x.dtype in (torch.bfloat16, torch.float16), x.dtype
+        if x.dim() != 3:
+            raise ValueError(f"expected 3D [tokens, heads, dim], got {tuple(x.shape)}")
+        if x.device != device:
+            raise ValueError("all inputs must be on the same device")
+        if x.stride(-1) != 1:
+            raise ValueError("inputs must have stride-1 inner dim")
 
-    shapes = [_shape_stride(x) for x in inputs]
-    # Pad to three slots so the kernel signature is fixed.
-    while len(inputs) < 3:
-        inputs = inputs + (inputs[-1],)
-        shapes = shapes + (shapes[-1],)
+    if out is None:
+        outputs = [torch.empty_like(x, dtype=fp8_dtype) for x in inputs]
+    else:
+        outputs = list(out)
+        if len(outputs) != len(inputs):
+            raise ValueError("out must match the number of inputs")
+        for x, y in zip(inputs, outputs):
+            if y.shape != x.shape or y.dtype != fp8_dtype or y.stride(-1) != 1:
+                raise ValueError("out tensors must match input shape/dtype/stride")
 
-    outputs: List[torch.Tensor] = []
-    for i, x in enumerate(inputs):
-        if out is not None and i < len(out) and out[i] is not None:
-            outputs.append(out[i])
-        else:
-            outputs.append(torch.empty(x.shape, dtype=fp8_dtype, device=device))
+    descales = [
+        torch.empty(1, dtype=torch.float32, device=device) for _ in inputs
+    ]
+
+    # Pad to three slots; unused slots alias the first input and are skipped by
+    # the kernel via N == 0.
+    xs = list(inputs) + [inputs[0]] * (3 - len(inputs))
+    ys = list(outputs) + [outputs[0]] * (3 - len(outputs))
+    ns = [x.numel() for x in inputs] + [0] * (3 - len(inputs))
+    shapes = tuple((x.shape[1], x.shape[2]) for x in xs)
+    strides = tuple((x.stride(0), x.stride(1), x.stride(2)) for x in xs)
 
     partial = torch.empty(3 * _PARTS, dtype=torch.float32, device=device)
-    descales = torch.empty(3, dtype=torch.float32, device=device)
-    ns = [x.numel() for x in inputs]
-    max_n = max(ns)
-    grid_amax = (min(_PARTS, triton.cdiv(max_n, _BLOCK)), 3)
-    grid_quant = (triton.cdiv(max_n, _BLOCK), 3)
+    scale = torch.empty(3, dtype=torch.float32, device=device)
 
-    fp8_max = float(torch.finfo(fp8_dtype).max)
-    _fused_amax_kernel[grid_amax](
-        inputs[0], inputs[1], inputs[2], partial,
+    _fused_amax_kernel[(_PARTS, 3)](
+        xs[0], xs[1], xs[2], partial,
         ns[0], ns[1], ns[2],
-        SHAPES=[s for s, _ in shapes],
-        STRIDES=[st for _, st in shapes],
-        PARTS=_PARTS, BLOCK=_BLOCK,
+        SHAPES=shapes, STRIDES=strides, PARTS=_PARTS, BLOCK=_BLOCK,
     )
-    _fused_quant_kernel[grid_quant](
-        inputs[0], inputs[1], inputs[2],
-        outputs[0], outputs[1], outputs[2],
-        partial, descales,
+
+    max_n = max(ns)
+    grid = (triton.cdiv(max_n, _BLOCK) if max_n > 0 else 1, 3)
+    _fused_quant_kernel[grid](
+        xs[0], xs[1], xs[2], ys[0], ys[1], ys[2], partial, scale,
         ns[0], ns[1], ns[2],
-        SHAPES=[s for s, _ in shapes],
-        STRIDES=[st for _, st in shapes],
-        PARTS=_PARTS, BLOCK=_BLOCK,
-        FP8_MAX=fp8_max, MIN_DESCALE=_MIN_DESCALE,
+        SHAPES=shapes, STRIDES=strides, PARTS=_PARTS, BLOCK=_BLOCK,
+        FP8_MAX=_fp8_max(fp8_dtype), MIN_DESCALE=_MIN_DESCALE,
     )
-    return outputs, [descales[i : i + 1] for i in range(3)]
+
+    for i in range(len(inputs)):
+        descales[i].copy_(scale[i : i + 1])
+    return outputs, descales
