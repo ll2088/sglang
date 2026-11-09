@@ -26,13 +26,8 @@ import pytest
 
 # This module must be collectable with only pydantic + pytest installed.
 # It never imports the `sglang` package top level (whose __init__ pulls in
-# the full runtime); instead it loads protocol.py and serving_completions.py
-# from source via importlib with lightweight package stubs.
-
-# This module must be collectable with only pydantic + pytest installed.
-# It never imports the `sglang` package top level (whose __init__ pulls in
-# the full runtime); instead it loads protocol.py and serving_completions.py
-# from source via importlib with lightweight package stubs.
+# the full runtime); instead it imports the protocol models and the pure
+# helpers directly and fails loudly (not skip) when they are unavailable.
 
 
 def _install_minimal_stubs() -> None:
@@ -121,9 +116,9 @@ def _load_template_helpers():
             CompletionStreamResponse,
         )
     except Exception as exc:  # pragma: no cover - minimal CI without runtime
-        pytest.skip(
+        pytest.fail(
             f"sglang protocol models unavailable: {exc}",
-            allow_module_level=True,
+            pytrace=False,
         )
 
     try:
@@ -132,9 +127,9 @@ def _load_template_helpers():
             _delta_frame_template,
         )
     except Exception as exc:  # pragma: no cover - minimal CI without runtime
-        pytest.skip(
+        pytest.fail(
             f"serving_completions helpers unavailable: {exc}",
-            allow_module_level=True,
+            pytrace=False,
         )
 
     return (
@@ -465,6 +460,38 @@ def test_helpers_are_importable():
 
 
 def test_usage_and_logprobs_frames_keep_model_fields():
+    """Non-plain frames must keep usage/logprobs fields intact."""
+    # UsageProcessor is stubbed in minimal CI; build a plain dict with the
+    # same shape the model serializer would emit.
+    usage = {
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+        "total_tokens": 5,
+    }
+    chunk = CompletionStreamResponse(
+        id=REQUEST_ID,
+        created=CREATED,
+        object="text_completion",
+        choices=[
+            CompletionResponseStreamChoice(
+                index=0,
+                text="x",
+                logprobs=None,
+                finish_reason=None,
+                matched_stop=None,
+                token_ids=None,
+                prompt_token_ids=None,
+            )
+        ],
+        model=MODEL,
+        usage=usage,
+    )
+    payload = json.loads(chunk.model_dump_json())
+    assert payload["usage"]["prompt_tokens"] == 3
+    assert payload["usage"]["completion_tokens"] == 2
+
+
+def test_usage_and_logprobs_frames_keep_model_fields_legacy():
     """Non-plain frames must keep usage/logprobs fields intact."""
     # UsageProcessor is stubbed in minimal CI; build a plain dict with the
     # same shape the model serializer would emit.
