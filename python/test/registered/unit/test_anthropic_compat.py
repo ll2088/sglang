@@ -13,6 +13,21 @@ from pathlib import Path
 
 import pytest
 
+
+def _specifier_contains(constraint: str, version: str) -> bool:
+    """Minimal PEP 440 lower-bound check without importing packaging.
+
+    The constraint is managed by the dependency bump and is expected to be a
+    simple ``>=X.Y.Z`` lower bound; compare numeric release tuples so the test
+    does not require packaging to be installed in a bare environment.
+    """
+    match = re.fullmatch(r">=\s*(\d+(?:\.\d+)*)", constraint)
+    if match is None:
+        return False
+    lower = tuple(int(p) for p in match.group(1).split("."))
+    parts = tuple(int(p) for p in re.findall(r"\d+", version)[: len(lower)])
+    return parts >= lower
+
 # Resolve the python/ package root without assuming a fixed depth, so the test
 # works whether it is collected from the repo root or from python/.
 _HERE = Path(__file__).resolve()
@@ -46,10 +61,8 @@ def test_anthropic_constraint_allows_2_6():
     # The declared lower bound must not exclude the upgraded SDK. The exact
     # value is owned by the dependency bump; here we only require that 2.6.0
     # satisfies the declared specifier.
-    from packaging.specifiers import SpecifierSet
-
     constraint = _declared_anthropic_constraint()
-    assert SpecifierSet(constraint).contains("2.6.0"), constraint
+    assert _specifier_contains(constraint, "2.6.0"), constraint
 
 
 def test_anthropic_installed_version_if_present():
@@ -95,10 +108,8 @@ def test_anthropic_sdk_version_satisfies_constraint_if_present():
         version = importlib.metadata.version("anthropic")
     except importlib.metadata.PackageNotFoundError:
         pytest.skip("anthropic is not installed in this environment")
-    from packaging.specifiers import SpecifierSet
-
     constraint = _declared_anthropic_constraint()
-    assert SpecifierSet(constraint).contains(version), (version, constraint)
+    assert _specifier_contains(constraint, version), (version, constraint)
 
 
 def test_declared_constraint_is_a_lower_bound():
