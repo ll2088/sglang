@@ -7,7 +7,8 @@ import sys
 from unittest.mock import patch
 
 import pytest
-import torch
+
+torch = pytest.importorskip("torch", reason="torch is required for routing tests")
 
 # This test intentionally avoids importing the sglang package: CI installs
 # sglang from PyPI and that step can fail before pytest runs. Loading the
@@ -30,6 +31,7 @@ except Exception:  # pragma: no cover - keep sys.modules clean on failure
 
 _normalize_descale = fa4.normalize_kv_descale
 _select_num_splits = fa4.select_num_splits
+_is_sm90_fp8_kv_mma = fa4.is_sm90_fp8_kv_mma
 
 
 class _FakeCuda:
@@ -264,6 +266,45 @@ def test_sm90_fp8_kv_mma_requires_equal_head_dims():
     v = _tensor(torch.float8_e4m3fn, head_dim=256)
     with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
         assert _call(q, k, v) is False
+
+
+def test_fp8_mma_hit_is_asserted_not_fallback():
+    """Acceptance: the routing decision must be the FP8 kernel, not fallback."""
+    q = _tensor(torch.bfloat16)
+    k = _tensor(torch.float8_e4m3fn)
+    v = _tensor(torch.float8_e4m3fn)
+    assert (
+        _is_sm90_fp8_kv_mma(
+            q, k, v, True, (None, None), device_capability_major=9
+        )
+        is True
+    )
+
+
+def test_gemma4_full_attention_d512_shape_routes_to_fp8():
+    """Gemma-4 full attention: head_dim=512, FP8 KV, SM90, causal."""
+    q = _tensor(torch.bfloat16, head_dim=512, heads=32)
+    k = _tensor(torch.float8_e4m3fn, head_dim=512, heads=8)
+    v = _tensor(torch.float8_e4m3fn, head_dim=512, heads=8)
+    assert (
+        _is_sm90_fp8_kv_mma(
+            q, k, v, True, (None, None), device_capability_major=9
+        )
+        is True
+    )
+
+
+def test_gemma4_sliding_window_d256_stays_on_fa3():
+    """Gemma-4 sliding-window layers (d256) must not take the d512 FP8 path."""
+    q = _tensor(torch.bfloat16, head_dim=256, heads=32)
+    k = _tensor(torch.float8_e4m3fn, head_dim=256, heads=8)
+    v = _tensor(torch.float8_e4m3fn, head_dim=256, heads=8)
+    assert (
+        _is_sm90_fp8_kv_mma(
+            q, k, v, True, (128, 0), device_capability_major=9
+        )
+        is False
+    )
 
 
 def test_sm90_fp8_kv_mma_explicit_major_override():

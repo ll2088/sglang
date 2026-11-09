@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-import torch
-
 # NOTE: This module must stay importable without the sglang package or a
 # compiled flash-attention extension so routing can be unit-tested on CPU.
+# torch is imported lazily inside the helpers that need it, so importing this
+# module never pulls in CUDA initialization.
 
 SM90_FP8_MMA_HEAD_DIM = 512
 SM90_FP8_MMA_ARCH_MAJOR = 9
@@ -36,6 +36,8 @@ def is_sm90_fp8_kv_mma(
     SM90 and rejects noncausal full attention, which has known accuracy
     issues.
     """
+    import torch
+
     if k.dtype != torch.float8_e4m3fn:
         return False
     if not (q.shape[-1] == k.shape[-1] == v.shape[-1] == SM90_FP8_MMA_HEAD_DIM):
@@ -64,6 +66,8 @@ def normalize_kv_descale(
     """
     if descale is None:
         return None
+    import torch
+
     t = torch.as_tensor(descale, dtype=torch.float32)
     if t.ndim == 0:
         return t.expand(batch, heads).contiguous()

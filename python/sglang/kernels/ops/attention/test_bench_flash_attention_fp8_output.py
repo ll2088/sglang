@@ -9,6 +9,10 @@ import importlib.util
 import pathlib
 import sys
 
+import pytest
+
+pytest.importorskip("torch", reason="torch is required for benchmark helper")
+
 _BENCH_PATH = (
     pathlib.Path(__file__).resolve().parents[5]
     / "benchmark"
