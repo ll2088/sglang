@@ -6,10 +6,10 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from sglang.kernels.ops.attention import flash_attention_v4 as fa4
+from sglang.kernels.ops.attention import fa4_sm90_fp8_policy as fa4
 
-_normalize_descale = fa4._normalize_kv_descale
-_select_num_splits = fa4._select_num_splits
+_normalize_descale = fa4.normalize_kv_descale
+_select_num_splits = fa4.select_num_splits
 
 
 class _FakeCuda:
@@ -25,7 +25,7 @@ def _tensor(dtype, head_dim=512, heads=8):
 
 
 def _call(q, k, v, *, causal=True, window_size=(None, None)):
-    return fa4._is_sm90_fp8_kv_mma(q, k, v, causal, window_size)
+    return fa4.is_sm90_fp8_kv_mma(q, k, v, causal, window_size)
 
 
 @pytest.mark.parametrize("major", [9])
