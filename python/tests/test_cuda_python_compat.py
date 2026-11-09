@@ -57,13 +57,21 @@ def test_cuda_python_version_and_sgl_kernel_import():
     version = _CUDA_PYTHON_VERSION
     assert _parse_version(version) >= (13, 5, 0), version
     # sgl_kernel is a compiled CUDA extension; it is absent in CPU-only CI
-    # images, so skip rather than fail when it cannot be imported.
-    pytest.importorskip("sgl_kernel")
+    # images, so skip rather than fail when it cannot be imported. Importing
+    # it can raise non-ImportError exceptions (e.g. missing libcudart), so
+    # guard the import explicitly instead of relying on importorskip.
+    try:
+        import sgl_kernel  # noqa: F401
+    except Exception as exc:  # pragma: no cover - environment dependent
+        pytest.skip(f"sgl_kernel is not importable in this environment: {exc}")
 
 
 def test_load_utils_version_probe():
     _require_cuda_python_13_5()
-    load_utils = pytest.importorskip("sgl_kernel.load_utils")
+    try:
+        load_utils = importlib.import_module("sgl_kernel.load_utils")
+    except Exception as exc:  # pragma: no cover - environment dependent
+        pytest.skip(f"sgl_kernel.load_utils is not importable: {exc}")
 
     cuda_home = load_utils._find_cuda_home()
     assert isinstance(cuda_home, str)
@@ -75,7 +83,10 @@ def test_load_utils_version_probe():
 
 def test_check_env_reports_cuda_version(monkeypatch):
     _require_cuda_python_13_5()
-    check_env = pytest.importorskip("sglang.check_env")
+    try:
+        check_env = importlib.import_module("sglang.check_env")
+    except Exception as exc:  # pragma: no cover - environment dependent
+        pytest.skip(f"sglang.check_env is not importable: {exc}")
 
     monkeypatch.setattr(check_env, "is_cuda_v2", lambda: False)
     monkeypatch.setattr(check_env, "is_hip", lambda: False)
