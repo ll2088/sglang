@@ -19,11 +19,6 @@ import pytest
 # set (torch, quack-kernels, py-spy, ...). Do not add imports of sglang or the
 # anthropic SDK at module scope; use importlib inside tests instead.
 
-# This module intentionally depends only on the standard library and pytest so
-# it can run in a minimal CI job without installing sglang's full dependency
-# set (torch, quack-kernels, py-spy, ...). Do not add imports of sglang or the
-# anthropic SDK at module scope; use importlib inside tests instead.
-
 
 def _specifier_contains(constraint: str, version: str) -> bool:
     """Minimal PEP 440 lower-bound check without importing packaging.
@@ -58,7 +53,10 @@ def _find_pyproject() -> Path:
         fallback = _HERE.parents[3] / "python" / "pyproject.toml"
         if fallback.is_file():
             return fallback
+    # pytest.skip raises Skipped, but keep an explicit raise so a future
+    # refactor cannot fall through and return None (UnboundLocalError).
     pytest.skip("pyproject.toml not found above the test file")
+    raise AssertionError("unreachable")
 
 
 def _repo_root() -> Path:
@@ -88,7 +86,9 @@ def _declared_anthropic_constraint_from_toml() -> str:
     for dep in data.get("project", {}).get("dependencies", []):
         name = re.split(r"[\s<>=!~\[]", dep, maxsplit=1)[0].strip()
         if name == "anthropic":
-            return dep[len("anthropic"):]
+            # Strip surrounding whitespace so the specifier checks below see a
+            # bare ">=2.6.0" regardless of how the dependency is formatted.
+            return dep[len("anthropic"):].strip()
     # The dependency is owned by the bump; if it is absent in this checkout
     # (e.g. a trimmed tree), skip rather than fail so the suite still runs.
     pytest.skip("anthropic dependency not found in pyproject.toml")
