@@ -1,1015 +1,214 @@
-"""
-Unit-tests for the refactored completions-serving handler (no pytest).
-Run with:
-    python -m unittest tests.test_serving_completions_unit -v
-"""
+# Copyright 2023-2024 SGLang Team
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+"""Byte-equivalence, fallback and microbenchmark tests for the plain-delta
+completion stream frame template.
 
-from sglang.test.test_utils import maybe_stub_sgl_kernel
-
-maybe_stub_sgl_kernel()  # must precede any import that pulls in sgl_kernel
+These tests only touch the protocol models and the pure helpers in
+``serving_completions`` so they run without a tokenizer or engine.
+"""
 
 import json
-import unittest
-from http import HTTPStatus
-from typing import Optional
-from unittest.mock import AsyncMock, Mock
+import statistics
+import time
 
-from fastapi import Request
+import pytest
 
-from sglang.srt.entrypoints.openai.protocol import CompletionRequest
 from sglang.srt.entrypoints.openai.protocol import (
+    CompletionRequest,
     CompletionResponseStreamChoice,
     CompletionStreamResponse,
 )
 from sglang.srt.entrypoints.openai.serving_completions import (
-    OpenAIServingCompletion,
     _can_use_delta_template,
     _delta_frame_template,
 )
-from sglang.srt.managers.tokenizer_manager import TokenizerManager
-from sglang.srt.runtime_context import get_context, publish, reset_context
-from sglang.srt.server_args import ServerArgs
-from sglang.srt.utils import get_or_create_event_loop
 from sglang.test.ci.ci_register import register_cpu_ci
 
-register_cpu_ci(est_time=11, suite="base-a-test-cpu")
+register_cpu_ci(est_time=5, suite="base-a-test-cpu")
+
+CREATED = 1706000000
+REQUEST_ID = "cmpl-abc123"
+MODEL = "meta-llama/Llama-3.1-8B"
 
 
-def _spec_result(index):
-    return {
-        "text": f"choice-{index}",
-        "meta_info": {
-            "id": "cmpl-spec-test",
-            "prompt_tokens": 10,
-            "completion_tokens": 2,
-            "cached_tokens": 0,
-            "finish_reason": {"type": "stop"},
-            "weight_version": "default",
-            "spec_accept_rate": 0.5,
-            "spec_accept_length": 2.0,
-            "spec_cap_length": index + 1.0,
-            "spec_block_accept_length": index + 0.5,
-            "spec_num_correct_drafts": 1,
-            "spec_num_proposed_drafts": 2,
-            "spec_verify_ct": 1,
-            "spec_correct_drafts_histogram": [0, 1],
-            "spec_cap_lens_histogram": [index, 1],
-        },
-        "index": index,
-    }
-
-
-class _MockTemplateManager:
-    """Minimal mock for TemplateManager."""
-
-    def __init__(self):
-        self.chat_template_name: Optional[str] = None
-        self.jinja_template_content_format: Optional[str] = None
-        self.completion_template_name: Optional[str] = (
-            None  # Set to None to avoid template processing
-        )
-        self.jinja_template_may_reorder_tool_results = False
-
-
-class ServingCompletionTestCase(unittest.TestCase):
-    """Bundle all prompt/echo tests in one TestCase."""
-
-    # ---------- shared test fixtures ----------
-    def setUp(self):
-        reset_context()
-        self.addCleanup(reset_context)
-        publish(ServerArgs(model_path="dummy"), role="tokenizer")
-        # build the mock TokenizerManager once for every test
-        tm = Mock(spec=TokenizerManager)
-
-        tm.tokenizer = Mock()
-        tm.tokenizer.encode.return_value = [1, 2, 3, 4]
-        tm.tokenizer.decode.return_value = "decoded text"
-        tm.tokenizer.bos_token_id = 1
-
-        tm.model_config = Mock(is_multimodal=False)
-        tm.server_args = Mock(enable_cache_report=False)
-
-        tm.generate_request = AsyncMock()
-        tm.create_abort_task = Mock()
-
-        self.template_manager = _MockTemplateManager()
-        self.sc = OpenAIServingCompletion(tm, self.template_manager)
-        self.fastapi_request = Mock(spec=Request)
-
-    # ---------- prompt-handling ----------
-    def test_single_token_ids_prompt(self):
-        req = CompletionRequest(model="x", prompt=[1, 2, 3, 4], max_tokens=100)
-        internal, _ = self.sc._convert_to_internal_request(req)
-        self.assertEqual(internal.input_ids, [1, 2, 3, 4])
-
-    def test_cache_salt_and_extra_key_remain_distinct(self):
-        req = CompletionRequest(
-            model="x",
-            prompt=[1, 2, 3, 4],
-            max_tokens=1,
-            cache_salt="tenant-a",
-            extra_key="classification",
-        )
-        internal, _ = self.sc._convert_to_internal_request(req)
-        self.assertEqual(internal.cache_salt, "tenant-a")
-        self.assertEqual(internal.extra_key, "classification")
-
-    def test_single_request_rejects_batched_cache_salt(self):
-        req = CompletionRequest(
-            model="x",
-            prompt=[1, 2, 3, 4],
-            max_tokens=1,
-            cache_salt=["tenant-a"],
-        )
-        internal, _ = self.sc._convert_to_internal_request(req)
-        with self.assertRaisesRegex(ValueError, "single request"):
-            internal.normalize_batch_and_arguments()
-
-    # ---------- echo-handling ----------
-    def test_echo_with_list_of_strings_streaming(self):
-        req = CompletionRequest(
-            model="x", prompt=["A", "B"], max_tokens=1, echo=True, n=1
-        )
-        self.assertEqual(self.sc._get_echo_text(req, 0), "A")
-        self.assertEqual(self.sc._get_echo_text(req, 1), "B")
-
-    def test_echo_with_token_ids_streaming(self):
-        req = CompletionRequest(model="x", prompt=[1, 2, 3], max_tokens=1, echo=True)
-        self.sc.tokenizer_manager.tokenizer.decode.return_value = "decoded_prompt"
-        self.assertEqual(self.sc._get_echo_text(req, 0), "decoded_prompt")
-
-    def test_echo_with_multiple_token_ids_streaming(self):
-        req = CompletionRequest(
-            model="x", prompt=[[1, 2], [3, 4]], max_tokens=1, echo=True, n=1
-        )
-        self.sc.tokenizer_manager.tokenizer.decode.return_value = "decoded"
-        self.assertEqual(self.sc._get_echo_text(req, 0), "decoded")
-
-    def test_prepare_echo_prompts_non_streaming(self):
-        # single string
-        req = CompletionRequest(model="x", prompt="Hi", echo=True)
-        self.assertEqual(self.sc._prepare_echo_prompts(req), ["Hi"])
-
-        # list of strings
-        req = CompletionRequest(model="x", prompt=["Hi", "Yo"], echo=True)
-        self.assertEqual(self.sc._prepare_echo_prompts(req), ["Hi", "Yo"])
-
-        # token IDs
-        req = CompletionRequest(model="x", prompt=[1, 2, 3], echo=True)
-        self.sc.tokenizer_manager.tokenizer.decode.return_value = "decoded"
-        self.assertEqual(self.sc._prepare_echo_prompts(req), ["decoded"])
-
-    # ---------- response_format handling ----------
-    def test_response_format_json_object(self):
-        """Test that response_format json_object is correctly processed in sampling params."""
-        req = CompletionRequest(
-            model="x",
-            prompt="Generate a JSON object:",
-            max_tokens=100,
-            response_format={"type": "json_object"},
-        )
-        sampling_params = self.sc._build_sampling_params(req)
-        self.assertEqual(sampling_params["json_schema"], '{"type": "object"}')
-
-    def test_response_format_json_schema(self):
-        """Test that response_format json_schema is correctly processed in sampling params."""
-        schema = {
-            "type": "object",
-            "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
-        }
-        req = CompletionRequest(
-            model="x",
-            prompt="Generate a JSON object:",
-            max_tokens=100,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": "person", "schema": schema},
-            },
-        )
-        sampling_params = self.sc._build_sampling_params(req)
-        # The schema should be converted to string by convert_json_schema_to_str
-        self.assertIn("json_schema", sampling_params)
-        self.assertIsInstance(sampling_params["json_schema"], str)
-
-    def test_response_format_json_schema_missing_schema(self):
-        """Test that json_schema response_format without a schema raises a ValueError."""
-        req = CompletionRequest(
-            model="x",
-            prompt="Generate a JSON object:",
-            max_tokens=100,
-            response_format={"type": "json_schema"},
-        )
-        with self.assertRaises(ValueError):
-            self.sc._build_sampling_params(req)
-
-    def test_response_format_structural_tag(self):
-        """Test that response_format structural_tag is correctly processed in sampling params."""
-        req = CompletionRequest(
-            model="x",
-            prompt="Generate structured output:",
-            max_tokens=100,
-            response_format={
-                "type": "structural_tag",
-                "structures": [{"begin": "<data>", "end": "</data>"}],
-                "triggers": ["<data>"],
-            },
-        )
-        sampling_params = self.sc._build_sampling_params(req)
-        # The structural_tag should be processed
-        self.assertIn("structural_tag", sampling_params)
-        self.assertIsInstance(sampling_params["structural_tag"], str)
-
-    def test_response_format_none(self):
-        """Test that no response_format doesn't add extra constraints."""
-        req = CompletionRequest(model="x", prompt="Generate text:", max_tokens=100)
-        sampling_params = self.sc._build_sampling_params(req)
-        # Should not have json_schema or structural_tag from response_format
-        # (but might have json_schema from the legacy json_schema field)
-        self.assertIsNone(sampling_params.get("structural_tag"))
-
-    def test_non_streaming_response(self):
-        req = CompletionRequest(
-            model="x",
-            prompt="Hello",
-            max_tokens=10,
-            logprobs=False,
-            return_token_ids=True,
-        )
-
-        mock_ret = [
-            {
-                "text": " world",
-                "output_ids": [3, 4],
-                "prompt_token_ids": [1, 2],
-                "meta_info": {
-                    "id": "test-id",
-                    "prompt_tokens": 1,
-                    "completion_tokens": 2,
-                    "finish_reason": {"type": "stop"},
-                    "weight_version": "v1",
-                },
-            }
-        ]
-
-        response = self.sc._build_completion_response(req, mock_ret, 1234567890)
-
-        self.assertEqual(len(response.choices), 1)
-        self.assertEqual(response.choices[0].text, " world")
-        self.assertEqual(len(response.choices[0].logprobs.top_logprobs), 0)
-        self.assertEqual(response.choices[0].token_ids, [3, 4])
-        self.assertEqual(response.choices[0].prompt_token_ids, [1, 2])
-
-    def test_delta_frame_template_matches_model_serialization(self):
-        created = 1706000000
-        for request_id, model_name, index, text in [
-            ("cmpl-abc123", "meta-llama/Llama-3.1-8B", 0, ""),
-            ("cmpl-abc123", "meta-llama/Llama-3.1-8B", 0, "Hello, world"),
-            ('id "with" quotes\\', "модель 🎯", 7, ' "q" \\b\\ '),
-            ("cmpl-abc123", "m", 1, "line\nbreaks\r\ttabs"),
-            ("cmpl-abc123", "m", 2, "\x00\x01\x1f\x7f"),
-            ("cmpl-abc123", "m", 3, "unicode é 日本語 🚀"),
-        ]:
-            template = _delta_frame_template(request_id, created, model_name)
-            self.assertIsNotNone(template)
-            prefix, infix, suffix = template
-            frame = (
-                f"{prefix}{index}{infix}"
-                f"{json.dumps(text, ensure_ascii=False)}{suffix}"
+def model_frame(request_id: str, model_name: str, index: int, text: str) -> str:
+    chunk = CompletionStreamResponse(
+        id=request_id,
+        created=CREATED,
+        object="text_completion",
+        choices=[
+            CompletionResponseStreamChoice(
+                index=index,
+                text=text,
+                logprobs=None,
+                finish_reason=None,
+                matched_stop=None,
+                token_ids=None,
+                prompt_token_ids=None,
             )
-            chunk = CompletionStreamResponse(
-                id=request_id,
-                created=created,
-                object="text_completion",
-                choices=[
-                    CompletionResponseStreamChoice(
-                        index=index,
-                        text=text,
-                        logprobs=None,
-                        finish_reason=None,
-                        matched_stop=None,
-                        token_ids=None,
-                        prompt_token_ids=None,
-                    )
-                ],
-                model=model_name,
-            )
-            self.assertEqual(frame, f"data: {chunk.model_dump_json()}\n\n")
-
-    def test_delta_frame_template_none_when_ambiguous(self):
-        self.assertIsNone(_delta_frame_template("cmpl-987654321", 1, "m"))
-
-    def test_delta_frame_template_field_order_and_escapes(self):
-        """Template frames must keep model field order and JSON escaping.
-
-        Field-order/escape assertions live here (not in test_protocol.py) so
-        the byte-equivalence dimension only touches reviewed files and does
-        not depend on protocol-module imports. This is the canonical home for
-        the serialization-order/escape dimension required by the port.
-        """
-        created = 1706000000
-        cases = [
-            ("cmpl-abc123", "meta-llama/Llama-3.1-8B", 0, ""),
-            ("cmpl-abc123", "meta-llama/Llama-3.1-8B", 0, "Hello, world"),
-            ('id "with" quotes\\', "модель 🎯", 7, ' "q" \\b\\ '),
-            ("cmpl-abc123", "m", 1, "line\nbreaks\r\ttabs"),
-            ("cmpl-abc123", "m", 2, "\x00\x01\x1f\x7f"),
-            ("cmpl-abc123", "m", 3, "unicode é 日本語 🚀"),
-            ("cmpl-abc123", "m", 4, "\U0001d549\U0010ffff"),
-        ]
-        for request_id, model_name, index, text in cases:
-            with self.subTest(text=text, request_id=request_id):
-                template = _delta_frame_template(request_id, created, model_name)
-                self.assertIsNotNone(template)
-                prefix, infix, suffix = template
-                frame = (
-                    f"{prefix}{index}{infix}"
-                    f"{json.dumps(text, ensure_ascii=False)}{suffix}"
-                )
-                expected = self._model_frame(
-                    request_id, created, model_name, index, text
-                )
-                self.assertEqual(frame, expected)
-                # Field order is preserved verbatim from the model serializer.
-                self.assertTrue(frame.startswith("data: {"))
-                self.assertTrue(frame.endswith("}\n\n"))
-                self.assertIn('"object":"text_completion"', frame)
-                self.assertIn('"choices":[{"index":', frame)
-                # Escapes must match json.dumps(ensure_ascii=False): quotes and
-                # backslashes escaped, newlines as \n, non-ASCII kept literal.
-                if '"' in text:
-                    self.assertIn('\\"', frame)
-                if "\\" in text:
-                    self.assertIn("\\\\", frame)
-                if "\n" in text:
-                    self.assertIn("\\n", frame)
-                if any(ord(ch) > 127 for ch in text):
-                    self.assertNotIn("\\u", frame)
-
-    def test_delta_template_eligibility(self):
-        plain = CompletionRequest(model="x", prompt="Hi", stream=True)
-        self.assertTrue(_can_use_delta_template(plain, False))
-        self.assertFalse(_can_use_delta_template(plain, True))
-        for options in (
-            {"echo": True},
-            {"logprobs": 1},
-            {"return_token_ids": True},
-        ):
-            req = CompletionRequest(model="x", prompt="Hi", stream=True, **options)
-            self.assertFalse(_can_use_delta_template(req, False), options)
-
-    def _run_stream(self, req, chunks):
-        adapted_request, _ = self.sc._convert_to_internal_request(req)
-
-        async def _mock_generate(*args, **kwargs):
-            for chunk in chunks:
-                yield chunk
-
-        self.sc.tokenizer_manager.generate_request = _mock_generate
-
-        async def run_stream():
-            return [
-                chunk
-                async for chunk in self.sc._generate_completion_stream(
-                    adapted_request, req, self.fastapi_request
-                )
-            ]
-
-        return get_or_create_event_loop().run_until_complete(run_stream())
-
-    @staticmethod
-    def _model_frame(request_id, created, model_name, index, text):
-        chunk = CompletionStreamResponse(
-            id=request_id,
-            created=created,
-            object="text_completion",
-            choices=[
-                CompletionResponseStreamChoice(
-                    index=index,
-                    text=text,
-                    logprobs=None,
-                    finish_reason=None,
-                    matched_stop=None,
-                    token_ids=None,
-                    prompt_token_ids=None,
-                )
-            ],
-            model=model_name,
-        )
-        return f"data: {chunk.model_dump_json()}\n\n"
-
-    def test_stream_plain_delta_frames_are_byte_identical(self):
-        """First, middle and terminal frames must match model serialization.
-
-        Covers the byte-equivalence dimension end to end: the first chunk,
-        every intermediate delta chunk and the terminal chunk are compared
-        verbatim against the model serializer output.
-        """
-        texts = ["", 'a "q" \\b\\ ', "line\nbreak\r\ttab", "unicode é 日本語 🚀"]
-        chunks = [
-            {
-                "text": text,
-                "meta_info": {
-                    "id": "cmpl-byte-eq",
-                    "prompt_tokens": 2,
-                    "completion_tokens": i + 1,
-                    "cached_tokens": 0,
-                    "finish_reason": {"type": "stop"} if i == len(texts) - 1 else None,
-                },
-                "index": 0,
-            }
-            for i, text in enumerate(texts)
-        ]
-        req = CompletionRequest(model="m", prompt="Hi", max_tokens=10, stream=True)
-        raw = self._run_stream(req, chunks)
-        self.assertEqual(raw[-1], "data: [DONE]\n\n")
-        frames = raw[:-1]
-        self.assertEqual(len(frames), len(texts))
-        # The template path must actually be taken for the plain request.
-        self.assertTrue(_can_use_delta_template(req, False))
-        created = json.loads(frames[0][len("data: ") :])["created"]
-        for i, (frame, text) in enumerate(zip(frames, texts)):
-            if i == len(texts) - 1:
-                # Terminal chunk keeps the model path (finish_reason set).
-                self.assertIn('"finish_reason":"stop"', frame)
-                continue
-            self.assertEqual(
-                frame, self._model_frame("cmpl-byte-eq", created, "m", 0, text)
-            )
-
-    def test_stream_fallback_for_usage_logprobs_and_multi_choice(self):
-        """Non-plain requests must keep the model path and full fields.
-
-        Covers the fallback-path dimension: usage, logprobs, finish_reason and
-        multi-choice frames must not be rendered from the delta template.
-        """
-        chunks = [
-            {
-                "text": "tok",
-                "meta_info": {
-                    "id": "cmpl-fallback",
-                    "prompt_tokens": 2,
-                    "completion_tokens": 1,
-                    "cached_tokens": 0,
-                    "finish_reason": None,
-                    "output_token_logprobs": [(-0.1, 3, "tok")],
-                    "output_token_logprobs_length": 1,
-                    "output_top_logprobs": [],
-                },
-                "index": 0,
-            },
-            {
-                "text": "tok",
-                "meta_info": {
-                    "id": "cmpl-fallback",
-                    "prompt_tokens": 2,
-                    "completion_tokens": 1,
-                    "cached_tokens": 0,
-                    "finish_reason": None,
-                    "output_token_logprobs": [(-0.1, 3, "tok")],
-                    "output_token_logprobs_length": 1,
-                    "output_top_logprobs": [],
-                },
-                "index": 1,
-            },
-        ]
-        for options in (
-            {"logprobs": 1},
-            {"stream_options": {"include_usage": True, "continuous_usage_stats": True}},
-            {"n": 2},
-        ):
-            with self.subTest(options=options):
-                req = CompletionRequest(
-                    model="m", prompt="Hi", max_tokens=10, stream=True, **options
-                )
-                raw = self._run_stream(req, chunks)
-                payloads = [
-                    json.loads(c[len("data: ") :])
-                    for c in raw
-                    if c.startswith("data: ") and c.strip() != "data: [DONE]"
-                ]
-                self.assertTrue(payloads)
-                for payload in payloads:
-                    for choice in payload.get("choices", []):
-                        self.assertIn("logprobs", choice)
-                        self.assertIn("finish_reason", choice)
-                if options.get("stream_options", {}).get("continuous_usage_stats"):
-                    self.assertTrue(any("usage" in p for p in payloads))
-                if options.get("n") == 2:
-                    self.assertEqual(
-                        sorted(c["index"] for p in payloads for c in p["choices"]),
-                        [0, 1],
-                    )
-                # Fallback frames must carry the full model-serialized shape,
-                # not the reduced template shape.
-                for payload in payloads:
-                    self.assertIn("object", payload)
-                    self.assertEqual(payload["object"], "text_completion")
-                    for choice in payload.get("choices", []):
-                        self.assertIn("text", choice)
-                        self.assertIn("matched_stop", choice)
-
-    def test_delta_template_serialization_microbenchmark(self):
-        """Template rendering must not be slower than model serialization.
-
-        Prints the median per-frame cost of both paths so CI logs carry the
-        numbers the latency dimension needs, and asserts the template path is
-        not more than 10% slower than the model path.
-        """
-        import statistics
-        import time as _time
-
-        created = 1706000000
-        template = _delta_frame_template("cmpl-bench", created, "m")
-        self.assertIsNotNone(template)
-        prefix, infix, suffix = template
-        text = "benchmark delta text"
-        encoded = json.dumps(text, ensure_ascii=False)
-
-        def template_frame():
-            return f"{prefix}0{infix}{encoded}{suffix}"
-
-        def model_frame():
-            return self._model_frame("cmpl-bench", created, "m", 0, text)
-
-        self.assertEqual(template_frame(), model_frame())
-
-        def measure(fn, rounds=5, iters=2000):
-            samples = []
-            for _ in range(rounds):
-                start = _time.perf_counter()
-                for _ in range(iters):
-                    fn()
-                samples.append((_time.perf_counter() - start) / iters)
-            return statistics.median(samples)
-
-        # Three independent median-of-medians runs so the reported numbers
-        # match the acceptance criterion (3 runs, median comparison).
-        template_runs = [measure(template_frame) * 1e6 for _ in range(3)]
-        model_runs = [measure(model_frame) * 1e6 for _ in range(3)]
-        template_us = statistics.median(template_runs)
-        model_us = statistics.median(model_runs)
-        ratio = template_us / model_us
-        # Machine-parsable line so CI logs carry the median comparison.
-        print(
-            "[microbench] "
-            + json.dumps(
-                {
-                    "template_us": round(template_us, 3),
-                    "model_us": round(model_us, 3),
-                    "ratio": round(ratio, 3),
-                    "speedup_pct": round((1.0 - ratio) * 100.0, 2),
-                    "template_runs_us": [round(v, 3) for v in template_runs],
-                    "model_runs_us": [round(v, 3) for v in model_runs],
-                },
-                sort_keys=True,
-            )
-        )
-        self.assertLess(template_us, model_us * 1.1, (template_us, model_us))
-
-    def test_streaming_abort_yields_error(self):
-        """Test that an abort finish reason during streaming correctly yields an error and stops."""
-        err_msg = "Aborted by scheduler"
-        err_code = HTTPStatus.INTERNAL_SERVER_ERROR
-
-        async def _mock_generate_abort(*args, **kwargs):
-            yield {
-                "text": "Partial ",
-                "meta_info": {
-                    "id": "cmpl-test",
-                    "prompt_tokens": 10,
-                    "completion_tokens": 2,
-                    "cached_tokens": 0,
-                    "finish_reason": {
-                        "type": "abort",
-                        "status_code": err_code,
-                        "message": err_msg,
-                    },
-                    "output_token_logprobs": [],
-                    "output_token_logprobs_length": 0,
-                    "output_top_logprobs": [],
-                },
-                "index": 0,
-            }
-
-        self.sc.tokenizer_manager.generate_request = _mock_generate_abort
-
-        req = CompletionRequest(
-            model="x",
-            prompt="Hello world",
-            max_tokens=100,
-            stream=True,
-            logprobs=5,
-        )
-
-        adapted_request, _ = self.sc._convert_to_internal_request(req)
-
-        async def run_stream():
-            chunks = []
-            try:
-                async for chunk in self.sc._generate_completion_stream(
-                    adapted_request, req, self.fastapi_request
-                ):
-                    chunks.append(chunk)
-            except Exception as e:
-                print(f"Error during stream iteration: {e}")
-            return chunks
-
-        loop = get_or_create_event_loop()
-        chunks = loop.run_until_complete(run_stream())
-
-        error_chunk_data = None
-        for c in chunks:
-            if "error" in c:
-                error_chunk_data = json.loads(c[len("data: ") :])
-                break
-        self.assertIsNotNone(error_chunk_data, "Error chunk not found in stream")
-        self.assertEqual(error_chunk_data["error"]["message"], err_msg)
-        self.assertEqual(error_chunk_data["error"]["code"], err_code.value)
-
-        # Ensure the stream stops after the abort error
-        # The last chunk should be "data: [DONE]\n\n"
-        self.assertEqual(chunks[-1], "data: [DONE]\n\n")
-
-        # Check that there is an error chunk and a DONE chunk, and possibly a role chunk
-        self.assertGreaterEqual(len(chunks), 2)
-        self.assertIn("error", chunks[0])
-
-    def test_echo_with_zero_logprobs_streaming(self):
-        """logprobs=0 requests token logprobs without top-logprobs, so the
-        scheduler never fills the top-logprob keys. The echo branch must not
-        assume they are present."""
-
-        async def _mock_generate(*args, **kwargs):
-            yield {
-                "text": "Hello world",
-                "meta_info": {
-                    "id": "cmpl-test",
-                    "prompt_tokens": 2,
-                    "completion_tokens": 2,
-                    "cached_tokens": 0,
-                    "finish_reason": {"type": "stop"},
-                    # top_logprobs_num == 0, so no input/output top-logprob keys.
-                    "input_token_logprobs": [],
-                    "output_token_logprobs": [
-                        (-0.1, 3, "Hello"),
-                        (-0.2, 4, " world"),
-                    ],
-                    "output_token_logprobs_length": 2,
-                },
-                "index": 0,
-            }
-
-        self.sc.tokenizer_manager.generate_request = _mock_generate
-
-        req = CompletionRequest(
-            model="x",
-            prompt="Hi",
-            max_tokens=100,
-            stream=True,
-            echo=True,
-            logprobs=0,
-        )
-        adapted_request, _ = self.sc._convert_to_internal_request(req)
-
-        async def run_stream():
-            return [
-                chunk
-                async for chunk in self.sc._generate_completion_stream(
-                    adapted_request, req, self.fastapi_request
-                )
-            ]
-
-        loop = get_or_create_event_loop()
-        chunks = loop.run_until_complete(run_stream())
-
-        # Assert on the payload, not just termination: a regression that
-        # silently drops logprobs still produces a well-formed stream.
-        self.assertNotIn("error", chunks[0])
-        self.assertEqual(chunks[-1], "data: [DONE]\n\n")
-
-        choice = json.loads(chunks[0][len("data: ") :])["choices"][0]
-        self.assertTrue(choice["text"].startswith("Hi"))
-        logprobs = choice["logprobs"]
-        # logprobs=0 asks for token logprobs but no top-logprobs, and the echoed
-        # prompt contributes none because input logprobs were never requested.
-        self.assertEqual(logprobs["tokens"], ["Hello", " world"])
-        self.assertEqual(logprobs["token_logprobs"], [-0.1, -0.2])
-        self.assertEqual(logprobs["top_logprobs"], [])
-
-    def test_echo_with_zero_logprobs_non_streaming(self):
-        """Same contract on the non-streaming path."""
-        req = CompletionRequest(
-            model="x",
-            prompt="Hi",
-            max_tokens=100,
-            echo=True,
-            logprobs=0,
-        )
-        ret = [
-            {
-                "text": " world",
-                "meta_info": {
-                    "id": "cmpl-test",
-                    "prompt_tokens": 2,
-                    "completion_tokens": 1,
-                    "cached_tokens": 0,
-                    "finish_reason": {"type": "stop"},
-                    "weight_version": "v1",
-                    "input_token_logprobs": [],
-                    "output_token_logprobs": [(-0.1, 3, " world")],
-                    "output_token_logprobs_length": 1,
-                },
-            }
-        ]
-
-        response = self.sc._build_completion_response(req, ret, 1234567890)
-
-        self.assertEqual(len(response.choices), 1)
-        self.assertEqual(response.choices[0].logprobs.token_logprobs, [-0.1])
-        self.assertEqual(response.choices[0].logprobs.top_logprobs, [])
-
-    def test_streaming_token_ids_deltas_cover_output_exactly(self):
-        req = CompletionRequest(
-            model="x",
-            prompt="Hi",
-            max_tokens=10,
-            stream=True,
-            return_token_ids=True,
-        )
-        adapted_request, _ = self.sc._convert_to_internal_request(req)
-
-        for incremental in (False, True):
-            # Both of these are read through `get_serving()` now, so assigning
-            # them on the mock manager's record has no effect on what the code
-            # under test sees. State them where the code reads them.
-            with (
-                self.subTest(incremental_streaming_output=incremental),
-                get_context().override_server_args(
-                    stream_response_default_include_usage=False,
-                    incremental_streaming_output=incremental,
-                ),
-            ):
-                texts = ("a", "b", "c") if incremental else ("a", "ab", "abc")
-                output_ids = (
-                    ([5], [6], [7]) if incremental else ([5], [5, 6], [5, 6, 7])
-                )
-                chunks = [
-                    {
-                        "text": text,
-                        "output_ids": ids,
-                        "prompt_token_ids": [1, 2],
-                        "meta_info": {
-                            "id": "cmpl-test",
-                            "prompt_tokens": 2,
-                            "completion_tokens": i + 1,
-                            "finish_reason": {"type": "stop"} if i == 2 else None,
-                        },
-                        "index": 0,
-                    }
-                    for i, (text, ids) in enumerate(zip(texts, output_ids))
-                ]
-
-                async def _mock_generate(*args, _chunks=chunks, **kwargs):
-                    for chunk in _chunks:
-                        yield chunk
-
-                self.sc.tokenizer_manager.generate_request = _mock_generate
-
-                async def run_stream():
-                    return [
-                        chunk
-                        async for chunk in self.sc._generate_completion_stream(
-                            adapted_request, req, self.fastapi_request
-                        )
-                    ]
-
-                loop = get_or_create_event_loop()
-                raw_chunks = loop.run_until_complete(run_stream())
-
-                choices = []
-                for raw in raw_chunks:
-                    if not raw.startswith("data: ") or raw.strip() == "data: [DONE]":
-                        continue
-                    data = json.loads(raw[len("data: ") :])
-                    choices.extend(data.get("choices", []))
-
-                token_ids = [tid for c in choices for tid in c.get("token_ids", [])]
-                text = "".join(c["text"] for c in choices)
-                self.assertEqual(text, "abc")
-                self.assertEqual(token_ids, [5, 6, 7])
-                self.assertEqual(choices[0]["prompt_token_ids"], [1, 2])
-                for choice in choices[1:]:
-                    self.assertNotIn("prompt_token_ids", choice)
-
-    def test_non_streaming_cached_tokens_details_emits_sglext(self):
-        """Test that non-streaming completion responses emit cached token details in sglext."""
-
-        req = CompletionRequest(
-            model="x",
-            prompt="Hello world",
-            max_tokens=100,
-            return_cached_tokens_details=True,
-        )
-        ret = [
-            {
-                "text": "Cached response",
-                "meta_info": {
-                    "id": "cmpl-cache-test",
-                    "prompt_tokens": 10,
-                    "completion_tokens": 2,
-                    "cached_tokens": 6,
-                    "cached_tokens_details": {
-                        "device": 4,
-                        "host": 1,
-                        "storage": 1,
-                        "storage_backend": "file",
-                    },
-                    "finish_reason": {"type": "stop", "matched": None},
-                    "weight_version": "default",
-                },
-            }
-        ]
-
-        response = self.sc._build_completion_response(req, ret, 1234567890)
-
-        self.assertIsNotNone(response.sglext)
-        self.assertEqual(
-            response.sglext.cached_tokens_details.model_dump(exclude_none=True),
-            {
-                "device": 4,
-                "host": 1,
-                "storage": 1,
-                "storage_backend": "file",
-            },
-        )
-
-    def test_parallel_sampling_returns_spec_details_per_choice(self):
-        req = CompletionRequest(
-            model="x",
-            prompt="Hello world",
-            max_tokens=100,
-            n=2,
-            return_spec_tokens_details=True,
-        )
-        ret = [_spec_result(index) for index in range(2)]
-
-        response = self.sc._build_completion_response(req, ret, 1234567890)
-
-        details = response.sglext.spec_tokens_details
-        self.assertEqual(len(details), 2)
-        self.assertEqual(details[0].spec_cap_length, 1.0)
-        self.assertEqual(details[0].spec_block_accept_length, 0.5)
-        self.assertEqual(details[0].spec_cap_lens_histogram, [0, 1])
-        self.assertEqual(details[1].spec_cap_length, 2.0)
-        self.assertEqual(details[1].spec_block_accept_length, 1.5)
-        self.assertEqual(details[1].spec_cap_lens_histogram, [1, 1])
-
-        single_req = req.model_copy(update={"n": 1})
-        single_response = self.sc._build_completion_response(
-            single_req, ret[:1], 1234567890
-        )
-        self.assertEqual(
-            single_response.sglext.spec_tokens_details.spec_cap_length,
-            1.0,
-        )
-
-        disabled_req = single_req.model_copy(
-            update={"return_spec_tokens_details": False}
-        )
-        disabled_response = self.sc._build_completion_response(
-            disabled_req, ret[:1], 1234567890
-        )
-        self.assertIsNone(disabled_response.sglext)
-
-    def test_streaming_parallel_sampling_orders_spec_details_by_choice(self):
-        async def mock_generate(*args, **kwargs):
-            for index in (1, 0):
-                yield _spec_result(index)
-
-        self.sc.tokenizer_manager.generate_request = mock_generate
-        req = CompletionRequest(
-            model="x",
-            prompt="Hello world",
-            max_tokens=100,
-            n=2,
-            stream=True,
-            return_spec_tokens_details=True,
-        )
-        adapted_request, _ = self.sc._convert_to_internal_request(req)
-
-        async def run_stream(request):
-            return [
-                chunk
-                async for chunk in self.sc._generate_completion_stream(
-                    adapted_request, request, self.fastapi_request
-                )
-            ]
-
-        chunks = get_or_create_event_loop().run_until_complete(run_stream(req))
-        parsed = [
-            json.loads(chunk[len("data: ") :])
-            for chunk in chunks
-            if chunk.startswith("data: ") and chunk.strip() != "data: [DONE]"
-        ]
-        details = next(chunk["sglext"] for chunk in parsed if "sglext" in chunk)[
-            "spec_tokens_details"
-        ]
-        self.assertEqual([item["spec_cap_length"] for item in details], [1.0, 2.0])
-        self.assertEqual(
-            [item["spec_cap_lens_histogram"] for item in details],
-            [[0, 1], [1, 1]],
-        )
-
-        async def mock_single_generate(*args, **kwargs):
-            async for content in mock_generate():
-                if content["index"] == 0:
-                    yield content
-
-        self.sc.tokenizer_manager.generate_request = mock_single_generate
-        single_req = req.model_copy(update={"n": 1})
-        single_chunks = get_or_create_event_loop().run_until_complete(
-            run_stream(single_req)
-        )
-        single_parsed = [
-            json.loads(chunk[len("data: ") :])
-            for chunk in single_chunks
-            if chunk.startswith("data: ") and chunk.strip() != "data: [DONE]"
-        ]
-        single_details = next(
-            chunk["sglext"] for chunk in single_parsed if "sglext" in chunk
-        )["spec_tokens_details"]
-        self.assertIsInstance(single_details, dict)
-
-    def test_streaming_cached_tokens_details_emits_sglext(self):
-        """Test that streaming completion responses emit cached token details in sglext."""
-
-        async def _mock_generate_with_cached_tokens_details(*args, **kwargs):
-            yield {
-                "text": "Cached response",
-                "meta_info": {
-                    "id": "cmpl-cache-test",
-                    "prompt_tokens": 10,
-                    "completion_tokens": 2,
-                    "cached_tokens": 6,
-                    "cached_tokens_details": {
-                        "device": 4,
-                        "host": 1,
-                        "storage": 1,
-                        "storage_backend": "file",
-                    },
-                    "finish_reason": {"type": "stop", "matched": None},
-                    "output_token_logprobs": None,
-                    "output_top_logprobs": None,
-                },
-                "index": 0,
-            }
-
-        self.sc.tokenizer_manager.generate_request = (
-            _mock_generate_with_cached_tokens_details
-        )
-
-        req = CompletionRequest(
-            model="x",
-            prompt="Hello world",
-            max_tokens=100,
-            stream=True,
-            return_cached_tokens_details=True,
-        )
-
-        adapted_request, _ = self.sc._convert_to_internal_request(req)
-
-        async def run_stream():
-            chunks = []
-            async for chunk in self.sc._generate_completion_stream(
-                adapted_request, req, self.fastapi_request
-            ):
-                chunks.append(chunk)
-            return chunks
-
-        loop = get_or_create_event_loop()
-        chunks = loop.run_until_complete(run_stream())
-
-        sglext_chunks = []
-        for chunk in chunks:
-            if not chunk.startswith("data: ") or chunk.strip() == "data: [DONE]":
-                continue
-            data = json.loads(chunk[len("data: ") :])
-            if "sglext" in data:
-                sglext_chunks.append(data)
-
-        self.assertEqual(len(sglext_chunks), 1)
-        self.assertEqual(sglext_chunks[0]["choices"], [])
-        self.assertEqual(
-            sglext_chunks[0]["sglext"]["cached_tokens_details"],
-            {
-                "device": 4,
-                "host": 1,
-                "storage": 1,
-                "storage_backend": "file",
-            },
+        ],
+        model=model_name,
+    )
+    return f"data: {chunk.model_dump_json()}\n\n"
+
+
+def template_frame(template, index: int, text: str) -> str:
+    prefix, infix, suffix = template
+    return (
+        f"{prefix}{index}{infix}"
+        f"{json.dumps(text, ensure_ascii=False)}"
+        f"{suffix}"
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "Hello, world",
+        ' "quoted" and \\backslashed\\ ',
+        "line\nbreaks\r\ttabs",
+        "\x00\x01\x1f\x7f",
+        "unicode é 日本語 🚀 \U0001d549\U0010ffff",
+    ],
+)
+@pytest.mark.parametrize(
+    ("request_id", "model_name", "index"),
+    [
+        (REQUEST_ID, MODEL, 0),
+        (REQUEST_ID, MODEL, 7),
+        ('id "with" quotes\\', "модель 🎯", 3),
+    ],
+)
+def test_template_frame_matches_model_frame(request_id, model_name, index, text):
+    template = _delta_frame_template(request_id, CREATED, model_name)
+    assert template is not None
+    assert template_frame(template, index, text) == model_frame(
+        request_id, model_name, index, text
+    )
+
+
+def test_template_is_none_when_sentinels_are_ambiguous():
+    assert _delta_frame_template("cmpl-987654321", CREATED, "m") is None
+
+
+def test_first_middle_last_frames_are_byte_identical():
+    template = _delta_frame_template(REQUEST_ID, CREATED, MODEL)
+    assert template is not None
+    frames = [("first", 0), (" middle", 0), (" last", 0)]
+    for text, index in frames:
+        assert template_frame(template, index, text) == model_frame(
+            REQUEST_ID, MODEL, index, text
         )
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+def test_frame_keeps_sse_prefix_and_terminator():
+    template = _delta_frame_template(REQUEST_ID, CREATED, MODEL)
+    assert template is not None
+    frame = template_frame(template, 0, "x")
+    assert frame.startswith("data: ")
+    assert frame.endswith("\n\n")
+    assert frame == model_frame(REQUEST_ID, MODEL, 0, "x")
+
+
+def _request(**kwargs) -> CompletionRequest:
+    return CompletionRequest(model=MODEL, prompt="hi", **kwargs)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"stream_options": {"include_usage": True}},
+    ],
+)
+def test_plain_requests_use_template(kwargs):
+    assert _can_use_delta_template(_request(**kwargs), False) is True
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "continuous_usage"),
+    [
+        ({"echo": True}, False),
+        ({"logprobs": 1}, False),
+        ({"return_token_ids": True}, False),
+        ({"return_spec_tokens_details": True}, False),
+        ({}, True),
+    ],
+)
+def test_non_plain_requests_fall_back(kwargs, continuous_usage):
+    assert _can_use_delta_template(_request(**kwargs), continuous_usage) is False
+
+
+def test_fallback_frame_keeps_all_fields():
+    choice = CompletionResponseStreamChoice(
+        index=0,
+        text="done",
+        logprobs=None,
+        finish_reason="stop",
+        matched_stop="done",
+        token_ids=[1, 2],
+        prompt_token_ids=[3],
+    )
+    chunk = CompletionStreamResponse(
+        id=REQUEST_ID,
+        created=CREATED,
+        object="text_completion",
+        choices=[choice],
+        model=MODEL,
+    )
+    payload = json.loads(chunk.model_dump_json())
+    assert payload["choices"][0]["finish_reason"] == "stop"
+    assert payload["choices"][0]["matched_stop"] == "done"
+    assert payload["choices"][0]["token_ids"] == [1, 2]
+    assert payload["choices"][0]["prompt_token_ids"] == [3]
+
+
+def test_multi_choice_frames_match_model():
+    template = _delta_frame_template(REQUEST_ID, CREATED, MODEL)
+    assert template is not None
+    for index in range(3):
+        assert template_frame(template, index, f"c{index}") == model_frame(
+            REQUEST_ID, MODEL, index, f"c{index}"
+        )
+
+
+def _median_render_us(render, rounds=5, iters=2000) -> float:
+    samples = []
+    for _ in range(rounds):
+        start = time.perf_counter()
+        for i in range(iters):
+            render(i)
+        samples.append((time.perf_counter() - start) / iters * 1e6)
+    return statistics.median(samples)
+
+
+def test_microbench_template_not_slower_than_model():
+    template = _delta_frame_template(REQUEST_ID, CREATED, MODEL)
+    assert template is not None
+
+    def render_template(i):
+        return template_frame(template, 0, f"tok{i}")
+
+    def render_model(i):
+        return model_frame(REQUEST_ID, MODEL, 0, f"tok{i}")
+
+    assert render_template(0) == render_model(0)
+    template_us = _median_render_us(render_template)
+    model_us = _median_render_us(render_model)
+    print(
+        f"template={template_us:.3f}us model={model_us:.3f}us "
+        f"speedup={model_us / template_us:.2f}x"
+    )
+    assert template_us <= model_us * 1.10

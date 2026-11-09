@@ -94,14 +94,16 @@ def _can_use_delta_template(
 ) -> bool:
     """Whether every non-terminal chunk of this request is a plain delta.
 
-    Requests that can emit echo text, logprobs, token ids or per-chunk usage
-    keep the model serialization path so their frames stay unchanged.
+    Requests that can emit echo text, logprobs, token ids, per-chunk usage
+    or a trailing sglext chunk keep the model serialization path so their
+    frames stay unchanged.
     """
     return (
         not request.echo
         and request.logprobs is None
         and not request.return_token_ids
         and not continuous_usage_stats
+        and not request.return_spec_tokens_details
     )
 
 
