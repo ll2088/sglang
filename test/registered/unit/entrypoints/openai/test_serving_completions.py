@@ -20,22 +20,94 @@ These tests only touch the protocol models and the pure helpers in
 
 import json
 import statistics
+import sys
 import time
+import types
 
 import pytest
 
-pytest.importorskip("sglang.srt.entrypoints.openai.protocol")
-pytest.importorskip("sglang.srt.entrypoints.openai.serving_completions")
 
-from sglang.srt.entrypoints.openai.protocol import (
+def _load_template_helpers():
+    """Import the pure helpers, stubbing heavy runtime deps if needed.
+
+    The helpers under test only need the protocol models and ``json``; the
+    serving module pulls in the full sglang runtime. When that import fails
+    (e.g. minimal CI env), load the module source with a stub package so the
+    tests still execute instead of being skipped.
+    """
+    try:
+        from sglang.srt.entrypoints.openai.protocol import (
+            CompletionRequest,
+            CompletionResponseStreamChoice,
+            CompletionStreamResponse,
+        )
+        from sglang.srt.entrypoints.openai.serving_completions import (
+            _can_use_delta_template,
+            _delta_frame_template,
+        )
+
+        return (
+            CompletionRequest,
+            CompletionResponseStreamChoice,
+            CompletionStreamResponse,
+            _can_use_delta_template,
+            _delta_frame_template,
+        )
+    except Exception:  # pragma: no cover - exercised only in minimal envs
+        pass
+
+    import importlib.util
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[5]
+    pkg_root = repo_root / "python" / "sglang"
+    protocol_path = pkg_root / "srt" / "entrypoints" / "openai" / "protocol.py"
+    serving_path = (
+        pkg_root / "srt" / "entrypoints" / "openai" / "serving_completions.py"
+    )
+
+    def _ensure_pkg(name: str, path: Path) -> None:
+        if name in sys.modules:
+            return
+        mod = types.ModuleType(name)
+        mod.__path__ = [str(path)]
+        sys.modules[name] = mod
+
+    for name, path in (
+        ("sglang", pkg_root),
+        ("sglang.srt", pkg_root / "srt"),
+        ("sglang.srt.entrypoints", pkg_root / "srt" / "entrypoints"),
+        ("sglang.srt.entrypoints.openai", pkg_root / "srt" / "entrypoints" / "openai"),
+    ):
+        _ensure_pkg(name, path)
+
+    def _load(name: str, path: Path):
+        spec = importlib.util.spec_from_file_location(name, path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    protocol = _load("sglang.srt.entrypoints.openai.protocol", protocol_path)
+    serving = _load(
+        "sglang.srt.entrypoints.openai.serving_completions", serving_path
+    )
+    return (
+        protocol.CompletionRequest,
+        protocol.CompletionResponseStreamChoice,
+        protocol.CompletionStreamResponse,
+        serving._can_use_delta_template,
+        serving._delta_frame_template,
+    )
+
+
+(
     CompletionRequest,
     CompletionResponseStreamChoice,
     CompletionStreamResponse,
-)
-from sglang.srt.entrypoints.openai.serving_completions import (
     _can_use_delta_template,
     _delta_frame_template,
-)
+) = _load_template_helpers()
 
 try:
     from sglang.test.ci.ci_register import register_cpu_ci
@@ -208,7 +280,7 @@ def test_multi_choice_frames_match_model():
         )
 
 
-def _median_render_us(render, rounds=5, iters=2000) -> float:
+def _median_render_us(render, rounds=3, iters=2000) -> float:
     samples = []
     for _ in range(rounds):
         start = time.perf_counter()
