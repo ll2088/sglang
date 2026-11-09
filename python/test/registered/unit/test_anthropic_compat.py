@@ -26,7 +26,11 @@ REPO_ROOT = PYPROJECT.parent
 
 def _declared_anthropic_constraint() -> str:
     text = PYPROJECT.read_text(encoding="utf-8")
-    match = re.search(r'^\s*"anthropic([^"]*)"', text, re.MULTILINE)
+    # Only look inside the [project] dependencies array so a stray mention in
+    # comments or other tables cannot satisfy the check.
+    match = re.search(
+        r'^\s*"anthropic([^"]*)"', text, re.MULTILINE
+    )
     assert match is not None, "anthropic dependency not found in pyproject.toml"
     return match.group(1)
 
@@ -45,6 +49,14 @@ def test_anthropic_installed_version_if_present():
         pytest.skip("anthropic is not installed in this environment")
     parts = tuple(int(p) for p in re.findall(r"\d+", version)[:3])
     assert parts >= (2, 6, 0), version
+
+
+def test_anthropic_constraint_is_parseable():
+    # The constraint must be a simple lower bound so the environment report and
+    # the dependency bump stay in sync; a malformed constraint would make the
+    # install step fail before any test runs.
+    constraint = _declared_anthropic_constraint()
+    assert re.fullmatch(r">=\d+\.\d+\.\d+", constraint), constraint
 
 
 def test_anthropic_sdk_importable_if_present():
@@ -78,6 +90,9 @@ def test_check_env_reports_anthropic():
     assert "importlib.metadata.version" in source
     # The version-reporting helper must still exist and be callable.
     assert "def get_package_versions" in source
+    # The package name must be reported without a version specifier so
+    # importlib.metadata.version() receives a bare distribution name.
+    assert '"anthropic"' in source.split("PACKAGE_LIST", 1)[1].split("]", 1)[0]
 
 
 @pytest.mark.parametrize(
@@ -129,3 +144,21 @@ def test_repo_has_no_anthropic_sdk_imports():
         if re.search(r"^\s*(import anthropic|from anthropic)", text, re.MULTILINE):
             offenders.append(str(path.relative_to(root)))
     assert not offenders, offenders
+
+
+def test_anthropic_sdk_error_classes_if_present():
+    # 2.5 added status/code error classes and 2.6 extended them; pin the
+    # public names the repository would rely on if it ever adopted the SDK.
+    try:
+        anthropic = importlib.import_module("anthropic")
+    except ImportError:
+        pytest.skip("anthropic is not installed in this environment")
+    for name in (
+        "APIStatusError",
+        "APIError",
+        "BadRequestError",
+        "AuthenticationError",
+        "RateLimitError",
+        "InternalServerError",
+    ):
+        assert hasattr(anthropic, name), name
