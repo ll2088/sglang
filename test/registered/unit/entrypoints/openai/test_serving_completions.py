@@ -20,9 +20,7 @@ These tests only touch the protocol models and the pure helpers in
 
 import json
 import statistics
-import sys
 import time
-import types
 
 import pytest
 
@@ -35,18 +33,8 @@ def _install_minimal_stubs() -> None:
     Only modules that the helpers under test do not actually use are stubbed;
     ``protocol`` and ``serving_completions`` are still loaded from source.
     """
-    if "sglang" in sys.modules:
-        return
-    for name in (
-        "sglang",
-        "sglang.srt",
-        "sglang.srt.entrypoints",
-        "sglang.srt.entrypoints.openai",
-    ):
-        if name not in sys.modules:
-            mod = types.ModuleType(name)
-            mod.__path__ = []
-            sys.modules[name] = mod
+    # Package stubs are installed by conftest.py before this module loads.
+    return
 
 
 def _load_template_helpers():
