@@ -8,14 +8,7 @@
 #
 # Usage (from the repository root):
 #
-#     python -m pip install -r test/unit/requirements.txt
+#     bash test/unit/setup_env.sh
 #     python test/unit/verify_run_suite.py
 #
-# verify_run_suite.py is the CI entrypoint: it runs the collect-diagnostics,
-# exit-codes, tests and usability dimensions and exits 2 on infra failure so
-# an environment problem is never confused with a real test failure.
-#
-# Keep this list minimal: CI environment preparation must not resolve the full
-# sglang dependency set (torch, kernels, ...), which is what previously failed
-# before any test could run.
 pytest

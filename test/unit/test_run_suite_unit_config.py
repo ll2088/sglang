@@ -77,7 +77,7 @@ def test_readme_exit_code_keywords_present():
         assert keyword in text, f"README missing exit-code keyword: {keyword}"
 
 
-etup_env_guard_precedes_pip_install():
+def test_setup_env_guard_precedes_pip_install():
     """The editable guard must run before any pip invocation."""
     script = os.path.join(UNIT_DIR, "setup_env.sh")
     with open(script, encoding="utf-8") as f:
@@ -87,3 +87,26 @@ etup_env_guard_precedes_pip_install():
     assert guard_pos != -1
     assert install_pos != -1
     assert guard_pos < install_pos
+
+
+def test_setup_env_installs_only_minimal_requirements():
+    """setup_env.sh must install the pytest-only requirements file."""
+    script = os.path.join(UNIT_DIR, "setup_env.sh")
+    with open(script, encoding="utf-8") as f:
+        text = f.read()
+    assert "requirements.txt" in text
+    # The full sglang dependency resolution must never be triggered here.
+    assert "pip install -e" not in text
+    assert "pip install --editable" not in text
+
+
+def test_verify_entrypoint_exists_and_uses_distinct_exit_codes():
+    """verify_run_suite.py must exist and separate env from dimension failure."""
+    entry = os.path.join(UNIT_DIR, "verify_run_suite.py")
+    assert os.path.exists(entry)
+    with open(entry, encoding="utf-8") as f:
+        text = f.read()
+    assert "EXIT_ENV_FAILURE = 2" in text
+    assert "EXIT_DIMENSION_FAILURE = 1" in text
+    assert "pytest.main" in text
+    assert "import sglang" not in text

@@ -86,6 +86,17 @@ bash test/unit/setup_env.sh
 python test/unit/verify_run_suite.py
 ```
 
+`test/unit/setup_env.sh` installs only `test/unit/requirements.txt` (pytest)
+and self-checks `import pytest` / `pytest --version`, so an environment
+problem is reported as an environment failure instead of being mistaken for a
+test failure. Do not run `pip install -e python` for these checks: it resolves
+the full sglang dependency set (torch, kernels, ...) and can fail before any
+test runs.
+
+`verify_run_suite.py` runs the collect-diagnostics, exit-codes, tests and
+usability dimensions and exits `2` when the environment itself is broken
+(infra failure) versus `1` for a real dimension failure.
+
 The repository-root `setup_env.sh` delegates to `test/unit/setup_env.sh`, so
 whichever setup entry CI calls, only `test/unit/requirements.txt` (pytest) is
 installed. Both scripts print `[setup] using <resolved path>` so CI logs prove
