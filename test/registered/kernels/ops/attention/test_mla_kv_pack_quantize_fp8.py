@@ -21,12 +21,14 @@ if not torch.cuda.is_available():
 
 # The quantizer module imports triton at module scope; guard it so a CPU-only
 # or triton-less environment skips instead of erroring during collection.
-pytest.importorskip("sglang.kernels.ops.attention._per_tensor_fp8_quant_triton")
-
-from sglang.kernels.ops.attention._per_tensor_fp8_quant_triton import (  # noqa: E402
-    fused_per_tensor_fp8_quant,
-    reference_per_tensor_fp8_quant,
+# Import the module first (importorskip on the module path) so a missing
+# optional dependency is a skip, not a collection error.
+_quant_mod = pytest.importorskip(
+    "sglang.kernels.ops.attention._per_tensor_fp8_quant_triton"
 )
+
+fused_per_tensor_fp8_quant = _quant_mod.fused_per_tensor_fp8_quant
+reference_per_tensor_fp8_quant = _quant_mod.reference_per_tensor_fp8_quant
 
 FP8_DTYPE = torch.float8_e4m3fn
 

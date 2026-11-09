@@ -65,6 +65,9 @@ _TRITON_KERNELS = [
     ("_per_tensor_fp8_quant_triton", "fused_per_tensor_fp8_quant"),
     ("_per_tensor_fp8_quant_triton", "reference_per_tensor_fp8_quant"),
     ("mla_kv_pack_quantize_fp8", "mla_kv_pack_quantize_fp8"),
+    # Opt-in FlyDSL FP8 MLA prefill (gfx950); metadata only, resolved lazily.
+    ("mla_prefill_fp8_selector", "select_mla_prefill_backend"),
+    ("mla_prefill_fp8_selector", "resolve_mla_prefill_kernel"),
     # Opt-in FlyDSL FP8 MLA prefill (gfx950); resolved lazily by
     # sglang.kernels.ops.attention.mla_prefill_fp8_selector. Registered as
     # metadata only: importing this package never imports the selector module
