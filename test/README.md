@@ -58,6 +58,21 @@ python3 test/run_suite.py --hw cuda --suite base-b-test-1-gpu-small \
     --auto-partition-id 0 --auto-partition-size 4
 ```
 
+## Exit Codes
+
+`run_suite.py` returns distinct exit codes so CI can tell collection problems
+apart from real test failures:
+
+| Code | Meaning |
+|------|---------|
+| `0` | All selected tests passed |
+| `1` | Test execution failure |
+| `2` | Collection failure (bad registration, import error, invalid suite) |
+| `3` | No tests matched the requested suite/partition |
+
+On a collection failure the runner prints a `COLLECTION FAILED` block with the
+exception type, reason and traceback instead of silently passing.
+
 ## CI Registration
 
 Every CI-discovered test file must call a registration function at module level:

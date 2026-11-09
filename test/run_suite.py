@@ -4,6 +4,7 @@ import json
 import math
 import os
 import sys
+import traceback
 from typing import Dict, List, Optional
 
 import tabulate
@@ -15,6 +16,14 @@ from sglang.test.ci.ci_register import (
     collect_tests,
 )
 from sglang.test.ci.ci_utils import run_unittest_files
+
+# Exit codes returned by run_suite.py. They are intentionally distinct so CI
+# can tell a collection problem (bad registration / import error) apart from a
+# real test failure and from a suite that simply matched no tests.
+EXIT_OK = 0
+EXIT_TEST_FAILURE = 1
+EXIT_COLLECT_FAILURE = 2
+EXIT_NO_TESTS = 3
 
 HW_MAPPING = {
     "cpu": HWBackend.CPU,
@@ -418,9 +427,13 @@ def run_a_suite(args):
     # Strict: all discovered files must have proper registration
     sanity_check = True
 
-    all_tests = collect_tests(files, sanity_check=sanity_check)
-    validate_all_suites(all_tests)
-    ci_tests, skipped_tests = filter_tests(all_tests, hw, suites, nightly)
+    try:
+        all_tests = collect_tests(files, sanity_check=sanity_check)
+        validate_all_suites(all_tests)
+        ci_tests, skipped_tests = filter_tests(all_tests, hw, suites, nightly)
+    except Exception as exc:  # noqa: BLE001 - surface any collection error
+        _report_collect_failure(exc, files)
+        return EXIT_COLLECT_FAILURE
 
     # Precision-test mode: keep only the coverage-recommended files before
     # partitioning, so matrix jobs shard the filtered pool (balanced and
@@ -436,22 +449,34 @@ def run_a_suite(args):
         )
 
     if auto_partition_size:
-        live_est = load_live_est(args.partition_model_file, suites, repo_root)
-        if live_est is not None:
-            print(
-                f"LPT: {len(live_est)} live est entries from {args.partition_model_file}",
-                flush=True,
+        try:
+            live_est = load_live_est(args.partition_model_file, suites, repo_root)
+            if live_est is not None:
+                print(
+                    f"LPT: {len(live_est)} live est entries from {args.partition_model_file}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"LPT: no live est ({args.partition_model_file!r}); using in-source est_time",
+                    flush=True,
+                )
+            ci_tests = auto_partition(
+                ci_tests, auto_partition_id, auto_partition_size, live_est=live_est
             )
-        else:
-            print(
-                f"LPT: no live est ({args.partition_model_file!r}); using in-source est_time",
-                flush=True,
-            )
-        ci_tests = auto_partition(
-            ci_tests, auto_partition_id, auto_partition_size, live_est=live_est
-        )
+        except Exception as exc:  # noqa: BLE001 - partitioning is collection
+            _report_collect_failure(exc, files)
+            return EXIT_COLLECT_FAILURE
 
     pretty_print_tests(args, ci_tests, skipped_tests)
+
+    if not ci_tests:
+        print(
+            f"No tests to run for hw={hw.name}, suite={args.suite}, "
+            f"nightly={nightly}; returning exit code {EXIT_NO_TESTS}.",
+            flush=True,
+        )
+        return EXIT_NO_TESTS
 
     # None hands the per-file budget over to est_time (see run_unittest_files).
     timeout = None if args.timeout_from_est_time else args.timeout_per_file
@@ -460,7 +485,7 @@ def run_a_suite(args):
     if timeout is not None and args.enable_retry:
         timeout += args.retry_timeout_increase
 
-    return run_unittest_files(
+    result = run_unittest_files(
         ci_tests,
         timeout_per_file=timeout,
         continue_on_error=args.continue_on_error,
@@ -470,6 +495,21 @@ def run_a_suite(args):
         fork_worker_batch_size=args.fork_worker_batch_size,
         timeout_overrides=dict(args.timeout_override),
     )
+    if result:
+        return EXIT_TEST_FAILURE
+    return EXIT_OK
+
+
+def _report_collect_failure(exc: BaseException, files: List[str]) -> None:
+    """Print a readable collection-failure diagnostic instead of swallowing it."""
+    print("=" * 70, flush=True)
+    print("COLLECTION FAILED", flush=True)
+    print(f"  error type: {type(exc).__name__}", flush=True)
+    print(f"  reason: {exc}", flush=True)
+    print(f"  scanned {len(files)} file(s) under test/registered/", flush=True)
+    print("  traceback:", flush=True)
+    print(traceback.format_exc(), flush=True)
+    print("=" * 70, flush=True)
 
 
 def _parse_timeout_override(value: str) -> tuple[str, float]:
