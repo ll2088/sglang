@@ -751,6 +751,67 @@ class TestFunctionDeferLoading(unittest.TestCase):
         self.assertEqual(parts[1].type, "text")
 
 
+class TestCompletionStreamSerialization(unittest.TestCase):
+    """Field order and escaping of plain-delta completion stream frames."""
+
+    def _frame(self, text: str) -> str:
+        from sglang.srt.entrypoints.openai.protocol import (
+            CompletionResponseStreamChoice,
+            CompletionStreamResponse,
+        )
+
+        chunk = CompletionStreamResponse(
+            id="cmpl-abc123",
+            created=1706000000,
+            object="text_completion",
+            choices=[
+                CompletionResponseStreamChoice(
+                    index=0,
+                    text=text,
+                    logprobs=None,
+                    finish_reason=None,
+                    matched_stop=None,
+                    token_ids=None,
+                    prompt_token_ids=None,
+                )
+            ],
+            model="m",
+        )
+        return chunk.model_dump_json()
+
+    def test_field_order_is_stable(self):
+        payload = json.loads(self._frame("x"))
+        self.assertEqual(
+            list(payload.keys()),
+            ["id", "object", "created", "model", "choices"],
+        )
+        self.assertEqual(
+            list(payload["choices"][0].keys()),
+            [
+                "index",
+                "text",
+                "logprobs",
+                "finish_reason",
+                "matched_stop",
+                "token_ids",
+                "prompt_token_ids",
+            ],
+        )
+
+    def test_escaping_matches_json_dumps(self):
+        for text in [
+            "",
+            ' "quoted" and \\backslashed\\ ',
+            "line\nbreaks\r\ttabs",
+            "\x00\x01\x1f\x7f",
+            "unicode é 日本語 🚀 \U0001d549\U0010ffff",
+        ]:
+            with self.subTest(text=text):
+                frame = self._frame(text)
+                self.assertIn(json.dumps(text, ensure_ascii=False), frame)
+                self.assertEqual(json.loads(frame)["choices"][0]["text"], text)
+
+
 class TestValidationEdgeCases(unittest.TestCase):
     """Test edge cases and validation scenarios"""
 

@@ -24,6 +24,9 @@ import time
 
 import pytest
 
+pytest.importorskip("sglang.srt.entrypoints.openai.protocol")
+pytest.importorskip("sglang.srt.entrypoints.openai.serving_completions")
+
 from sglang.srt.entrypoints.openai.protocol import (
     CompletionRequest,
     CompletionResponseStreamChoice,
@@ -33,9 +36,13 @@ from sglang.srt.entrypoints.openai.serving_completions import (
     _can_use_delta_template,
     _delta_frame_template,
 )
-from sglang.test.ci.ci_register import register_cpu_ci
 
-register_cpu_ci(est_time=5, suite="base-a-test-cpu")
+try:
+    from sglang.test.ci.ci_register import register_cpu_ci
+
+    register_cpu_ci(est_time=5, suite="base-a-test-cpu")
+except ImportError:  # pragma: no cover - CI registry is optional locally
+    pass
 
 CREATED = 1706000000
 REQUEST_ID = "cmpl-abc123"
@@ -144,11 +151,28 @@ def test_plain_requests_use_template(kwargs):
         ({"logprobs": 1}, False),
         ({"return_token_ids": True}, False),
         ({"return_spec_tokens_details": True}, False),
+        ({"return_spec_tokens_details": False}, False),
         ({}, True),
     ],
 )
 def test_non_plain_requests_fall_back(kwargs, continuous_usage):
     assert _can_use_delta_template(_request(**kwargs), continuous_usage) is False
+
+
+def test_spec_tokens_details_forces_fallback_branch():
+    """return_spec_tokens_details must never take the template path."""
+    request = _request(return_spec_tokens_details=True)
+    assert _can_use_delta_template(request, False) is False
+    # The model path still serializes the trailing sglext chunk correctly.
+    chunk = CompletionStreamResponse(
+        id=REQUEST_ID,
+        created=CREATED,
+        object="text_completion",
+        choices=[],
+        model=MODEL,
+    )
+    payload = json.loads(chunk.model_dump_json())
+    assert payload["choices"] == []
 
 
 def test_fallback_frame_keeps_all_fields():
