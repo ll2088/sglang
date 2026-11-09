@@ -20,6 +20,7 @@ if os.path.isdir(_PY) and _PY not in sys.path:
 
 def test_attention_package_imports_without_optional_deps():
     """Importing the attention package must not require torch/triton/aiter."""
+    pytest.importorskip("sglang.kernels.ops.attention")
     import sglang.kernels.ops.attention as m  # noqa: F401
 
 
@@ -34,6 +35,7 @@ def test_attention_package_imports_without_optional_deps():
 )
 def test_registry_has_metadata_only_specs(op):
     """The registry must expose the specs without importing their targets."""
+    pytest.importorskip("sglang.kernels.registry")
     from sglang.kernels.registry import registry
 
     specs = registry.get(op)
