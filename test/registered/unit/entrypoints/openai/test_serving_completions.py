@@ -19,7 +19,6 @@ These tests only touch the protocol models and the pure helpers in
 """
 
 import json
-import os
 import statistics
 import sys
 import time
@@ -27,12 +26,10 @@ import types
 
 import pytest
 
-# CI 的 setup 步骤会执行 `pip install -e python`，在缺少 GPU/编译依赖的
-# 环境里可能失败。本文件不依赖 sglang 运行时，因此允许在安装失败时继续
-# 收集与执行：只要 pytest 与 pydantic 可用即可。
-if os.environ.get("SGLANG_SKIP_RUNTIME_INSTALL") == "1":
-    # 显式声明：本模块通过源码加载 + stub 运行，不导入 sglang 顶层。
-    pass
+# This module must be collectable with only pydantic + pytest installed.
+# It never imports the `sglang` package top level (whose __init__ pulls in
+# the full runtime); instead it loads protocol.py and serving_completions.py
+# from source via importlib with lightweight package stubs.
 
 # This module must be collectable with only pydantic + pytest installed.
 # It never imports the `sglang` package top level (whose __init__ pulls in
@@ -104,12 +101,11 @@ def _install_minimal_stubs() -> None:
         "sglang.srt.entrypoints",
         "sglang.srt.entrypoints.openai",
     ):
-        if pkg_name not in sys.modules or getattr(
-            sys.modules[pkg_name], "__file__", None
-        ) is not None:
-            pkg = types.ModuleType(pkg_name)
-            pkg.__path__ = []
-            sys.modules[pkg_name] = pkg
+        # Always install a stub package: a partially imported real module must
+        # not leak into the source-loaded serving module.
+        pkg = types.ModuleType(pkg_name)
+        pkg.__path__ = []
+        sys.modules[pkg_name] = pkg
 
 
 def _load_template_helpers():
@@ -148,6 +144,10 @@ def _load_template_helpers():
         mod = types.ModuleType(name)
         mod.__path__ = [str(path)]
         sys.modules[name] = mod
+
+    # Install the heavy-module stubs before loading protocol/serving so that
+    # serving_completions.py's module-scope imports resolve to stubs.
+    _install_minimal_stubs()
 
     for name, path in (
         ("sglang", pkg_root),

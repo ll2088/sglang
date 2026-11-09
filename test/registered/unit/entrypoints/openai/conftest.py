@@ -20,11 +20,36 @@ into collection: the test modules load the sources they need explicitly.
 """
 
 import sys
+import types
+
+
+def _install_package_stubs() -> None:
+    """Pre-seed ``sglang`` package stubs before any test module imports.
+
+    The CI setup step runs ``pip install -e python`` which resolves the full
+    runtime dependency chain (torch, quack-kernels, ...). These unit tests only
+    need pydantic + pytest, so install empty package stubs at conftest import
+    time (before collection) to keep the real ``sglang.__init__`` from ever
+    being imported.
+    """
+    for pkg_name in (
+        "sglang",
+        "sglang.srt",
+        "sglang.srt.entrypoints",
+        "sglang.srt.entrypoints.openai",
+    ):
+        existing = sys.modules.get(pkg_name)
+        if existing is not None and getattr(existing, "__file__", None) is not None:
+            # A real package was already imported; leave it alone.
+            continue
+        pkg = types.ModuleType(pkg_name)
+        pkg.__path__ = []
+        sys.modules[pkg_name] = pkg
+
+
+_install_package_stubs()
 
 
 def pytest_configure(config):
-    # If the real package was imported before collection (e.g. by a plugin),
-    # leave it alone; the test modules install their own stubs.
-    mod = sys.modules.get("sglang")
-    if mod is not None and getattr(mod, "__file__", None) is not None:
-        return
+    # Re-assert stubs in case a plugin imported the real package first.
+    _install_package_stubs()
