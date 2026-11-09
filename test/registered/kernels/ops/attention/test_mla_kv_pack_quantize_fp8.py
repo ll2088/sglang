@@ -14,6 +14,11 @@ register_amd_ci(est_time=60, suite="nightly-amd-kernel-1-gpu", nightly=True)
 if not torch.cuda.is_available():
     pytest.skip("mla_kv_pack_quantize_fp8 requires a CUDA/ROCm device", allow_module_level=True)
 
+try:
+    import triton  # noqa: F401
+except ImportError:
+    pytest.skip("mla_kv_pack_quantize_fp8 requires triton", allow_module_level=True)
+
 DEVICE = "cuda"
 FP8_DTYPE = torch.float8_e4m3fn
 
