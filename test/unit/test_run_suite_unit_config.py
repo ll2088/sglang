@@ -4,6 +4,7 @@ import os
 
 UNIT_DIR = os.path.dirname(os.path.abspath(__file__))
 TEST_DIR = os.path.dirname(UNIT_DIR)
+REPO_ROOT = os.path.dirname(TEST_DIR)
 
 
 def test_unit_pytest_ini_is_self_contained():
@@ -206,6 +207,36 @@ def test_setup_env_script_is_executable_and_guarded():
     # The guard must reject the full sglang dependency set coming back.
     assert "sglang==" in text
     assert "quack-kernels" in text
+    # The script must print the resolved path so CI logs prove the lightweight
+    # entry was hit instead of a full `pip install -e python`.
+    assert "realpath" in text
+    assert "[setup] using" in text
+    # It must install only the minimal requirements file.
+    assert "-r \"${REQUIREMENTS}\"" in text
+    # It must be executable so CI can invoke it directly.
+    assert os.access(script, os.X_OK), "setup_env.sh must be executable"
+
+
+def test_root_setup_env_delegates_to_lightweight_script():
+    """The repo-root setup entry must delegate to the pytest-only script.
+
+    CI environment preparation previously ran `pip install -e python`, which
+    resolves the full sglang dependency set and fails before any test runs.
+    Whichever setup path CI calls, it must land on the lightweight script.
+    """
+    root_script = os.path.join(REPO_ROOT, "setup_env.sh")
+    assert os.path.exists(root_script)
+    with open(root_script, encoding="utf-8") as f:
+        text = f.read()
+    assert text.startswith("#!/usr/bin/env bash")
+    assert "set -euo pipefail" in text
+    assert "test/unit/setup_env.sh" in text
+    assert "realpath" in text
+    assert "[setup] using" in text
+    # Must not trigger full dependency resolution itself.
+    assert "pip install -e python" not in text
+    assert "pip install -e ./python" not in text
+    assert os.access(root_script, os.X_OK), "setup_env.sh must be executable"
 
 
 def test_verify_run_suite_help_works_without_pytest():

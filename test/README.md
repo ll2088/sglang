@@ -86,6 +86,11 @@ bash test/unit/setup_env.sh
 python test/unit/verify_run_suite.py
 ```
 
+The repository-root `setup_env.sh` delegates to `test/unit/setup_env.sh`, so
+whichever setup entry CI calls, only `test/unit/requirements.txt` (pytest) is
+installed. Both scripts print `[setup] using <resolved path>` so CI logs prove
+the lightweight entry was hit instead of a full `pip install -e python`.
+
 `test/unit/setup_env.sh` is the only supported environment-preparation entry
 for these checks. It installs `test/unit/requirements.txt` (pytest only),
 prints the resolved script path so CI logs prove it was hit, and self-checks
