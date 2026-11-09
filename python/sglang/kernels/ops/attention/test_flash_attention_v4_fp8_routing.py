@@ -10,7 +10,17 @@ import pytest
 
 # The pure policy module is loaded by path below and must not import torch or
 # sglang at module scope, so the routing checks run on a CPU-only runner.
-torch = pytest.importorskip("torch", reason="torch is required for routing tests")
+# torch is optional: when it is missing the tensor-based cases are skipped
+# instead of failing collection, so the policy assertions still run in a
+# minimal CI environment that only installs pytest.
+try:
+    import torch
+except ImportError:  # pragma: no cover - exercised on CPU-only runners
+    torch = None
+
+requires_torch = pytest.mark.skipif(
+    torch is None, reason="torch is required for tensor-based routing tests"
+)
 
 # Load the pure policy module by path so this test does not require the
 # sglang package (or its heavy runtime deps) to be importable. The module is
@@ -48,9 +58,11 @@ def _call(q, k, v, *, causal=True, window_size=(None, None)):
     return fa4.is_sm90_fp8_kv_mma(q, k, v, causal, window_size)
 
 
+@requires_torch
 @pytest.mark.parametrize("major", [9])
-@pytest.mark.parametrize("q_dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("q_dtype", ["float16", "bfloat16"])
 def test_sm90_d512_fp8_kv_routes_to_mma(major, q_dtype):
+    q_dtype = getattr(torch, q_dtype)
     q = _tensor(q_dtype)
     k = _tensor(torch.float8_e4m3fn)
     v = _tensor(torch.float8_e4m3fn)
@@ -58,6 +70,7 @@ def test_sm90_d512_fp8_kv_routes_to_mma(major, q_dtype):
         assert _call(q, k, v) is True
 
 
+@requires_torch
 def test_non_sm90_falls_back():
     q = _tensor(torch.bfloat16)
     k = _tensor(torch.float8_e4m3fn)
@@ -66,6 +79,7 @@ def test_non_sm90_falls_back():
         assert _call(q, k, v) is False
 
 
+@requires_torch
 def test_non_d512_falls_back():
     q = _tensor(torch.bfloat16, head_dim=256)
     k = _tensor(torch.float8_e4m3fn, head_dim=256)
@@ -74,6 +88,7 @@ def test_non_d512_falls_back():
         assert _call(q, k, v) is False
 
 
+@requires_torch
 def test_non_fp8_kv_falls_back():
     q = _tensor(torch.bfloat16)
     k = _tensor(torch.bfloat16)
@@ -82,6 +97,7 @@ def test_non_fp8_kv_falls_back():
         assert _call(q, k, v) is False
 
 
+@requires_torch
 def test_noncausal_full_attention_rejected():
     q = _tensor(torch.bfloat16)
     k = _tensor(torch.float8_e4m3fn)
@@ -91,6 +107,7 @@ def test_noncausal_full_attention_rejected():
             _call(q, k, v, causal=False)
 
 
+@requires_torch
 def test_noncausal_sliding_window_allowed():
     q = _tensor(torch.bfloat16)
     k = _tensor(torch.float8_e4m3fn)
@@ -99,22 +116,30 @@ def test_noncausal_sliding_window_allowed():
         assert _call(q, k, v, causal=False, window_size=(128, 0)) is True
 
 
+@requires_torch
 @pytest.mark.parametrize(
     "layout,expected_shape",
     [
         (0.5, (2, 4)),
-        (torch.ones(4), (2, 4)),
-        (torch.ones(2, 4), (2, 4)),
-        (torch.ones(2, 4, 1, 1), (2, 4)),
+        ("ones4", (2, 4)),
+        ("ones24", (2, 4)),
+        ("ones2411", (2, 4)),
     ],
 )
 def test_descale_layout_normalization(layout, expected_shape):
+    if isinstance(layout, str):
+        layout = {
+            "ones4": torch.ones(4),
+            "ones24": torch.ones(2, 4),
+            "ones2411": torch.ones(2, 4, 1, 1),
+        }[layout]
     out = _normalize_descale(layout, batch=2, heads=4)
     assert out.shape == expected_shape
     assert out.dtype == torch.float32
     assert out.is_contiguous()
 
 
+@requires_torch
 def test_descale_layout_rejects_bad_shape():
     with pytest.raises(ValueError):
         _normalize_descale(torch.ones(3, 5, 2), batch=2, heads=4)
@@ -153,6 +178,7 @@ def test_split_auto_selection_short_seqlen():
     assert splits == 1
 
 
+@requires_torch
 def test_non_fp8_fallback_keeps_original_kernel():
     q = _tensor(torch.bfloat16)
     k = _tensor(torch.bfloat16)
@@ -161,6 +187,7 @@ def test_non_fp8_fallback_keeps_original_kernel():
         assert _call(q, k, v) is False
 
 
+@requires_torch
 def test_non_sm90_d512_fp8_falls_back():
     q = _tensor(torch.bfloat16)
     k = _tensor(torch.float8_e4m3fn)
@@ -181,6 +208,7 @@ def test_policy_module_does_not_import_sglang():
     assert "sglang" not in getattr(fa4, "__dict__", {})
 
 
+@requires_torch
 def test_non_fp8_fallback_keeps_original_kernel_sm90():
     q = _tensor(torch.bfloat16)
     k = _tensor(torch.bfloat16)
@@ -189,6 +217,7 @@ def test_non_fp8_fallback_keeps_original_kernel_sm90():
         assert _call(q, k, v) is False
 
 
+@requires_torch
 def test_sm120_policy_unchanged():
     # SM120 keeps its own dispatch policy; the SM90 FP8-MMA gate must not fire.
     q = _tensor(torch.bfloat16)
@@ -219,6 +248,7 @@ def test_policy_module_imports_without_torch():
     assert mod.SM90_FP8_MMA_HEAD_DIM == 512
 
 
+@requires_torch
 def test_stability_repeated_routing():
     q = _tensor(torch.bfloat16)
     k = _tensor(torch.float8_e4m3fn)
@@ -228,6 +258,7 @@ def test_stability_repeated_routing():
     assert results == {True}
 
 
+@requires_torch
 def test_stability_repeated_descale_and_splits():
     descale = torch.ones(2, 4)
     with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
@@ -298,21 +329,25 @@ def test_split_auto_selection_never_exceeds_tiles():
     assert splits == 2
 
 
+@requires_torch
 def test_descale_layout_rejects_bad_1d():
     with pytest.raises(ValueError):
         _normalize_descale(torch.ones(3), batch=2, heads=4)
 
 
+@requires_torch
 def test_descale_layout_rejects_bad_4d_trailing():
     with pytest.raises(ValueError):
         _normalize_descale(torch.ones(2, 4, 2, 1), batch=2, heads=4)
 
 
+@requires_torch
 def test_descale_layout_rejects_unsupported_ndim():
     with pytest.raises(ValueError):
         _normalize_descale(torch.ones(2, 4, 1), batch=2, heads=4)
 
 
+@requires_torch
 def test_descale_layout_accepts_python_scalar():
     out = _normalize_descale(0.25, batch=2, heads=4)
     assert out.shape == (2, 4)
@@ -320,6 +355,7 @@ def test_descale_layout_accepts_python_scalar():
     assert torch.all(out == 0.25)
 
 
+@requires_torch
 def test_descale_layout_preserves_values():
     src = torch.arange(8, dtype=torch.float32).reshape(2, 4)
     out = _normalize_descale(src, batch=2, heads=4)
@@ -327,6 +363,7 @@ def test_descale_layout_preserves_values():
     assert out.dtype == torch.float32
 
 
+@requires_torch
 def test_sm90_fp8_kv_mma_requires_e4m3_kv():
     q = _tensor(torch.bfloat16)
     k = _tensor(torch.float8_e5m2)
@@ -335,6 +372,7 @@ def test_sm90_fp8_kv_mma_requires_e4m3_kv():
         assert _call(q, k, v) is False
 
 
+@requires_torch
 def test_sm90_fp8_kv_mma_requires_equal_head_dims():
     q = _tensor(torch.bfloat16, head_dim=512)
     k = _tensor(torch.float8_e4m3fn, head_dim=512)
@@ -343,6 +381,7 @@ def test_sm90_fp8_kv_mma_requires_equal_head_dims():
         assert _call(q, k, v) is False
 
 
+@requires_torch
 def test_fp8_mma_hit_is_asserted_not_fallback():
     """Acceptance: the routing decision must be the FP8 kernel, not fallback."""
     q = _tensor(torch.bfloat16)
@@ -356,6 +395,7 @@ def test_fp8_mma_hit_is_asserted_not_fallback():
     )
 
 
+@requires_torch
 def test_gemma4_full_attention_d512_shape_routes_to_fp8():
     """Gemma-4 full attention: head_dim=512, FP8 KV, SM90, causal."""
     q = _tensor(torch.bfloat16, head_dim=512, heads=32)
@@ -369,6 +409,7 @@ def test_gemma4_full_attention_d512_shape_routes_to_fp8():
     )
 
 
+@requires_torch
 def test_gemma4_sliding_window_d256_stays_on_fa3():
     """Gemma-4 sliding-window layers (d256) must not take the d512 FP8 path."""
     q = _tensor(torch.bfloat16, head_dim=256, heads=32)
@@ -382,6 +423,7 @@ def test_gemma4_sliding_window_d256_stays_on_fa3():
     )
 
 
+@requires_torch
 def test_sm90_fp8_kv_mma_explicit_major_override():
     q = _tensor(torch.bfloat16)
     k = _tensor(torch.float8_e4m3fn)
