@@ -31,9 +31,63 @@ import pytest
 
 
 def _install_minimal_stubs() -> None:
-    """No-op kept for readability: the helpers are loaded from source below,
-    so no runtime module stubs are needed."""
-    return
+    """Install lightweight stubs for heavy runtime modules.
+
+    The helpers under test only need the protocol models and ``json``. The
+    serving module imports the full sglang runtime at module scope, so when
+    that runtime is unavailable (minimal CI env with just pydantic + pytest)
+    we stub the heavy modules before loading the source files.
+    """
+    import sys
+    import types
+
+    stubs = {
+        "sglang.srt.entrypoints.openai.serving_base": {
+            "OpenAIServingBase": type("OpenAIServingBase", (), {}),
+        },
+        "sglang.srt.entrypoints.openai.usage_processor": {
+            "UsageProcessor": type("UsageProcessor", (), {}),
+        },
+        "sglang.srt.entrypoints.openai.utils": {
+            name: (lambda *a, **k: None)
+            for name in (
+                "cached_tokens_details_from_dict",
+                "process_cached_tokens_details_from_ret",
+                "process_hidden_states_for_response",
+                "process_hidden_states_from_ret",
+                "process_routed_experts_from_ret",
+                "process_spec_tokens_details_from_ret",
+                "should_include_usage",
+                "spec_tokens_details_from_meta_info",
+                "to_openai_style_logprobs",
+            )
+        },
+        "sglang.srt.managers.io_struct": {
+            "GenerateReqInput": type("GenerateReqInput", (), {}),
+        },
+        "sglang.srt.parser.code_completion_parser": {
+            "generate_completion_prompt_from_request": (lambda *a, **k: None),
+        },
+        "sglang.srt.runtime_context": {"get_serving": (lambda: None)},
+        "sglang.srt.utils.weight_versions": {
+            "build_endpoint_weight_version_metadata": (lambda *a, **k: None),
+        },
+        "sglang.utils": {"convert_json_schema_to_str": (lambda *a, **k: None)},
+        "fastapi": {
+            "Request": type("Request", (), {}),
+        },
+        "fastapi.responses": {
+            "ORJSONResponse": type("ORJSONResponse", (), {}),
+            "StreamingResponse": type("StreamingResponse", (), {}),
+        },
+    }
+    for name, attrs in stubs.items():
+        if name in sys.modules:
+            continue
+        mod = types.ModuleType(name)
+        for attr, value in attrs.items():
+            setattr(mod, attr, value)
+        sys.modules[name] = mod
 
 
 def _load_template_helpers():
@@ -64,7 +118,7 @@ def _load_template_helpers():
             _real._delta_frame_template,
         )
     except Exception:
-        pass
+        _install_minimal_stubs()
 
     repo_root = Path(__file__).resolve().parents[5]
     pkg_root = repo_root / "python" / "sglang"
