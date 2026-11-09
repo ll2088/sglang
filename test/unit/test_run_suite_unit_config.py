@@ -93,6 +93,18 @@ def test_setup_env_guard_precedes_pip_install():
     assert "exit 2" in text
 
 
+def test_root_setup_env_delegates_to_unit_setup():
+    """The root setup entry must delegate to the pytest-only unit script."""
+    script = os.path.join(REPO_ROOT, "setup_env.sh")
+    assert os.path.exists(script)
+    with open(script, encoding="utf-8") as f:
+        text = f.read()
+    assert "test/unit/setup_env.sh" in text
+    # The root entry must never resolve the full sglang dependency set.
+    assert "pip install -e" not in text
+    assert "pip install --editable" not in text
+
+
 def test_setup_env_installs_only_minimal_requirements():
     """setup_env.sh must install the pytest-only requirements file."""
     script = os.path.join(UNIT_DIR, "setup_env.sh")
