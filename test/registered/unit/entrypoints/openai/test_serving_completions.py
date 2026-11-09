@@ -304,7 +304,8 @@ class ServingCompletionTestCase(unittest.TestCase):
 
         Field-order/escape assertions live here (not in test_protocol.py) so
         the byte-equivalence dimension only touches reviewed files and does
-        not depend on protocol-module imports.
+        not depend on protocol-module imports. This is the canonical home for
+        the serialization-order/escape dimension required by the port.
         """
         created = 1706000000
         cases = [
@@ -542,8 +543,12 @@ class ServingCompletionTestCase(unittest.TestCase):
                 samples.append((_time.perf_counter() - start) / iters)
             return statistics.median(samples)
 
-        template_us = measure(template_frame) * 1e6
-        model_us = measure(model_frame) * 1e6
+        # Three independent median-of-medians runs so the reported numbers
+        # match the acceptance criterion (3 runs, median comparison).
+        template_runs = [measure(template_frame) * 1e6 for _ in range(3)]
+        model_runs = [measure(model_frame) * 1e6 for _ in range(3)]
+        template_us = statistics.median(template_runs)
+        model_us = statistics.median(model_runs)
         ratio = template_us / model_us
         # Machine-parsable line so CI logs carry the median comparison.
         print(
@@ -554,6 +559,8 @@ class ServingCompletionTestCase(unittest.TestCase):
                     "model_us": round(model_us, 3),
                     "ratio": round(ratio, 3),
                     "speedup_pct": round((1.0 - ratio) * 100.0, 2),
+                    "template_runs_us": [round(v, 3) for v in template_runs],
+                    "model_runs_us": [round(v, 3) for v in model_runs],
                 },
                 sort_keys=True,
             )
