@@ -185,6 +185,7 @@ def test_non_sm90_d512_fp8_falls_back():
 
 def test_policy_module_does_not_import_torch_at_module_scope():
     # Guards the CI fix: importing the policy module must not require torch.
+    # torch is imported lazily inside helpers, so it must not be a module attr.
     assert "torch" not in getattr(fa4, "__dict__", {})
 
 

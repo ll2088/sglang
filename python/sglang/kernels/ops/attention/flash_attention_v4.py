@@ -144,6 +144,19 @@ except Exception:  # pragma: no cover - policy module is optional at import time
         return 0
 
 
+# Normalize K/V descales once at the FA4 boundary so the kernel always sees a
+# contiguous f32 (batch, heads) layout regardless of caller layout.
+def _normalized_descales(k_descale, v_descale, k, v):
+    if k_descale is None and v_descale is None:
+        return k_descale, v_descale
+    batch = int(k.shape[0]) if k.ndim >= 3 else 1
+    heads = int(k.shape[-2]) if k.ndim >= 2 else 1
+    return (
+        _normalize_kv_descale(k_descale, batch=batch, heads=heads),
+        _normalize_kv_descale(v_descale, batch=batch, heads=heads),
+    )
+
+
 def _pad_mla_q_heads(q, qv, v, pack_gqa):
     if qv is None or pack_gqa is False:
         return q, qv, None
@@ -295,6 +308,7 @@ def flash_attn_varlen_func(
     if sfv is not None:
         sf_kwargs["sfv"] = sfv
 
+    k_descale, v_descale = _normalized_descales(k_descale, v_descale, k, v)
     descale_kwargs = {}
     if q_descale is not None:
         descale_kwargs["q_descale"] = q_descale
