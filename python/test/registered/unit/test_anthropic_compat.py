@@ -39,6 +39,15 @@ def test_anthropic_installed_version_if_present():
     assert parts >= (2, 6, 0), version
 
 
+def test_declared_constraint_allows_2_6():
+    # The constraint is managed by the dependency bump; assert it admits 2.6.0
+    # without rewriting pyproject.toml here.
+    constraint = _declared_anthropic_constraint()
+    match = re.search(r">=\s*(\d+)\.(\d+)\.(\d+)", constraint)
+    assert match is not None, constraint
+    assert tuple(int(p) for p in match.groups()) <= (2, 6, 0), constraint
+
+
 def test_check_env_reports_anthropic():
     check_env = importlib.import_module("sglang.check_env")
     assert "anthropic" in check_env.PACKAGE_LIST
@@ -63,3 +72,15 @@ def test_modules_import_without_anthropic_api_usage(module_name):
     source = Path(module.__file__).read_text(encoding="utf-8")
     assert "import anthropic" not in source
     assert "from anthropic" not in source
+
+
+def test_repo_has_no_anthropic_sdk_imports():
+    # The SDK is an optional runtime dependency only; no module may import it,
+    # so the 0.20 -> 2.6 breaking changes cannot affect this repository.
+    root = PYPROJECT.parent / "sglang"
+    offenders = []
+    for path in root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if re.search(r"^\s*(import anthropic|from anthropic)", text, re.MULTILINE):
+            offenders.append(str(path.relative_to(root)))
+    assert not offenders, offenders
