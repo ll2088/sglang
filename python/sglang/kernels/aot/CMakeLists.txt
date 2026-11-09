@@ -291,6 +291,13 @@ set(SOURCES
     "csrc/moe/moe_sum.cu"
     "csrc/moe/moe_sum_reduce.cu"
     "csrc/moe/moe_topk_softmax_kernels.cu"
+    # The fused sigmoid topk instantiates one kernel per (gating dtype, expert
+    # count) pair. Each gating dtype gets its own translation unit so the device
+    # code is generated in parallel instead of serializing on a single unit;
+    # moe_topk_sigmoid_kernels.cu keeps only the dtype dispatch.
+    "csrc/moe/moe_topk_sigmoid_bf16.cu"
+    "csrc/moe/moe_topk_sigmoid_f16.cu"
+    "csrc/moe/moe_topk_sigmoid_f32.cu"
     "csrc/moe/moe_topk_sigmoid_kernels.cu"
     "csrc/moe/fp8_blockwise_moe_kernel.cu"
     "csrc/moe/prepare_moe_input.cu"

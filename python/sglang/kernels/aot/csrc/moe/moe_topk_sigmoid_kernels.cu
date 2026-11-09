@@ -31,6 +31,12 @@ limitations under the License.
 
 #include "utils.h"
 
+// Fused sigmoid topk kernels and launchers. The device code is generated per
+// gating dtype: moe_topk_sigmoid_<dtype>.cu defines SGLANG_TOPK_SIGMOID_IMPL
+// and includes this file, while the plain translation unit emitted by the
+// build owns the dtype dispatch and only declares the per-dtype entry points
+// (see SGLANG_TOPK_SIGMOID_LAUNCHER_INSTANTIATE at the bottom).
+
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
@@ -493,6 +499,29 @@ void topkGatingSigmoidKernelLauncher(
   }
 }
 
+// Declares (EXT = extern) or defines (EXT = empty) the launcher for one gating
+// dtype. The dtype dispatch and the per-dtype instantiation units share this
+// macro, so a signature change cannot make the two drift apart.
+#define SGLANG_TOPK_SIGMOID_LAUNCHER_INSTANTIATE(EXT, TYPE) \
+  EXT template void topkGatingSigmoidKernelLauncher<TYPE>(  \
+      const TYPE* gating_output,                            \
+      float* topk_weights,                                  \
+      int* topk_indices,                                    \
+      float* sigmoid_workspace,                             \
+      const int num_tokens,                                 \
+      const int num_experts,                                \
+      const int topk,                                       \
+      const bool renormalize,                               \
+      const float* correction_bias,                         \
+      cudaStream_t stream)
+
+#ifndef SGLANG_TOPK_SIGMOID_IMPL
+// Declared only: the definitions live in moe_topk_sigmoid_<dtype>.cu so that
+// each gating dtype's device code is generated in its own translation unit.
+SGLANG_TOPK_SIGMOID_LAUNCHER_INSTANTIATE(extern, float);
+SGLANG_TOPK_SIGMOID_LAUNCHER_INSTANTIATE(extern, __half);
+SGLANG_TOPK_SIGMOID_LAUNCHER_INSTANTIATE(extern, __nv_bfloat16);
+
 void topk_sigmoid(
     torch::Tensor& topk_weights,   // [num_tokens, topk]
     torch::Tensor& topk_indices,   // [num_tokens, topk]
@@ -590,3 +619,5 @@ void topk_sigmoid(
     TORCH_CHECK(false, "Unsupported gating_output dtype: ", dtype);
   }
 }
+
+#endif  // !SGLANG_TOPK_SIGMOID_IMPL
