@@ -16,6 +16,11 @@ def _install_ci_stubs() -> None:
     existing = sys.modules.get("sglang.test.ci.ci_register")
     if existing is not None and not getattr(existing, "_run_suite_stub", False):
         return
+    # Also treat a partially-installed real package as "not usable": if the
+    # real ci_register imported but ci_utils did not, fall through and install
+    # the stubs so run_suite's module-level imports still resolve.
+    if existing is not None and "sglang.test.ci.ci_utils" not in sys.modules:
+        pass
 
     class HWBackend(enum.Enum):
         CPU = "cpu"
@@ -45,6 +50,7 @@ def _install_ci_stubs() -> None:
     ci_register.collect_tests = collect_tests
 
     ci_utils = types.ModuleType("sglang.test.ci.ci_utils")
+    ci_utils._run_suite_stub = True
     ci_utils.run_unittest_files = lambda *a, **k: 0
 
     sys.modules.setdefault("sglang", types.ModuleType("sglang"))

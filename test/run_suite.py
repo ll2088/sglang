@@ -505,7 +505,8 @@ def _report_collect_failure(exc: BaseException, files: List[str]) -> None:
     print("=" * 70, flush=True)
     print("COLLECTION FAILED", flush=True)
     print(f"  error type: {type(exc).__name__}", flush=True)
-    print(f"  reason: {exc}", flush=True)
+    reason = str(exc).strip() or "<no message>"
+    print(f"  reason: {reason}", flush=True)
     print(f"  scanned {len(files)} file(s) under test/registered/", flush=True)
     print("  traceback:", flush=True)
     print(traceback.format_exc(), flush=True)
