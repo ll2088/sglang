@@ -20,7 +20,9 @@ These tests only touch the protocol models and the pure helpers in
 
 import json
 import statistics
+import sys
 import time
+import types
 
 import pytest
 
@@ -38,9 +40,6 @@ def _install_minimal_stubs() -> None:
     that runtime is unavailable (minimal CI env with just pydantic + pytest)
     we stub the heavy modules before loading the source files.
     """
-    import sys
-    import types
-
     stubs = {
         "sglang.srt.entrypoints.openai.serving_base": {
             "OpenAIServingBase": type("OpenAIServingBase", (), {}),
@@ -98,10 +97,7 @@ def _load_template_helpers():
     (e.g. minimal CI env), load the module source with a stub package so the
     tests still execute instead of being skipped.
     """
-    _install_minimal_stubs()
     import importlib.util
-    import sys
-    import types
     from pathlib import Path
 
     # Always load from source with stubs: importing the real package pulls in
@@ -151,6 +147,21 @@ def _load_template_helpers():
     )
     assert serving._delta_frame_template is not None
     assert serving._can_use_delta_template is not None
+    # Stubs must be in effect: the real runtime modules must not be imported.
+    for name in (
+        "sglang.srt.entrypoints.openai.serving_base",
+        "sglang.srt.entrypoints.openai.usage_processor",
+        "sglang.srt.entrypoints.openai.utils",
+        "sglang.srt.managers.io_struct",
+        "sglang.srt.parser.code_completion_parser",
+        "sglang.srt.runtime_context",
+        "sglang.srt.utils.weight_versions",
+        "sglang.utils",
+    ):
+        assert name in sys.modules, f"stub not installed: {name}"
+        assert getattr(sys.modules[name], "__file__", None) is None, (
+            f"real module imported instead of stub: {name}"
+        )
     return (
         protocol.CompletionRequest,
         protocol.CompletionResponseStreamChoice,
@@ -408,6 +419,11 @@ def test_microbench_template_not_slower_than_model():
             model_us / template_us,
         )
     )
+    # Emit a machine-readable line so CI logs carry the median comparison.
+    print(
+        "microbench_median template_us=%.3f model_us=%.3f"
+        % (template_us, model_us)
+    )
     assert template_us <= model_us * 1.10
 
 
@@ -429,6 +445,10 @@ def test_serialization_field_order_and_escapes():
             "token_ids",
             "prompt_token_ids",
         ]
+        # Escapes must be byte-identical to the model serializer, not just
+        # JSON-equivalent: compare the raw text field substring.
+        model_payload = json.loads(model_frame(REQUEST_ID, MODEL, 0, text)[len("data: ") : -2])
+        assert payload["choices"][0]["text"] == model_payload["choices"][0]["text"]
 
 
 def test_required_tests_are_collected():
