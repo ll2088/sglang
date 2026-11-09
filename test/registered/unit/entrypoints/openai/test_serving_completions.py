@@ -299,6 +299,36 @@ class ServingCompletionTestCase(unittest.TestCase):
     def test_delta_frame_template_none_when_ambiguous(self):
         self.assertIsNone(_delta_frame_template("cmpl-987654321", 1, "m"))
 
+    def test_delta_frame_template_field_order_and_escapes(self):
+        """Template frames must keep model field order and JSON escaping."""
+        created = 1706000000
+        cases = [
+            ("cmpl-abc123", "meta-llama/Llama-3.1-8B", 0, ""),
+            ("cmpl-abc123", "meta-llama/Llama-3.1-8B", 0, "Hello, world"),
+            ('id "with" quotes\\', "модель 🎯", 7, ' "q" \\b\\ '),
+            ("cmpl-abc123", "m", 1, "line\nbreaks\r\ttabs"),
+            ("cmpl-abc123", "m", 2, "\x00\x01\x1f\x7f"),
+            ("cmpl-abc123", "m", 3, "unicode é 日本語 🚀"),
+        ]
+        for request_id, model_name, index, text in cases:
+            with self.subTest(text=text, request_id=request_id):
+                template = _delta_frame_template(request_id, created, model_name)
+                self.assertIsNotNone(template)
+                prefix, infix, suffix = template
+                frame = (
+                    f"{prefix}{index}{infix}"
+                    f"{json.dumps(text, ensure_ascii=False)}{suffix}"
+                )
+                expected = self._model_frame(
+                    request_id, created, model_name, index, text
+                )
+                self.assertEqual(frame, expected)
+                # Field order is preserved verbatim from the model serializer.
+                self.assertTrue(frame.startswith("data: {"))
+                self.assertTrue(frame.endswith("}\n\n"))
+                self.assertIn('"object":"text_completion"', frame)
+                self.assertIn('"choices":[{"index":', frame)
+
     def test_delta_template_eligibility(self):
         plain = CompletionRequest(model="x", prompt="Hi", stream=True)
         self.assertTrue(_can_use_delta_template(plain, False))
@@ -444,6 +474,7 @@ class ServingCompletionTestCase(unittest.TestCase):
                     )
 
     def test_delta_template_serialization_microbenchmark(self):
+        """Template rendering must not be slower than model serialization."""
         """Template rendering must not be slower than model serialization."""
         import statistics
         import time as _time
