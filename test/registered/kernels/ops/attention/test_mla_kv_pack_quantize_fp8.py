@@ -19,6 +19,10 @@ pytest.importorskip("triton")
 if not torch.cuda.is_available():
     pytest.skip("CUDA/ROCm device required", allow_module_level=True)
 
+# The quantizer module imports triton at module scope; guard it so a CPU-only
+# or triton-less environment skips instead of erroring during collection.
+pytest.importorskip("sglang.kernels.ops.attention._per_tensor_fp8_quant_triton")
+
 from sglang.kernels.ops.attention._per_tensor_fp8_quant_triton import (  # noqa: E402
     fused_per_tensor_fp8_quant,
     reference_per_tensor_fp8_quant,
