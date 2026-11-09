@@ -64,6 +64,7 @@ _TRITON_KERNELS = [
     ("mla_qk_prep", "concat_and_cast_mha_k_triton"),
     ("per_tensor_fp8_quant", "fused_per_tensor_fp8_quant"),
     ("per_tensor_fp8_quant", "reference_per_tensor_fp8_quant"),
+    ("mla_kv_pack_quantize_fp8", "mla_kv_pack_quantize_fp8"),
 ]
 for _mod, _fn in _TRITON_KERNELS:
     register_kernel(

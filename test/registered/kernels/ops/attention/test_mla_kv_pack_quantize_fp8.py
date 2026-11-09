@@ -41,7 +41,9 @@ def _kernel():
     )
 
     return mla_kv_pack_quantize_fp8
-FP8_DTYPE = torch.float8_e4m3fn
+
+
+FP8_DTYPE = torch.float8_e4m3fn if torch is not None else None
 
 
 def _reference(x: torch.Tensor, scale_inv: float) -> torch.Tensor:
