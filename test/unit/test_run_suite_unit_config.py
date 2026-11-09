@@ -387,3 +387,68 @@ def test_verify_run_suite_help_works_without_pytest():
     assert proc.returncode == 0, proc.stderr
     for dimension in ("collect-diagnostics", "exit-codes", "tests", "usability"):
         assert dimension in proc.stdout
+
+
+def test_verify_run_suite_prints_resolved_paths():
+    """The entrypoint must print the resolved paths so CI logs prove the hit."""
+    entrypoint = os.path.join(UNIT_DIR, "verify_run_suite.py")
+    with open(entrypoint, encoding="utf-8") as f:
+        text = f.read()
+    assert "[verify] repo_root=" in text
+    assert "[verify] unit_dir=" in text
+    assert "[verify] pytest" in text
+
+
+def test_verify_run_suite_dimension_targets_exist():
+    """Every dimension target must exist so no dimension runs zero tests."""
+    import importlib.util
+
+    entrypoint = os.path.join(UNIT_DIR, "verify_run_suite.py")
+    spec = importlib.util.spec_from_file_location(
+        "verify_run_suite_targets_under_test", entrypoint
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for name, targets in module.DIMENSIONS.items():
+        assert targets, f"dimension {name} has no targets"
+        for target in targets:
+            assert os.path.exists(target), f"{name}: missing {target}"
+
+
+def test_setup_env_script_does_not_resolve_sglang_deps():
+    """The lightweight setup entry must not resolve the full sglang deps."""
+    script = os.path.join(UNIT_DIR, "setup_env.sh")
+    assert os.path.exists(script)
+    with open(script, encoding="utf-8") as f:
+        text = f.read()
+    assert text.startswith("#!/usr/bin/env bash")
+    assert "set -euo pipefail" in text
+    assert "test/unit/requirements.txt" in text or "REQUIREMENTS" in text
+    assert "pip install -e python" not in text
+    assert "pip install -e ./python" not in text
+    assert "sglang==" not in text
+    assert "quack-kernels" not in text
+    assert "py-spy" not in text
+    assert "import pytest" in text
+    assert "pytest --version" in text
+    assert "[setup] using" in text
+    assert "BASH_SOURCE" in text
+    assert "--editable" in text
+    assert "exit 2" in text
+    assert "Collecting .*from sglang==" in text
+    assert "grep -Eq" in text
+    assert "tee" in text
+    assert "LOG_FILE" in text
+    assert os.access(script, os.X_OK), "setup_env.sh must be executable"
+
+
+def test_setup_env_guard_precedes_pip_install():
+    """The editable guard must run before any pip invocation."""
+    script = os.path.join(UNIT_DIR, "setup_env.sh")
+    with open(script, encoding="utf-8") as f:
+        text = f.read()
+    guard_pos = text.find("--editable")
+    install_pos = text.find("pip install")
+    assert guard_pos != -1
+    assert install_pos != -1
+    assert guard_pos < install_pos
