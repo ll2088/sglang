@@ -14,6 +14,11 @@ from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
 register_cuda_ci(est_time=60, stage="base-b-kernel-unit", runner_config="1-gpu-large")
 register_amd_ci(est_time=60, suite="nightly-amd-kernel-1-gpu", nightly=True)
 
+# The kernel needs a CUDA/ROCm device; skip collection on CPU-only CI so the
+# module still imports (import-smoke dimension) instead of erroring at import.
+if not torch.cuda.is_available():
+    pytest.skip("per-tensor FP8 quant requires a CUDA/ROCm device", allow_module_level=True)
+
 DEVICE = "cuda"
 FP8_DTYPE = torch.float8_e4m3fn
 
