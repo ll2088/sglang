@@ -58,7 +58,9 @@ def _sglang_root() -> Path:
 
     The package lives next to pyproject.toml (python/sglang) in the normal
     checkout, but tests may also be collected from a layout where the package
-    is one level up. Probe both and return the first that exists.
+    is one level up. Probe both and return the first that exists; callers must
+    check ``is_dir()`` before reading files so a missing checkout skips rather
+    than errors.
     """
     root = _repo_root()
     for candidate in (root / "sglang", root.parent / "sglang"):
@@ -194,7 +196,10 @@ def test_modules_do_not_import_anthropic(module_path):
     # None of them use the SDK, so the 0.20 -> 2.6 breaking changes cannot
     # affect them; this test pins that fact. Skip when the sglang sources are
     # not present in this checkout (e.g. a bare test environment).
-    path = _sglang_root() / Path(module_path).relative_to("sglang")
+    root = _sglang_root()
+    if not root.is_dir():
+        pytest.skip("sglang package sources are not present in this checkout")
+    path = root / Path(module_path).relative_to("sglang")
     if not path.is_file():
         pytest.skip(f"{module_path} is not present in this checkout")
     source = path.read_text(encoding="utf-8")
@@ -208,6 +213,9 @@ def test_benchmark_and_cli_modules_do_not_reference_anthropic():
     # check_env.py is excluded: it intentionally lists "anthropic" in
     # PACKAGE_LIST to report the installed version. Skip when the sglang
     # sources are not present in this checkout.
+    root = _sglang_root()
+    if not root.is_dir():
+        pytest.skip("sglang package sources are not present in this checkout")
     for rel in (
         "sglang/benchmark/endpoint.py",
         "sglang/benchmark/datasets/agentic_trace.py",
@@ -215,7 +223,7 @@ def test_benchmark_and_cli_modules_do_not_reference_anthropic():
         "sglang/benchmark/utils.py",
         "sglang/cli/generate.py",
     ):
-        path = _sglang_root() / Path(rel).relative_to("sglang")
+        path = root / Path(rel).relative_to("sglang")
         if not path.is_file():
             pytest.skip(f"{rel} is not present in this checkout")
         text = path.read_text(encoding="utf-8")
