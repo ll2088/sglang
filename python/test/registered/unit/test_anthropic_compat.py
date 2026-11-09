@@ -42,6 +42,16 @@ def test_anthropic_constraint_is_declared():
     assert constraint, constraint
 
 
+def test_anthropic_constraint_allows_2_6():
+    # The declared lower bound must not exclude the upgraded SDK. The exact
+    # value is owned by the dependency bump; here we only require that 2.6.0
+    # satisfies the declared specifier.
+    from packaging.specifiers import SpecifierSet
+
+    constraint = _declared_anthropic_constraint()
+    assert SpecifierSet(constraint).contains("2.6.0"), constraint
+
+
 def test_anthropic_installed_version_if_present():
     # The SDK is optional; when it is installed, it must satisfy the declared
     # lower bound. Skip (not fail) when absent so the suite runs in a bare env.
@@ -76,6 +86,19 @@ def test_anthropic_sdk_importable_if_present():
         pytest.skip("anthropic is not installed in this environment")
     assert hasattr(anthropic, "Anthropic")
     assert hasattr(anthropic, "AsyncAnthropic")
+
+
+def test_anthropic_sdk_version_satisfies_constraint_if_present():
+    # When the SDK is installed, its version must satisfy the declared
+    # constraint, so a stale 0.20 install cannot silently pass the suite.
+    try:
+        version = importlib.metadata.version("anthropic")
+    except importlib.metadata.PackageNotFoundError:
+        pytest.skip("anthropic is not installed in this environment")
+    from packaging.specifiers import SpecifierSet
+
+    constraint = _declared_anthropic_constraint()
+    assert SpecifierSet(constraint).contains(version), (version, constraint)
 
 
 def test_declared_constraint_is_a_lower_bound():
