@@ -90,6 +90,9 @@ def test_anthropic_constraint_is_declared():
     constraint = _declared_anthropic_constraint()
     assert constraint, constraint
     assert constraint.strip(), constraint
+    # The declared lower bound must be at least 2.6.0 so the upgraded SDK is
+    # allowed by the install step; the exact value is owned by the bump.
+    assert _specifier_contains(constraint, "2.6.0"), constraint
 
 
 def test_anthropic_constraint_allows_2_6():
@@ -98,7 +101,6 @@ def test_anthropic_constraint_allows_2_6():
     # satisfies the declared specifier.
     constraint = _declared_anthropic_constraint()
     assert _specifier_contains(constraint, "2.6.0"), constraint
-    assert _specifier_contains(constraint, "2.6.0")
 
 
 def test_anthropic_installed_version_if_present():
@@ -123,7 +125,6 @@ def test_anthropic_constraint_is_parseable():
     # to be a well-formed specifier so the install step cannot fail on syntax.
     constraint = _declared_anthropic_constraint()
     assert re.fullmatch(r"[<>=!~][^\s]*", constraint), constraint
-    assert re.fullmatch(r"[<>=!~][^\s]*", constraint)
 
 
 def test_anthropic_sdk_importable_if_present():
@@ -155,7 +156,6 @@ def test_declared_constraint_is_a_lower_bound():
     # Do not pin the exact version here: the bump owns that value.
     constraint = _declared_anthropic_constraint()
     assert re.fullmatch(r">=\s*\d+(?:\.\d+)*", constraint), constraint
-    assert re.fullmatch(r">=\s*\d+(?:\.\d+)*", constraint)
 
 
 def test_check_env_reports_anthropic():
@@ -202,6 +202,26 @@ def test_modules_do_not_import_anthropic(module_path):
     assert "from anthropic" not in source
 
 
+def test_benchmark_and_cli_modules_do_not_reference_anthropic():
+    # The benchmark and CLI modules are the ones the acceptance criteria call
+    # out; scan them statically so the check works without torch/sglang.
+    # check_env.py is excluded: it intentionally lists "anthropic" in
+    # PACKAGE_LIST to report the installed version. Skip when the sglang
+    # sources are not present in this checkout.
+    for rel in (
+        "sglang/benchmark/endpoint.py",
+        "sglang/benchmark/datasets/agentic_trace.py",
+        "sglang/benchmark/datasets/openai_dataset.py",
+        "sglang/benchmark/utils.py",
+        "sglang/cli/generate.py",
+    ):
+        path = _sglang_root() / Path(rel).relative_to("sglang")
+        if not path.is_file():
+            pytest.skip(f"{rel} is not present in this checkout")
+        text = path.read_text(encoding="utf-8")
+        assert "anthropic" not in text.lower(), rel
+
+
 def test_anthropic_sdk_public_surface():
     # Pin the public entry points the repository would rely on if it ever
     # adopted the SDK, so a future major bump is caught here. Import lazily so
@@ -228,26 +248,6 @@ def test_repo_has_no_anthropic_sdk_imports():
         if re.search(r"^\s*(import anthropic|from anthropic)", text, re.MULTILINE):
             offenders.append(str(path.relative_to(root)))
     assert not offenders, offenders
-
-
-def test_benchmark_and_cli_modules_do_not_reference_anthropic():
-    # The benchmark and CLI modules are the ones the acceptance criteria call
-    # out; scan them statically so the check works without torch/sglang.
-    # check_env.py is excluded: it intentionally lists "anthropic" in
-    # PACKAGE_LIST to report the installed version. Skip when the sglang
-    # sources are not present in this checkout.
-    for rel in (
-        "sglang/benchmark/endpoint.py",
-        "sglang/benchmark/datasets/agentic_trace.py",
-        "sglang/benchmark/datasets/openai_dataset.py",
-        "sglang/benchmark/utils.py",
-        "sglang/cli/generate.py",
-    ):
-        path = _sglang_root() / Path(rel).relative_to("sglang")
-        if not path.is_file():
-            pytest.skip(f"{rel} is not present in this checkout")
-        text = path.read_text(encoding="utf-8")
-        assert "anthropic" not in text.lower(), rel
 
 
 def test_check_env_reports_anthropic_without_specifier():
