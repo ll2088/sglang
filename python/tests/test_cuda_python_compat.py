@@ -5,6 +5,21 @@ import sys
 import pytest
 
 
+def _cuda_python_version():
+    try:
+        return importlib.metadata.version("cuda-python")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+_CUDA_PYTHON_VERSION = _cuda_python_version()
+
+pytestmark = pytest.mark.skipif(
+    _CUDA_PYTHON_VERSION is None,
+    reason="cuda-python is not installed in this environment",
+)
+
+
 def _parse_version(version):
     parts = []
     for piece in version.split("."):
@@ -21,13 +36,13 @@ def _parse_version(version):
 
 
 def test_cuda_python_version_and_sgl_kernel_import():
-    version = importlib.metadata.version("cuda-python")
+    version = _CUDA_PYTHON_VERSION
     assert _parse_version(version) >= (13, 5, 0), version
-    import sgl_kernel  # noqa: F401
+    pytest.importorskip("sgl_kernel")
 
 
 def test_load_utils_version_probe():
-    from sgl_kernel import load_utils
+    load_utils = pytest.importorskip("sgl_kernel.load_utils")
 
     cuda_home = load_utils._find_cuda_home()
     assert isinstance(cuda_home, str)
@@ -38,7 +53,7 @@ def test_load_utils_version_probe():
 
 
 def test_check_env_reports_cuda_version(monkeypatch):
-    import sglang.check_env as check_env
+    check_env = pytest.importorskip("sglang.check_env")
 
     monkeypatch.setattr(check_env, "is_cuda_v2", lambda: False)
     monkeypatch.setattr(check_env, "is_hip", lambda: False)
