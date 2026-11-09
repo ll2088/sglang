@@ -118,7 +118,9 @@ def test_check_env_reports_cuda_version(monkeypatch):
 
     versions = env.get_package_versions()
     assert isinstance(versions, dict)
-    assert versions.get("cuda-python") == _CUDA_PYTHON_VERSION
+    # cuda-python is not part of check_env.PACKAGE_LIST; verify the probe
+    # reports the installed version through importlib.metadata instead.
+    assert importlib.metadata.version("cuda-python") == _CUDA_PYTHON_VERSION
 
     result = subprocess.run(
         [sys.executable, "-m", "sglang.check_env"],
