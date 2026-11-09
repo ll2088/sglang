@@ -136,12 +136,76 @@ def test_split_selection_for_gemma4_shape():
         is_fp8_mma=True,
     )
     assert splits >= 1
-    assert splits <= 4096 // fa4.SPLIT_KV_TILE_N
+    assert splits <= fa4.SM90_FP8_MMA_MAX_SPLITS
+    assert splits <= 4096 // fa4.SM90_FP8_MMA_TILE_N
 
 
-@pytest.mark.parametrize("layout", [0.5, torch.ones(4), torch.ones(2, 4), torch.ones(2, 4, 1, 1)])
+@pytest.mark.parametrize(
+    "layout",
+    [
+        0.5,
+        torch.ones(1),
+        torch.ones(4),
+        torch.ones(1, 4),
+        torch.ones(2, 4),
+        torch.ones(1, 1, 1, 1),
+        torch.ones(2, 4, 1, 1),
+    ],
+)
 def test_descale_layouts_are_normalized_for_gemma4(layout):
     out = fa4.normalize_kv_descale(layout, batch=2, heads=4)
     assert out.shape == (2, 4)
     assert out.dtype == torch.float32
     assert out.is_contiguous()
+
+
+def test_descale_rejects_mismatched_layout():
+    with pytest.raises(ValueError):
+        fa4.normalize_kv_descale(torch.ones(3, 4), batch=2, heads=4)
+    with pytest.raises(ValueError):
+        fa4.normalize_kv_descale(torch.ones(3), batch=2, heads=4)
+
+
+def test_noncausal_full_attention_is_rejected_on_sm90():
+    shape = _gemma4_full_attention_shape()
+    q = torch.empty(1, shape["heads"], shape["head_dim"], dtype=torch.bfloat16)
+    k = torch.empty(1, shape["kv_heads"], shape["head_dim"], dtype=torch.float8_e4m3fn)
+    v = torch.empty(1, shape["kv_heads"], shape["head_dim"], dtype=torch.float8_e4m3fn)
+    with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
+        with pytest.raises(NotImplementedError):
+            fa4.is_sm90_fp8_kv_mma(q, k, v, False, (None, None))
+        # A sliding window makes the noncausal call legal.
+        assert fa4.is_sm90_fp8_kv_mma(q, k, v, False, (128, 0)) is True
+
+
+def test_non_d512_or_non_fp8_falls_back():
+    q = torch.empty(1, 8, 256, dtype=torch.bfloat16)
+    k = torch.empty(1, 1, 256, dtype=torch.float8_e4m3fn)
+    v = torch.empty(1, 1, 256, dtype=torch.float8_e4m3fn)
+    with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
+        assert fa4.is_sm90_fp8_kv_mma(q, k, v, True, (None, None)) is False
+    q = torch.empty(1, 8, 512, dtype=torch.bfloat16)
+    k = torch.empty(1, 1, 512, dtype=torch.bfloat16)
+    v = torch.empty(1, 1, 512, dtype=torch.bfloat16)
+    with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
+        assert fa4.is_sm90_fp8_kv_mma(q, k, v, True, (None, None)) is False
+
+
+def test_split_selection_scales_with_seqlen():
+    short = fa4.select_num_splits(
+        fa_version=4, max_seqlen_k=256, num_heads=8, num_kv_heads=1,
+        num_sms=132, is_fp8_mma=True,
+    )
+    long = fa4.select_num_splits(
+        fa_version=4, max_seqlen_k=16384, num_heads=8, num_kv_heads=1,
+        num_sms=132, is_fp8_mma=True,
+    )
+    assert 1 <= short <= long <= fa4.SM90_FP8_MMA_MAX_SPLITS
+    assert fa4.select_num_splits(
+        fa_version=3, max_seqlen_k=16384, num_heads=8, num_kv_heads=1,
+        num_sms=132, is_fp8_mma=True,
+    ) == 32
+    assert fa4.select_num_splits(
+        fa_version=4, max_seqlen_k=16384, num_heads=8, num_kv_heads=1,
+        num_sms=132, is_fp8_mma=False,
+    ) == 0

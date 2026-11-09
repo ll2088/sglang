@@ -52,7 +52,9 @@ def is_sm90_fp8_kv_mma(
     if not (q.shape[-1] == k.shape[-1] == v.shape[-1] == SM90_FP8_MMA_HEAD_DIM):
         return False
     if not causal:
-        left, right = (window_size or (None, None))[:2]
+        window = window_size or (None, None)
+        left = window[0] if len(window) > 0 else None
+        right = window[1] if len(window) > 1 else None
         if (left is None or left < 0) and (right is None or right < 0):
             raise NotImplementedError(
                 "SM90 FP8 MMA noncausal full attention has known accuracy errors."
@@ -67,7 +69,9 @@ def normalize_kv_descale(descale, *, batch: int, heads: int):
     import torch
 
     if isinstance(descale, (int, float)):
-        return torch.full((batch, heads), float(descale), dtype=torch.float32)
+        return torch.full(
+            (batch, heads), float(descale), dtype=torch.float32, device="cpu"
+        )
     if not isinstance(descale, torch.Tensor):
         raise ValueError(f"Unsupported descale type: {type(descale)!r}")
     t = descale.to(dtype=torch.float32)
