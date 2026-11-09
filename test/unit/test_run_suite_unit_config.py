@@ -209,12 +209,27 @@ def test_setup_env_script_is_executable_and_guarded():
     assert "quack-kernels" in text
     # The script must print the resolved path so CI logs prove the lightweight
     # entry was hit instead of a full `pip install -e python`.
-    assert "realpath" in text
+    assert "BASH_SOURCE" in text
     assert "[setup] using" in text
     # It must install only the minimal requirements file.
     assert "-r \"${REQUIREMENTS}\"" in text
     # It must be executable so CI can invoke it directly.
     assert os.access(script, os.X_OK), "setup_env.sh must be executable"
+
+
+def test_setup_env_script_has_dependency_smoke_guard():
+    """setup_env.sh must assert the full sglang deps were not resolved."""
+    script = os.path.join(UNIT_DIR, "setup_env.sh")
+    with open(script, encoding="utf-8") as f:
+        text = f.read()
+    # The smoke guard must grep the install log for the full dependency
+    # resolution pattern and exit non-zero when it appears.
+    assert "Collecting .*from sglang==" in text
+    assert "grep -Eq" in text
+    assert "exit 2" in text
+    # The install log must be captured so the guard can inspect it.
+    assert "tee" in text
+    assert "LOG_FILE" in text
 
 
 def test_root_setup_env_delegates_to_lightweight_script():
@@ -231,12 +246,24 @@ def test_root_setup_env_delegates_to_lightweight_script():
     assert text.startswith("#!/usr/bin/env bash")
     assert "set -euo pipefail" in text
     assert "test/unit/setup_env.sh" in text
-    assert "realpath" in text
+    assert "BASH_SOURCE" in text
     assert "[setup] using" in text
     # Must not trigger full dependency resolution itself.
     assert "pip install -e python" not in text
     assert "pip install -e ./python" not in text
     assert os.access(root_script, os.X_OK), "setup_env.sh must be executable"
+
+
+def test_root_setup_env_rejects_editable_install():
+    """The repo-root entry must reject editable installs explicitly."""
+    root_script = os.path.join(REPO_ROOT, "setup_env.sh")
+    with open(root_script, encoding="utf-8") as f:
+        text = f.read()
+    assert "--editable" in text
+    assert "exit 2" in text
+    # It must not itself resolve the full sglang dependency set.
+    assert "pip install -e" not in text
+    assert "sglang==" not in text
 
 
 def test_setup_env_scripts_are_cwd_independent():
