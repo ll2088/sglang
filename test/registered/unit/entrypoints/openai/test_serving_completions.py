@@ -54,6 +54,10 @@ def _load_template_helpers():
     load the protocol module by path and then load the serving module with
     lightweight stubs for the heavy runtime imports. Any failure is reported
     with ``pytest.fail`` so collection stays non-zero and loud.
+
+    This loader must not import the ``sglang`` package itself: CI installs
+    only pytest/pydantic and points PYTHONPATH at ``python/``, so any
+    transitive runtime import would fail before collection.
     """
     try:
         protocol = _load_module_from_path(
@@ -68,6 +72,19 @@ def _load_template_helpers():
     stubs = {
         "sglang.srt.entrypoints.openai.serving_base": {
             "OpenAIServingBase": type("OpenAIServingBase", (), {}),
+        },
+        "sglang.srt.entrypoints.openai.protocol": {
+            name: getattr(protocol, name)
+            for name in (
+                "CompletionRequest",
+                "CompletionResponse",
+                "CompletionResponseChoice",
+                "CompletionResponseStreamChoice",
+                "CompletionStreamResponse",
+                "ErrorResponse",
+                "SglExt",
+            )
+            if hasattr(protocol, name)
         },
         "sglang.srt.entrypoints.openai.usage_processor": {
             "UsageProcessor": type("UsageProcessor", (), {}),
@@ -118,6 +135,12 @@ def _load_template_helpers():
         pkg = types.ModuleType(pkg_name)
         pkg.__path__ = []
         sys.modules[pkg_name] = pkg
+
+    # The serving module imports the protocol models by package path; make
+    # sure the stub package exposes the already-loaded protocol module so no
+    # second copy of the models is created (which would break isinstance and
+    # byte-equivalence comparisons).
+    sys.modules["sglang.srt.entrypoints.openai.protocol"] = protocol
 
     try:
         serving = _load_module_from_path(
@@ -389,8 +412,8 @@ def test_microbench_template_not_slower_than_model():
     )
     # Emit a machine-readable line so CI logs carry the median comparison.
     print(
-        "microbench_median template_us=%.3f model_us=%.3f"
-        % (template_us, model_us)
+        "microbench_median template_us=%.3f model_us=%.3f speedup=%.2fx"
+        % (template_us, model_us, model_us / template_us)
     )
     assert template_us <= model_us * 1.10
 
@@ -421,6 +444,7 @@ def test_serialization_field_order_and_escapes():
 
 def test_required_tests_are_collected():
     """Fail loudly if the required test names disappear or get skipped."""
+    print("collected_tests=%d" % len([n for n in globals() if n.startswith("test_")]))
     required = {
         "test_template_frame_matches_model_frame",
         "test_first_middle_last_frames_are_byte_identical",
