@@ -10,6 +10,9 @@ import pytest
 
 torch = pytest.importorskip("torch", reason="torch is required for routing tests")
 
+# The policy module is loaded by path and must not import sglang or CUDA at
+# module scope, so these routing checks run on a CPU-only runner.
+
 # This module must not import sglang or initialize CUDA: CI installs sglang
 # from PyPI and that step can fail before pytest runs. The policy module is
 # loaded by path below and stays torch-free at module scope.
@@ -181,6 +184,28 @@ def test_non_sm90_d512_fp8_falls_back():
 def test_policy_module_does_not_import_torch_at_module_scope():
     # Guards the CI fix: importing the policy module must not require torch.
     assert "torch" not in getattr(fa4, "__dict__", {})
+
+
+def test_policy_module_does_not_import_sglang():
+    # Guards the CI fix: the policy module must not pull in the sglang package.
+    assert "sglang" not in getattr(fa4, "__dict__", {})
+
+
+def test_non_fp8_fallback_keeps_original_kernel_sm90():
+    q = _tensor(torch.bfloat16)
+    k = _tensor(torch.bfloat16)
+    v = _tensor(torch.bfloat16)
+    with patch.object(fa4.torch, "cuda", _FakeCuda(9)):
+        assert _call(q, k, v) is False
+
+
+def test_sm120_policy_unchanged():
+    # SM120 keeps its own dispatch policy; the SM90 FP8-MMA gate must not fire.
+    q = _tensor(torch.bfloat16)
+    k = _tensor(torch.float8_e4m3fn)
+    v = _tensor(torch.float8_e4m3fn)
+    with patch.object(fa4.torch, "cuda", _FakeCuda(12)):
+        assert _call(q, k, v) is False
 
 
 def test_policy_module_imports_without_torch():

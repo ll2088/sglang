@@ -1,102 +1,86 @@
 # Copyright (c) 2026, SGLang Team.
 """Pure routing policy for the FA4 SM90 d512 FP8-MMA path.
 
-Kept free of torch.cuda / cute imports so it can be unit-tested on CPU
-without a GPU or a compiled flash-attention extension.
+This module must stay importable without torch, CUDA, or the sglang package
+so routing/descale/split logic can be unit-tested on a CPU-only runner.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
-
-if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
-    import torch
-
-# NOTE: This module must stay importable without the sglang package or a
-# compiled flash-attention extension so routing can be unit-tested on CPU.
-# torch is imported lazily inside the helpers that need it, so importing this
-# module never pulls in CUDA initialization.
+from typing import Optional
 
 SM90_FP8_MMA_HEAD_DIM = 512
-SM90_FP8_MMA_ARCH_MAJOR = 9
-FA3_SPLIT_CAP = 32
-SPLIT_KV_TILE_N = 128
+SM90_FP8_MMA_MAJOR = 9
+SM90_FP8_MMA_MAX_SPLITS = 4
+FA3_MAX_SPLITS = 32
+SPLIT_TILE_N = 256
+
+
+def _is_fp8_e4m3(dtype) -> bool:
+    return getattr(dtype, "name", "") == "float8_e4m3fn"
 
 
 def is_sm90_fp8_kv_mma(
-    q: "torch.Tensor",
-    k: "torch.Tensor",
-    v: "torch.Tensor",
+    q,
+    k,
+    v,
     causal: bool,
     window_size,
     *,
     device_capability_major: Optional[int] = None,
 ) -> bool:
-    """Return whether the SM90 d512 FP8-MMA path applies to this call.
-
-    The kernel accepts native FP16/BF16 Q with paged E4M3 K/V and folds the
-    K/V descales in-kernel. It is only valid for equal head dims of 512 on
-    SM90 and rejects noncausal full attention, which has known accuracy
-    issues.
-    """
-    try:
+    """Return whether the call qualifies for the SM90 d512 FP8-MMA kernel."""
+    if device_capability_major is None:
         import torch
-    except ImportError:  # pragma: no cover - CPU-only policy import
-        return False
 
-    if k.dtype != torch.float8_e4m3fn:
+        device_capability_major = torch.cuda.get_device_capability()[0]
+    if device_capability_major != SM90_FP8_MMA_MAJOR:
+        return False
+    if not (_is_fp8_e4m3(k.dtype) and _is_fp8_e4m3(v.dtype)):
         return False
     if not (q.shape[-1] == k.shape[-1] == v.shape[-1] == SM90_FP8_MMA_HEAD_DIM):
         return False
-    if device_capability_major is None:
-        device_capability_major = torch.cuda.get_device_capability()[0]
-    if device_capability_major != SM90_FP8_MMA_ARCH_MAJOR:
-        return False
-    if not causal and window_size == (None, None):
-        raise NotImplementedError(
-            "SM90 FP8 MMA noncausal full attention has known accuracy errors."
-        )
+    if not causal:
+        left, right = window_size if window_size is not None else (None, None)
+        left = -1 if left is None else left
+        right = -1 if right is None else right
+        if left < 0 and right < 0:
+            return False
     return True
 
 
-def normalize_kv_descale(
-    descale: Optional["torch.Tensor"],
-    *,
-    batch: int,
-    heads: int,
-) -> Optional["torch.Tensor"]:
-    """Normalize a K/V descale tensor to the (batch, heads) f32 layout.
-
-    Accepts scalars, (heads,), (batch, heads) and (batch, heads, 1, 1)
-    layouts so callers can pass either FA3-style or FA4-style descales.
-    """
+def normalize_kv_descale(descale, *, batch: int, heads: int):
+    """Normalize a K/V descale to a contiguous f32 (batch, heads) tensor."""
     if descale is None:
         return None
-    try:
-        import torch
-    except ImportError:  # pragma: no cover - CPU-only policy import
-        return None
+    import torch
 
-    t = torch.as_tensor(descale, dtype=torch.float32)
-    if t.ndim == 0:
-        return t.expand(batch, heads).contiguous()
-    if t.ndim == 1:
-        if t.shape[0] != heads:
-            raise ValueError(f"expected {heads} heads, got {t.shape[0]}")
-        return t.unsqueeze(0).expand(batch, heads).contiguous()
-    if t.ndim == 2:
-        if tuple(t.shape) != (batch, heads):
-            raise ValueError(f"expected {(batch, heads)}, got {tuple(t.shape)}")
-        return t.contiguous()
-    if t.ndim == 4:
-        if t.shape[0] != batch or t.shape[1] != heads:
+    if isinstance(descale, (int, float)):
+        return torch.full((batch, heads), float(descale), dtype=torch.float32)
+    if not isinstance(descale, torch.Tensor):
+        raise ValueError(f"unsupported descale type: {type(descale)!r}")
+    if descale.ndim == 1:
+        if descale.numel() != heads:
             raise ValueError(
-                f"expected {(batch, heads, 1, 1)}, got {tuple(t.shape)}"
+                f"1-D descale must have {heads} elements, got {descale.numel()}"
             )
-        if t.shape[2] != 1 or t.shape[3] != 1:
-            raise ValueError(f"expected trailing (1, 1), got {tuple(t.shape[2:])}")
-        return t.reshape(batch, heads).contiguous()
-    raise ValueError(f"unsupported descale layout: {tuple(t.shape)}")
+        out = descale.reshape(1, heads).expand(batch, heads)
+    elif descale.ndim == 2:
+        if tuple(descale.shape) != (batch, heads):
+            raise ValueError(
+                f"2-D descale must be {(batch, heads)}, got {tuple(descale.shape)}"
+            )
+        out = descale
+    elif descale.ndim == 4 and tuple(descale.shape[-2:]) == (1, 1):
+        if tuple(descale.shape[:2]) != (batch, heads):
+            raise ValueError(
+                f"4-D descale must be {(batch, heads, 1, 1)}, "
+                f"got {tuple(descale.shape)}"
+            )
+        out = descale.reshape(batch, heads)
+    else:
+        raise ValueError(f"unsupported descale shape: {tuple(descale.shape)}")
+    return out.to(dtype=torch.float32).contiguous()
 
 
 def select_num_splits(
@@ -107,25 +91,17 @@ def select_num_splits(
     num_kv_heads: int,
     num_sms: int,
     is_fp8_mma: bool,
-    cap: int = FA3_SPLIT_CAP,
 ) -> int:
-    """Mirror the FA4 full-attention split auto-selection policy.
-
-    FA4 full-attention layers (including the SM90 d512 FP8-MMA path) are
-    allowed to pick splits automatically without the CUDA-graph cap of 32;
-    FA3 keeps the cap. Returns 0 for "auto" when the caller should let the
-    kernel decide, otherwise a concrete split count.
-    """
+    """Pick a SplitKV count; FA3 keeps its cap, FA4 FP8-MMA auto-selects."""
     if fa_version == 3:
-        return cap
+        return FA3_MAX_SPLITS
     if not is_fp8_mma:
         return 0
-    if max_seqlen_k <= 0 or num_sms <= 0:
+    if max_seqlen_k <= 0 or num_sms <= 0 or num_heads <= 0:
         return 1
-    if num_heads <= 0:
+    num_tiles = (max_seqlen_k + SPLIT_TILE_N - 1) // SPLIT_TILE_N
+    if num_tiles <= 1:
         return 1
-    qhead_per_kvhead = max(1, num_heads // max(1, num_kv_heads))
-    # One CTA per (kv head, split); aim for at least two KV tiles per split.
-    tiles = max(1, max_seqlen_k // SPLIT_KV_TILE_N)
-    target = max(1, num_sms // max(1, num_kv_heads * qhead_per_kvhead))
-    return max(1, min(target, tiles))
+    qhead_ratio = max(1, num_heads // max(1, num_kv_heads))
+    wanted = max(1, num_sms // max(1, qhead_ratio))
+    return max(1, min(SM90_FP8_MMA_MAX_SPLITS, num_tiles, wanted))
