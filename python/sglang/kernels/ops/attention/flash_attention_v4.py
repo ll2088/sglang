@@ -123,6 +123,27 @@ def _maybe_contiguous(x: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
     return x.contiguous() if x is not None and x.stride(-1) != 1 else x
 
 
+def _is_sm90_fp8_kv_mma(q, k, v, causal: bool, window_size) -> bool:
+    """Return whether the SM90 d512 FP8-MMA path applies to this call.
+
+    The kernel accepts native FP16/BF16 Q with paged E4M3 K/V and folds the
+    K/V descales in-kernel. It is only valid for equal head dims of 512 on
+    SM90 and rejects noncausal full attention, which has known accuracy
+    issues.
+    """
+    if k.dtype != torch.float8_e4m3fn:
+        return False
+    if not (q.shape[-1] == k.shape[-1] == v.shape[-1] == 512):
+        return False
+    if torch.cuda.get_device_capability()[0] != 9:
+        return False
+    if not causal and window_size == (None, None):
+        raise NotImplementedError(
+            "SM90 FP8 MMA noncausal full attention has known accuracy errors."
+        )
+    return True
+
+
 def _pad_mla_q_heads(q, qv, v, pack_gqa):
     if qv is None or pack_gqa is False:
         return q, qv, None
@@ -249,6 +270,17 @@ def flash_attn_varlen_func(
 
     if window_size == (-1, -1):
         window_size = (None, None)
+
+    # SM90 d512 accepts native FP16/BF16 Q and paged E4M3 K/V. Other FA4
+    # FP8 paths (notably SM100) require Q, K, and V to share an FP8 dtype.
+    if k.dtype == torch.float8_e4m3fn and not _is_sm90_fp8_kv_mma(
+        q, k, v, causal, window_size
+    ):
+        raise NotImplementedError(
+            "FA4 on SM90 supports FP8 K/V only with q/k/v head_size=512, got "
+            f"q={q.dtype}/{q.shape[-1]}, k={k.dtype}/{k.shape[-1]}, "
+            f"v={v.dtype}/{v.shape[-1]} (dtype/head_size); use fa_version=3."
+        )
 
     # sf* = MXFP8 UE8M0 block scale factors (per-32-element), for the
     # block-scaled QK^T / V-dequant path. *_descale = the legacy per-tensor
