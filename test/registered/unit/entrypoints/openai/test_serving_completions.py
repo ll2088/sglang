@@ -18,9 +18,12 @@ These tests only touch the protocol models and the pure helpers in
 ``serving_completions`` so they run without a tokenizer or engine.
 """
 
+import importlib.util
 import json
 import statistics
+import sys
 import time
+import types
 
 import pytest
 
@@ -30,13 +33,38 @@ import pytest
 # helpers directly and fails loudly (not skip) when they are unavailable.
 
 
-def _install_minimal_stubs() -> None:
-    """Install lightweight stubs for heavy runtime modules.
+_REPO_ROOT = __import__("pathlib").Path(__file__).resolve().parents[5]
+_OPENAI_DIR = _REPO_ROOT / "python" / "sglang" / "srt" / "entrypoints" / "openai"
 
-    Kept for backwards compatibility with older callers; the current test
-    module imports the protocol models directly and only falls back to the
-    source loader when the runtime package is importable.
+
+def _load_module_from_path(name: str, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {name} from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_template_helpers():
+    """Load the protocol models and pure helpers without the full runtime.
+
+    The serving module imports the full sglang runtime at module scope, so we
+    load the protocol module by path and then load the serving module with
+    lightweight stubs for the heavy runtime imports. Any failure is reported
+    with ``pytest.fail`` so collection stays non-zero and loud.
     """
+    try:
+        protocol = _load_module_from_path(
+            "sglang_protocol_under_test", _OPENAI_DIR / "protocol.py"
+        )
+    except Exception as exc:  # pragma: no cover - minimal CI without runtime
+        pytest.fail(
+            f"sglang protocol models unavailable: {exc}",
+            pytrace=False,
+        )
+
     stubs = {
         "sglang.srt.entrypoints.openai.serving_base": {
             "OpenAIServingBase": type("OpenAIServingBase", (), {}),
@@ -69,62 +97,32 @@ def _install_minimal_stubs() -> None:
             "build_endpoint_weight_version_metadata": (lambda *a, **k: None),
         },
         "sglang.utils": {"convert_json_schema_to_str": (lambda *a, **k: None)},
-        "fastapi": {
-            "Request": type("Request", (), {}),
-        },
+        "fastapi": {"Request": type("Request", (), {})},
         "fastapi.responses": {
             "ORJSONResponse": type("ORJSONResponse", (), {}),
             "StreamingResponse": type("StreamingResponse", (), {}),
         },
     }
     for name, attrs in stubs.items():
-        # Always (re)install the stub: a partially imported real module must
-        # not leak into the source-loaded serving module.
         mod = types.ModuleType(name)
         for attr, value in attrs.items():
             setattr(mod, attr, value)
         sys.modules[name] = mod
 
-    # 顶层包也必须是 stub，否则 `import sglang.srt...` 会触发真实
-    # __init__（torch、quack-kernels 等），在最小 CI 环境中直接失败。
     for pkg_name in (
         "sglang",
         "sglang.srt",
         "sglang.srt.entrypoints",
         "sglang.srt.entrypoints.openai",
     ):
-        # Always install a stub package: a partially imported real module must
-        # not leak into the source-loaded serving module.
         pkg = types.ModuleType(pkg_name)
         pkg.__path__ = []
         sys.modules[pkg_name] = pkg
 
-
-def _load_template_helpers():
-    """Import the pure helpers without pulling in the full runtime.
-
-    The helpers under test only need the protocol models and ``json``. The
-    serving module imports the full sglang runtime at module scope, so we
-    import the protocol models directly and only load the serving module
-    when the runtime package is importable. When neither is available the
-    module is skipped so collection stays non-zero in minimal CI.
-    """
     try:
-        from sglang.srt.entrypoints.openai.protocol import (
-            CompletionRequest,
-            CompletionResponseStreamChoice,
-            CompletionStreamResponse,
-        )
-    except Exception as exc:  # pragma: no cover - minimal CI without runtime
-        pytest.fail(
-            f"sglang protocol models unavailable: {exc}",
-            pytrace=False,
-        )
-
-    try:
-        from sglang.srt.entrypoints.openai.serving_completions import (
-            _can_use_delta_template,
-            _delta_frame_template,
+        serving = _load_module_from_path(
+            "sglang_serving_completions_under_test",
+            _OPENAI_DIR / "serving_completions.py",
         )
     except Exception as exc:  # pragma: no cover - minimal CI without runtime
         pytest.fail(
@@ -133,11 +131,11 @@ def _load_template_helpers():
         )
 
     return (
-        CompletionRequest,
-        CompletionResponseStreamChoice,
-        CompletionStreamResponse,
-        _can_use_delta_template,
-        _delta_frame_template,
+        protocol.CompletionRequest,
+        protocol.CompletionResponseStreamChoice,
+        protocol.CompletionStreamResponse,
+        serving._can_use_delta_template,
+        serving._delta_frame_template,
     )
 
 
@@ -491,33 +489,3 @@ def test_usage_and_logprobs_frames_keep_model_fields():
     assert payload["usage"]["completion_tokens"] == 2
 
 
-def test_usage_and_logprobs_frames_keep_model_fields_legacy():
-    """Non-plain frames must keep usage/logprobs fields intact."""
-    # UsageProcessor is stubbed in minimal CI; build a plain dict with the
-    # same shape the model serializer would emit.
-    usage = {
-        "prompt_tokens": 3,
-        "completion_tokens": 2,
-        "total_tokens": 5,
-    }
-    chunk = CompletionStreamResponse(
-        id=REQUEST_ID,
-        created=CREATED,
-        object="text_completion",
-        choices=[
-            CompletionResponseStreamChoice(
-                index=0,
-                text="x",
-                logprobs=None,
-                finish_reason=None,
-                matched_stop=None,
-                token_ids=None,
-                prompt_token_ids=None,
-            )
-        ],
-        model=MODEL,
-        usage=usage,
-    )
-    payload = json.loads(chunk.model_dump_json())
-    assert payload["usage"]["prompt_tokens"] == 3
-    assert payload["usage"]["completion_tokens"] == 2
