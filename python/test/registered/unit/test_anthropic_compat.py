@@ -43,6 +43,8 @@ def test_anthropic_constraint_is_declared():
 
 
 def test_anthropic_installed_version_if_present():
+    # The SDK is optional; when it is installed, it must satisfy the declared
+    # lower bound. Skip (not fail) when absent so the suite runs in a bare env.
     try:
         version = importlib.metadata.version("anthropic")
     except importlib.metadata.PackageNotFoundError:
