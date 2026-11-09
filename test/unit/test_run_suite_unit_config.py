@@ -61,8 +61,8 @@ def test_unit_launcher_documents_minimal_install():
     launcher = os.path.join(UNIT_DIR, "run_unit_tests.py")
     with open(launcher, encoding="utf-8") as f:
         text = f.read()
+    assert "test/unit/setup_env.sh" in text
     assert "test/unit/requirements.txt" in text
-    assert "pip install pytest" in text
 
 
 def test_conftest_installs_stubs_before_collection():

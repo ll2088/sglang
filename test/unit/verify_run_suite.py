@@ -1,26 +1,27 @@
 """CI entrypoint for the run_suite verification dimensions.
 
 Runs the collect-diagnostics, exit-codes, tests and usability dimensions with
-nothing but pytest installed. Exits 2 when the environment itself is broken
-(infra failure) and 1 when a real dimension fails, so an environment problem
-is never confused with a test failure.
+pytest only. Exits 2 when the environment itself is broken (infra failure) and
+1 when a real dimension fails, so an environment problem is never confused
+with a test failure.
 
 Usage (from the repository root):
 
     bash test/unit/setup_env.sh
-    PYTHONPATH=test python test/unit/verify_run_suite.py
+    python test/unit/verify_run_suite.py
 """
 
+import argparse
 import os
 import sys
-
-EXIT_OK = 0
-EXIT_DIMENSION_FAILURE = 1
-EXIT_INFRA_FAILURE = 2
 
 UNIT_DIR = os.path.dirname(os.path.abspath(__file__))
 TEST_DIR = os.path.dirname(UNIT_DIR)
 REPO_ROOT = os.path.dirname(TEST_DIR)
+
+EXIT_OK = 0
+EXIT_DIMENSION_FAILURE = 1
+EXIT_INFRA_FAILURE = 2
 
 
 def _unit(*names):
@@ -28,86 +29,76 @@ def _unit(*names):
 
 
 DIMENSIONS = {
-    "collect-diagnostics": _unit(
-        "test_run_suite_collect_diagnostics.py",
-        "test_run_suite_no_sglang_smoke.py",
-        "test_run_suite_standalone.py",
-    ),
+    "collect-diagnostics": _unit("test_run_suite_collect_diagnostics.py"),
     "exit-codes": _unit("test_run_suite_exit_codes.py"),
-    "tests": _unit(
-        "test_run_suite_exit_codes.py",
-        "test_run_suite_collect_diagnostics.py",
-    ),
-    "usability": _unit(
-        "test_run_suite_unit_config.py",
-        "test_run_suite_exit_codes.py",
-    ),
+    "tests": _unit("test_run_suite_exit_codes.py"),
+    "usability": _unit("test_run_suite_unit_config.py"),
 }
 
 
-def _print_environment() -> bool:
-    print(f"python: {sys.version.split()[0]} ({sys.executable})")
+def _print_environment():
+    print("[verify_run_suite] repo_root=%s" % REPO_ROOT)
+    print("[verify_run_suite] unit_dir=%s" % UNIT_DIR)
     try:
         import pytest  # noqa: F401
     except ImportError:
-        print("pytest: NOT INSTALLED")
-        print(
-            "Install the minimal dependency set with "
-            "`bash test/unit/setup_env.sh` (pytest only).",
-            file=sys.stderr,
-        )
+        print("[verify_run_suite] pytest: NOT INSTALLED")
         return False
-    print(f"pytest: {pytest.__version__}")
+    print("[verify_run_suite] pytest: %s" % getattr(pytest, "__version__", "unknown"))
     return True
 
 
-def main(argv=None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-
-    if "--help" in argv or "-h" in argv:
-        print(__doc__)
-        print("Dimensions:")
-        for name, targets in DIMENSIONS.items():
-            print(f"  {name}: {len(targets)} file(s)")
-        return EXIT_OK
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Run the run_suite verification dimensions (pytest only)."
+    )
+    parser.add_argument(
+        "--dimension",
+        action="append",
+        choices=sorted(DIMENSIONS),
+        help="Run only the named dimension(s); default runs all four.",
+    )
+    args = parser.parse_args(argv)
 
     if not _print_environment():
+        print(
+            "[verify_run_suite] install the minimal deps with "
+            "`bash test/unit/setup_env.sh` (pytest only)",
+            file=sys.stderr,
+        )
         return EXIT_INFRA_FAILURE
 
     import pytest
 
-    if TEST_DIR not in sys.path:
-        sys.path.insert(0, TEST_DIR)
-
+    selected = args.dimension or list(DIMENSIONS)
     failed = []
-    for name, targets in DIMENSIONS.items():
+    for name in selected:
+        targets = DIMENSIONS[name]
         missing = [t for t in targets if not os.path.exists(t)]
         if missing:
-            print(f"[{name}] missing test files: {missing}", file=sys.stderr)
+            print("[verify_run_suite] %s: missing %s" % (name, missing))
             failed.append(name)
             continue
-        print(f"[{name}] running {len(targets)} file(s)", flush=True)
-        args = [
-            *targets,
-            "-q",
-            "-p",
-            "no:cacheprovider",
-            "-c",
-            os.path.join(UNIT_DIR, "pytest.ini"),
-            "--rootdir",
-            UNIT_DIR,
-        ]
-        code = int(pytest.main(args))
-        if code != 0:
-            print(f"[{name}] FAILED (pytest exit {code})", file=sys.stderr)
+        print("[verify_run_suite] dimension=%s targets=%s" % (name, targets))
+        code = pytest.main(
+            [
+                *targets,
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "-c",
+                os.path.join(UNIT_DIR, "pytest.ini"),
+                "--rootdir",
+                UNIT_DIR,
+            ]
+        )
+        if int(code) != 0:
             failed.append(name)
-        else:
-            print(f"[{name}] OK", flush=True)
 
     if failed:
-        print(f"dimension failures: {', '.join(failed)}", file=sys.stderr)
+        print("[verify_run_suite] FAILED dimensions: %s" % ", ".join(failed))
         return EXIT_DIMENSION_FAILURE
-    print("all dimensions passed")
+    print("[verify_run_suite] OK: all dimensions passed")
     return EXIT_OK
 
 

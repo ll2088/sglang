@@ -86,6 +86,13 @@ bash test/unit/setup_env.sh
 python test/unit/verify_run_suite.py
 ```
 
+`test/unit/setup_env.sh` is the only supported environment-preparation entry
+for these checks. It installs `test/unit/requirements.txt` (pytest only),
+prints the resolved script path so CI logs prove it was hit, and self-checks
+`import pytest` / `pytest --version`. CI must call this script instead of
+`pip install -e python`; the latter resolves the full sglang dependency set
+(torch, kernels, ...) and can fail before any test runs.
+
 `test/unit/setup_env.sh` installs only `test/unit/requirements.txt` (pytest)
 and self-checks `import pytest` / `pytest --version`, so an environment
 problem is reported as an environment failure instead of being mistaken for a
