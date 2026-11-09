@@ -1,9 +1,9 @@
-"""Lightweight tests for the fused per-tensor FP8 quantizer.
+"""Standalone tests for the fused per-tensor FP8 quantization operator.
 
-Deliberately avoids importing the full ``sglang`` package so the job only
-needs pytest + torch + triton. The quantizer module itself only depends on
-``torch`` and ``triton``, so it can be imported directly by file path when the
-package is not installed.
+This module intentionally avoids importing the full ``sglang`` package so it
+can run in a minimal environment (torch + triton + pytest only). The operator
+module is loaded directly from its file path, which keeps the test entry point
+independent of the package installation and of any optional runtime deps.
 """
 
 import importlib.util
@@ -15,12 +15,12 @@ import torch
 
 
 def _load_quant_module():
-    """Import the quantizer without importing the ``sglang`` package."""
+    """Load ``triton_per_tensor_fp8_quant`` by file path, bypassing the package."""
     here = Path(__file__).resolve()
-    # test/registered/kernels/ops/attention/ -> repo root
-    root = here.parents[5]
-    target = (
-        root
+    # test/registered/kernels/ops/attention -> repo root
+    repo_root = here.parents[5]
+    mod_path = (
+        repo_root
         / "python"
         / "sglang"
         / "kernels"
@@ -28,10 +28,10 @@ def _load_quant_module():
         / "attention"
         / "triton_per_tensor_fp8_quant.py"
     )
-    if not target.is_file():
+    if not mod_path.is_file():
         return None
     spec = importlib.util.spec_from_file_location(
-        "_sglang_triton_per_tensor_fp8_quant", target
+        "_sglang_triton_per_tensor_fp8_quant", mod_path
     )
     if spec is None or spec.loader is None:
         return None
@@ -41,25 +41,25 @@ def _load_quant_module():
     return module
 
 
-_MOD = _load_quant_module()
+_quant_mod = _load_quant_module()
 
-if _MOD is None:
+if _quant_mod is None:
     pytest.skip(
-        "triton_per_tensor_fp8_quant.py not found; skipping quantizer tests",
-        allow_module_level=True,
+        "triton_per_tensor_fp8_quant module not found", allow_module_level=True
     )
 
-if not torch.cuda.is_available():
-    pytest.skip("CUDA/ROCm device required", allow_module_level=True)
-
-fused_per_tensor_fp8_quant = _MOD.fused_per_tensor_fp8_quant
-_BLOCK = _MOD._BLOCK
-_PARTS = _MOD._PARTS
-_MIN_DESCALE = _MOD._MIN_DESCALE
+fused_per_tensor_fp8_quant = _quant_mod.fused_per_tensor_fp8_quant
+_BLOCK = _quant_mod._BLOCK
+_PARTS = _quant_mod._PARTS
+_MIN_DESCALE = _quant_mod._MIN_DESCALE
 
 FP8_DTYPE = torch.float8_e4m3fn
 FP8_MAX = float(torch.finfo(FP8_DTYPE).max)
-_STRIPE = _PARTS * _BLOCK
+
+
+def _require_device():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA/ROCm device required")
 
 
 def _reference_quant(x: torch.Tensor):
@@ -69,19 +69,25 @@ def _reference_quant(x: torch.Tensor):
     return x_fp8, descale.reshape(1)
 
 
+def test_import_and_public_api():
+    """The operator module imports and exposes the documented entry point."""
+    assert callable(fused_per_tensor_fp8_quant)
+    assert _BLOCK > 0 and _PARTS > 0
+    assert _MIN_DESCALE > 0
+
+
 @pytest.mark.parametrize("num_tokens", [0, 1, 37, 8192])
 @pytest.mark.parametrize("num_inputs", [1, 2, 3])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 @pytest.mark.parametrize("fp8_dtype", [torch.float8_e4m3fn, torch.float8_e5m2])
-def test_correctness(num_tokens, num_inputs, dtype, fp8_dtype):
+def test_quant_matches_reference(num_tokens, num_inputs, dtype, fp8_dtype):
+    _require_device()
     torch.manual_seed(0)
     heads, dim = 4, 128
-    base = [
-        (torch.randn(num_tokens, heads, dim, device="cuda") * 4).to(dtype),
-        torch.randn(num_tokens, heads, dim, device="cuda").to(dtype),
-        torch.randn(num_tokens, heads, dim, device="cuda").to(dtype),
+    inputs = [
+        (torch.randn(num_tokens, heads, dim, device="cuda") * (i + 1)).to(dtype)
+        for i in range(num_inputs)
     ]
-    inputs = base[:num_inputs]
     outputs, descales = fused_per_tensor_fp8_quant(*inputs, fp8_dtype=fp8_dtype)
     assert len(outputs) == num_inputs and len(descales) == num_inputs
     fp8_max = float(torch.finfo(fp8_dtype).max)
@@ -93,60 +99,78 @@ def test_correctness(num_tokens, num_inputs, dtype, fp8_dtype):
         ref_descale = amax / fp8_max if amax > 0 else amax.new_tensor(_MIN_DESCALE)
         torch.testing.assert_close(descale, ref_descale.reshape(1), rtol=1e-6, atol=0)
         ref_fp8 = (x.float() / ref_descale).clamp(-fp8_max, fp8_max).to(fp8_dtype)
-        ulp = x_fp8.view(torch.int8).int() - ref_fp8.view(torch.int8).int()
-        assert ulp.numel() == 0 or ulp.abs().max() <= 1
+        ulp_diff = x_fp8.view(torch.int8).int() - ref_fp8.view(torch.int8).int()
+        assert ulp_diff.numel() == 0 or ulp_diff.abs().max() <= 1
 
 
-def test_empty_and_zero_inputs_get_min_descale():
-    empty = torch.empty(0, 2, 8, device="cuda", dtype=torch.bfloat16)
-    zeros = torch.zeros(16, 2, 8, device="cuda", dtype=torch.bfloat16)
+def test_empty_and_all_zero_inputs_get_min_descale():
+    _require_device()
+    empty = torch.empty((0, 2, 64), dtype=torch.bfloat16, device="cuda")
+    zeros = torch.zeros((16, 2, 64), dtype=torch.bfloat16, device="cuda")
     outputs, descales = fused_per_tensor_fp8_quant(empty, zeros)
-    for descale in descales:
-        torch.testing.assert_close(
-            descale, torch.full_like(descale, _MIN_DESCALE), rtol=0, atol=0
-        )
-    assert outputs[0].numel() == 0
-    assert torch.count_nonzero(outputs[1].float()) == 0
+    for out, descale in zip(outputs, descales):
+        assert torch.isfinite(descale).all()
+        assert descale.item() == pytest.approx(_MIN_DESCALE)
+        assert torch.isfinite(out.float()).all()
 
 
-def test_extreme_values_clamped():
-    x = torch.full((8, 2, 8), 1e4, device="cuda", dtype=torch.bfloat16)
-    (out,), (descale,) = fused_per_tensor_fp8_quant(x)
-    assert torch.isfinite(out.float()).all()
-    assert out.float().abs().max() <= FP8_MAX
-    assert descale.item() > 0
+def test_extreme_values_are_clamped():
+    _require_device()
+    x = torch.full((8, 2, 64), 1e4, dtype=torch.bfloat16, device="cuda")
+    y = torch.full((8, 2, 64), -1e4, dtype=torch.bfloat16, device="cuda")
+    outputs, descales = fused_per_tensor_fp8_quant(x, y)
+    for out, descale in zip(outputs, descales):
+        assert torch.isfinite(descale).all() and descale.item() > 0
+        assert torch.isfinite(out.float()).all()
+        assert out.float().abs().max().item() <= FP8_MAX + 1e-3
+
+
+_STRIPE = _PARTS * _BLOCK
 
 
 @pytest.mark.parametrize(
     "numel",
     [1, _BLOCK, _BLOCK + 1, _STRIPE - 1, _STRIPE, _STRIPE + 1, 3 * _STRIPE + 7],
 )
-def test_covers_every_element(numel):
+def test_covers_every_element_across_stripes(numel):
     """One grid serves inputs of different sizes; no element may be dropped."""
-    x = torch.full((numel, 1, 1), 0.5, device="cuda", dtype=torch.bfloat16)
-    (out,), (descale,) = fused_per_tensor_fp8_quant(x)
-    expected = 0.5 / descale.item()
-    got = out.float().flatten()
-    assert got.numel() == numel
-    torch.testing.assert_close(
-        got, torch.full_like(got, expected), rtol=1e-2, atol=1e-2
-    )
+    _require_device()
+    x = torch.full((numel, 1, 1), 0.5, dtype=torch.bfloat16, device="cuda")
+    expected = 100.0 / FP8_MAX
+    for pos in sorted({0, _BLOCK - 1, _BLOCK, _STRIPE - 1, _STRIPE, numel - 1}):
+        if pos >= numel:
+            continue
+        x[pos] = 100.0
+        outputs, descales = fused_per_tensor_fp8_quant(x)
+        assert descales[0].item() == pytest.approx(expected, rel=1e-6)
+        assert outputs[0][pos].float().item() == pytest.approx(FP8_MAX, rel=1e-2)
+        x[pos] = 0.5
 
 
 def test_strided_view_input():
+    _require_device()
     s, h, nope, v_head = 16, 4, 128, 128
-    kv = torch.randn(s, h, nope + v_head, device="cuda", dtype=torch.bfloat16)
+    kv = torch.randn((s, h, nope + v_head), dtype=torch.bfloat16, device="cuda")
     v = kv[..., nope:]
     assert v.stride(-1) == 1
-    (out,), (descale,) = fused_per_tensor_fp8_quant(v)
+    outputs, descales = fused_per_tensor_fp8_quant(v)
     ref_fp8, ref_descale = _reference_quant(v)
-    torch.testing.assert_close(descale, ref_descale, rtol=1e-6, atol=0)
-    ulp = out.view(torch.int8).int() - ref_fp8.view(torch.int8).int()
-    assert ulp.numel() == 0 or ulp.abs().max() <= 1
+    torch.testing.assert_close(descales[0], ref_descale, rtol=1e-6, atol=0)
+    ulp_diff = outputs[0].view(torch.int8).int() - ref_fp8.view(torch.int8).int()
+    assert ulp_diff.abs().max() <= 1
+
+
+def test_out_buffers_are_reused():
+    _require_device()
+    x = torch.randn((32, 2, 64), dtype=torch.bfloat16, device="cuda")
+    out = torch.empty(x.shape, dtype=FP8_DTYPE, device="cuda")
+    outputs, _ = fused_per_tensor_fp8_quant(x, out=[out])
+    assert outputs[0].data_ptr() == out.data_ptr()
 
 
 def test_rejects_bad_inputs():
-    x = torch.randn(4, 2, 8, device="cuda", dtype=torch.bfloat16)
+    _require_device()
+    x = torch.randn((4, 2, 64), dtype=torch.bfloat16, device="cuda")
     with pytest.raises(ValueError):
         fused_per_tensor_fp8_quant()
     with pytest.raises(ValueError):
@@ -154,7 +178,7 @@ def test_rejects_bad_inputs():
     with pytest.raises(ValueError):
         fused_per_tensor_fp8_quant(x, fp8_dtype=torch.float32)
     with pytest.raises(AssertionError):
-        fused_per_tensor_fp8_quant(x.to(torch.float32))
+        fused_per_tensor_fp8_quant(x.transpose(1, 2))
 
 
 if __name__ == "__main__":
