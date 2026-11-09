@@ -62,7 +62,9 @@ def test_cuda_python_version_and_sgl_kernel_import():
     # guard the import explicitly instead of relying on importorskip.
     try:
         import sgl_kernel  # noqa: F401
-    except Exception as exc:  # pragma: no cover - environment dependent
+    except BaseException as exc:  # pragma: no cover - environment dependent
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
         pytest.skip(f"sgl_kernel is not importable in this environment: {exc}")
 
 
@@ -70,7 +72,9 @@ def test_load_utils_version_probe():
     _require_cuda_python_13_5()
     try:
         load_utils = importlib.import_module("sgl_kernel.load_utils")
-    except Exception as exc:  # pragma: no cover - environment dependent
+    except BaseException as exc:  # pragma: no cover - environment dependent
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
         pytest.skip(f"sgl_kernel.load_utils is not importable: {exc}")
 
     cuda_home = load_utils._find_cuda_home()
@@ -85,7 +89,9 @@ def test_check_env_reports_cuda_version(monkeypatch):
     _require_cuda_python_13_5()
     try:
         check_env = importlib.import_module("sglang.check_env")
-    except Exception as exc:  # pragma: no cover - environment dependent
+    except BaseException as exc:  # pragma: no cover - environment dependent
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
         pytest.skip(f"sglang.check_env is not importable: {exc}")
 
     monkeypatch.setattr(check_env, "is_cuda_v2", lambda: False)
