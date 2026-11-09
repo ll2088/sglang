@@ -12,47 +12,62 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # in the full sglang runtime, which is not available in the lightweight unit
 # test environment. Stub the two symbols run_suite needs so the exit-code and
 # collection-diagnostic branches can be exercised without the runtime deps.
-if "sglang.test.ci.ci_register" not in sys.modules:
+def _install_ci_stubs():
+    """Install lightweight sglang.test.ci stubs when the real runtime is absent.
+
+    run_suite imports sglang.test.ci.* at module import time; those modules pull
+    in the full sglang runtime. When it is not installed (lightweight CI), we
+    inject stubs into sys.modules so run_suite can still be imported and its
+    exit-code / collection-diagnostic branches exercised.
+    """
+    if "sglang.test.ci.ci_register" in sys.modules:
+        return
     try:
         import sglang.test.ci.ci_register  # noqa: F401
+        return
     except Exception:  # noqa: BLE001 - fall back to lightweight stubs
-        import enum
+        pass
 
-        class HWBackend(enum.Enum):
-            CPU = "cpu"
-            CUDA = "cuda"
-            AMD = "amd"
-            MUSA = "musa"
-            NPU = "npu"
-            XPU = "xpu"
-            MLX = "mlx"
-            MPS = "mps"
-            PPU = "ppu"
+    import enum
 
-        class CIRegistry:  # pragma: no cover - structural stub
-            pass
+    class HWBackend(enum.Enum):
+        CPU = "cpu"
+        CUDA = "cuda"
+        AMD = "amd"
+        MUSA = "musa"
+        NPU = "npu"
+        XPU = "xpu"
+        MLX = "mlx"
+        MPS = "mps"
+        PPU = "ppu"
 
-        def collect_tests(files, sanity_check=True):  # pragma: no cover
-            raise RuntimeError("collect_tests stub not patched")
+    class CIRegistry:  # pragma: no cover - structural stub
+        pass
 
-        def auto_partition(tests, part_id, part_size, live_est=None):
-            return tests
+    def collect_tests(files, sanity_check=True):  # pragma: no cover
+        raise RuntimeError("collect_tests stub not patched")
 
-        ci_register = types.ModuleType("sglang.test.ci.ci_register")
-        ci_register.CIRegistry = CIRegistry
-        ci_register.HWBackend = HWBackend
-        ci_register.auto_partition = auto_partition
-        ci_register.collect_tests = collect_tests
-        ci_utils = types.ModuleType("sglang.test.ci.ci_utils")
-        ci_utils.run_unittest_files = lambda *a, **k: 0
-        sglang_mod = types.ModuleType("sglang")
-        sglang_test_mod = types.ModuleType("sglang.test")
-        sglang_ci_mod = types.ModuleType("sglang.test.ci")
-        sys.modules.setdefault("sglang", sglang_mod)
-        sys.modules.setdefault("sglang.test", sglang_test_mod)
-        sys.modules.setdefault("sglang.test.ci", sglang_ci_mod)
-        sys.modules["sglang.test.ci.ci_register"] = ci_register
-        sys.modules["sglang.test.ci.ci_utils"] = ci_utils
+    def auto_partition(tests, part_id, part_size, live_est=None):
+        return tests
+
+    ci_register = types.ModuleType("sglang.test.ci.ci_register")
+    ci_register.CIRegistry = CIRegistry
+    ci_register.HWBackend = HWBackend
+    ci_register.auto_partition = auto_partition
+    ci_register.collect_tests = collect_tests
+    ci_utils = types.ModuleType("sglang.test.ci.ci_utils")
+    ci_utils.run_unittest_files = lambda *a, **k: 0
+    sglang_mod = types.ModuleType("sglang")
+    sglang_test_mod = types.ModuleType("sglang.test")
+    sglang_ci_mod = types.ModuleType("sglang.test.ci")
+    sys.modules.setdefault("sglang", sglang_mod)
+    sys.modules.setdefault("sglang.test", sglang_test_mod)
+    sys.modules.setdefault("sglang.test.ci", sglang_ci_mod)
+    sys.modules["sglang.test.ci.ci_register"] = ci_register
+    sys.modules["sglang.test.ci.ci_utils"] = ci_utils
+
+
+_install_ci_stubs()
 
 import run_suite  # noqa: E402
 
@@ -152,7 +167,9 @@ def test_exit_codes_are_pairwise_distinct():
 
 
 def test_pytest_ini_is_loadable():
-    ini_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pytest.ini")
+    ini_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pytest.ini"
+    )
     assert os.path.exists(ini_path)
     parser = configparser.ConfigParser()
     parser.read(ini_path)
@@ -162,3 +179,13 @@ def test_pytest_ini_is_loadable():
     # test/ rootdir and discover the registered/ tree from it.
     assert parser.get("pytest", "testpaths").strip() == "registered unit"
     assert parser.get("pytest", "rootdir").strip() == "."
+
+
+def test_readme_documents_exit_codes():
+    readme_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "README.md"
+    )
+    with open(readme_path, encoding="utf-8") as f:
+        text = f.read()
+    for keyword in ("Collection failure", "Test execution failure", "No tests matched"):
+        assert keyword in text, f"README missing exit-code keyword: {keyword}"
