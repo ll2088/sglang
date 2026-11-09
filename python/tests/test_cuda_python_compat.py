@@ -28,6 +28,16 @@ def _require_cuda_python_13_5():
     return version
 
 
+def _require_sglang_importable():
+    """Skip when the sglang package itself cannot be imported (e.g. CPU-only CI)."""
+    try:
+        importlib.import_module("sglang")
+    except BaseException as exc:  # pragma: no cover - environment dependent
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        pytest.skip(f"sglang is not importable in this environment: {exc}")
+
+
 def _import_or_skip(module_name):
     """Import a module, skipping the test if the environment cannot provide it."""
     try:
@@ -96,6 +106,7 @@ def test_load_utils_version_probe():
 
 def test_check_env_reports_cuda_version(monkeypatch):
     version = _require_cuda_python_13_5()
+    _require_sglang_importable()
     check_env = _import_or_skip("sglang.check_env")
 
     monkeypatch.setattr(check_env, "is_cuda_v2", lambda: False)
@@ -128,3 +139,5 @@ def test_check_env_reports_cuda_version(monkeypatch):
     assert result.returncode == 0, result.stderr
     assert "Python" in result.stdout
     assert "cuda-python" in result.stdout
+    # The probe must report the installed cuda-python version, not a placeholder.
+    assert version in result.stdout
