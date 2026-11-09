@@ -144,6 +144,32 @@ except Exception:  # pragma: no cover - policy module is optional at import time
         return 0
 
 
+def _resolve_num_splits(num_splits, q, k, v, causal, window_size, fa_version=4):
+    """Resolve auto split count for the SM90 FP8-MMA path; pass through otherwise."""
+    if num_splits != 0:
+        return num_splits
+    try:
+        is_fp8_mma = _is_sm90_fp8_kv_mma(q, k, v, causal, window_size)
+    except NotImplementedError:
+        raise
+    if not is_fp8_mma:
+        return num_splits
+    try:
+        import torch
+
+        num_sms = torch.cuda.get_device_properties(q.device).multi_processor_count
+    except Exception:
+        num_sms = 0
+    return _select_num_splits(
+        fa_version=fa_version,
+        max_seqlen_k=int(k.shape[-2]) if k.ndim >= 2 else 0,
+        num_heads=int(q.shape[-2]) if q.ndim >= 2 else 0,
+        num_kv_heads=int(k.shape[-2]) if k.ndim >= 2 else 0,
+        num_sms=num_sms,
+        is_fp8_mma=True,
+    )
+
+
 # Normalize K/V descales once at the FA4 boundary so the kernel always sees a
 # contiguous f32 (batch, heads) layout regardless of caller layout.
 def _normalized_descales(k_descale, v_descale, k, v):
@@ -296,6 +322,8 @@ def flash_attn_varlen_func(
             f"q={q.dtype}/{q.shape[-1]}, k={k.dtype}/{k.shape[-1]}, "
             f"v={v.dtype}/{v.shape[-1]} (dtype/head_size); use fa_version=3."
         )
+
+    num_splits = _resolve_num_splits(num_splits, q, k, v, causal, window_size)
 
     # sf* = MXFP8 UE8M0 block scale factors (per-32-element), for the
     # block-scaled QK^T / V-dequant path. *_descale = the legacy per-tensor
