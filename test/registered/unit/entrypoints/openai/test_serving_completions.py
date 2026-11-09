@@ -81,8 +81,8 @@ def _install_minimal_stubs() -> None:
         },
     }
     for name, attrs in stubs.items():
-        if name in sys.modules:
-            continue
+        # Always (re)install the stub: a partially imported real module must
+        # not leak into the source-loaded serving module.
         mod = types.ModuleType(name)
         for attr, value in attrs.items():
             setattr(mod, attr, value)
@@ -114,8 +114,8 @@ def _load_template_helpers():
     )
 
     def _ensure_pkg(name: str, path: Path) -> None:
-        if name in sys.modules:
-            return
+        # Force a stub package so the real sglang __init__ (torch, quack
+        # kernels, ...) is never imported during collection.
         mod = types.ModuleType(name)
         mod.__path__ = [str(path)]
         sys.modules[name] = mod
@@ -147,6 +147,10 @@ def _load_template_helpers():
     )
     assert serving._delta_frame_template is not None
     assert serving._can_use_delta_template is not None
+    # The helpers must come from the source file, not a pip-installed copy.
+    assert Path(serving.__file__).resolve() == serving_path.resolve(), (
+        f"serving module loaded from unexpected path: {serving.__file__}"
+    )
     # Stubs must be in effect: the real runtime modules must not be imported.
     for name in (
         "sglang.srt.entrypoints.openai.serving_base",
@@ -463,16 +467,43 @@ def test_required_tests_are_collected():
         "test_finish_reason_frame_uses_model_path",
         "test_microbench_template_not_slower_than_model",
         "test_serialization_field_order_and_escapes",
+        "test_usage_and_logprobs_frames_keep_model_fields",
     }
     present = {name for name in globals() if name.startswith("test_")}
     missing = required - present
     assert not missing, f"missing required tests: {sorted(missing)}"
+    # Every required test must be a real function, not a skipped placeholder.
+    for name in required:
+        fn = globals()[name]
+        assert callable(fn), f"required test is not callable: {name}"
+        assert not getattr(fn, "__unittest_skip__", False), (
+            f"required test is skipped: {name}"
+        )
 
 
 def test_collection_is_nonzero():
     """Guard against 0-collection being mistaken for a pass."""
     collected = [name for name in globals() if name.startswith("test_")]
-    assert len(collected) >= 10, f"too few tests collected: {len(collected)}"
+    assert len(collected) >= 12, f"too few tests collected: {len(collected)}"
+
+
+def test_stubs_are_in_effect():
+    """The source-loaded serving module must run on stubs, not the runtime."""
+    for name in (
+        "sglang.srt.entrypoints.openai.serving_base",
+        "sglang.srt.entrypoints.openai.usage_processor",
+        "sglang.srt.entrypoints.openai.utils",
+        "sglang.srt.managers.io_struct",
+        "sglang.srt.parser.code_completion_parser",
+        "sglang.srt.runtime_context",
+        "sglang.srt.utils.weight_versions",
+        "sglang.utils",
+    ):
+        mod = sys.modules.get(name)
+        assert mod is not None, f"stub not installed: {name}"
+        assert getattr(mod, "__file__", None) is None, (
+            f"real module imported instead of stub: {name}"
+        )
 
 
 def test_usage_and_logprobs_frames_keep_model_fields():
