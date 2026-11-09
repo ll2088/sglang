@@ -7,7 +7,8 @@ name = "sglang"
 dynamic = ["version"]
 description = "SGLang is a fast serving framework for large language models and vision language models."
 readme = "README.md"
-requires-python = ">=3.10"
+# compressed-tensors 0.20 (pulled in by runtime_common) requires Python >= 3.11.
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 classifiers = [
   "Programming Language :: Python :: 3",
