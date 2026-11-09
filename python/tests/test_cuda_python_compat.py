@@ -13,21 +13,13 @@ def _cuda_python_version():
         return None
 
 
-_CUDA_PYTHON_VERSION = _cuda_python_version()
-
-pytestmark = pytest.mark.skipif(
-    _CUDA_PYTHON_VERSION is None,
-    reason="cuda-python is not installed in this environment",
-)
-
-
 def _require_cuda_python_13_5():
-    if _CUDA_PYTHON_VERSION is None:
+    version = _cuda_python_version()
+    if version is None:
         pytest.skip("cuda-python is not installed in this environment")
-    if _parse_version(_CUDA_PYTHON_VERSION) < (13, 5, 0):
-        pytest.skip(
-            f"cuda-python {_CUDA_PYTHON_VERSION} is older than the required 13.5.0"
-        )
+    if _parse_version(version) < (13, 5, 0):
+        pytest.skip(f"cuda-python {version} is older than the required 13.5.0")
+    return version
 
 
 def _import_or_skip(module_name):
@@ -64,8 +56,7 @@ def _parse_version(version):
 
 
 def test_cuda_python_version_and_bindings_import():
-    _require_cuda_python_13_5()
-    version = _CUDA_PYTHON_VERSION
+    version = _require_cuda_python_13_5()
     assert _parse_version(version) >= (13, 5, 0), version
     # The bindings package must expose the modules this repo relies on.
     import cuda.bindings  # noqa: F401
@@ -101,7 +92,7 @@ def test_load_utils_version_probe():
 
 
 def test_check_env_reports_cuda_version(monkeypatch):
-    _require_cuda_python_13_5()
+    version = _require_cuda_python_13_5()
     check_env = _import_or_skip("sglang.check_env")
 
     monkeypatch.setattr(check_env, "is_cuda_v2", lambda: False)
@@ -120,7 +111,7 @@ def test_check_env_reports_cuda_version(monkeypatch):
     assert isinstance(versions, dict)
     # cuda-python is part of check_env.PACKAGE_LIST; verify the probe reports
     # the installed version through importlib.metadata.
-    assert versions.get("cuda-python") == _CUDA_PYTHON_VERSION
+    assert versions.get("cuda-python") == version
 
     result = subprocess.run(
         [sys.executable, "-m", "sglang.check_env"],
