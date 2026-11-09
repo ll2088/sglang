@@ -144,8 +144,8 @@ def test_anthropic_sdk_importable_if_present():
         pytest.skip("anthropic is not installed in this environment")
     assert hasattr(anthropic, "Anthropic")
     assert hasattr(anthropic, "AsyncAnthropic")
-    # 2.x moved the client construction to keyword-only args; a positional
-    # api_key call must still be accepted by the public constructor.
+    # Constructing a client must not require network access or credentials
+    # beyond the explicit api_key; this pins the 2.x keyword-only signature.
     client = anthropic.Anthropic(api_key="test-key")
     assert client is not None
 
@@ -255,11 +255,11 @@ def test_anthropic_sdk_public_surface():
     assert hasattr(anthropic, "APIStatusError")
     assert hasattr(anthropic, "APIError")
     # 2.5+ exposes error_code/details/api_message on APIStatusError; pin the
-    # attributes so a downgrade or rename is caught.
+    # attributes so a downgrade or rename is caught. These are instance
+    # attributes in 2.x, so check the class annotations rather than hasattr.
+    annotations = getattr(anthropic.APIStatusError, "__annotations__", {})
     for attr in ("error_code", "details", "api_message"):
-        assert hasattr(anthropic.APIStatusError, attr) or attr in getattr(
-            anthropic.APIStatusError, "__annotations__", {}
-        ), attr
+        assert attr in annotations, attr
 
 
 def test_repo_has_no_anthropic_sdk_imports():
@@ -277,6 +277,17 @@ def test_repo_has_no_anthropic_sdk_imports():
         if re.search(r"^\s*(import anthropic|from anthropic)", text, re.MULTILINE):
             offenders.append(str(path.relative_to(root)))
     assert not offenders, offenders
+
+
+def test_anthropic_absent_degrades_gracefully():
+    # When the optional SDK is not installed, importing it must raise
+    # ImportError (not some other error), so callers can guard with a plain
+    # try/except ImportError. This pins the optional-dependency contract.
+    try:
+        importlib.import_module("anthropic")
+    except ImportError:
+        return
+    pytest.skip("anthropic is installed; absence path not exercised")
 
 
 def test_check_env_reports_anthropic_without_specifier():
