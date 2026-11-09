@@ -39,6 +39,14 @@ def test_anthropic_installed_version_if_present():
     assert parts >= (2, 6, 0), version
 
 
+def test_anthropic_sdk_importable_if_present():
+    # The SDK is optional; when installed, its public client entry point must
+    # still be importable under the new major version.
+    anthropic = pytest.importorskip("anthropic")
+    assert hasattr(anthropic, "Anthropic")
+    assert hasattr(anthropic, "AsyncAnthropic")
+
+
 def test_declared_constraint_allows_2_6():
     # The constraint is managed by the dependency bump; assert it admits 2.6.0
     # without rewriting pyproject.toml here.
@@ -54,6 +62,10 @@ def test_check_env_reports_anthropic():
     versions = check_env.BaseEnv().get_package_versions()
     assert "anthropic" in versions
     assert isinstance(versions["anthropic"], str)
+    # Either a real version string or the explicit not-found marker.
+    assert versions["anthropic"] == "Module Not Found" or re.match(
+        r"\d+\.\d+", versions["anthropic"]
+    ), versions["anthropic"]
 
 
 @pytest.mark.parametrize(
