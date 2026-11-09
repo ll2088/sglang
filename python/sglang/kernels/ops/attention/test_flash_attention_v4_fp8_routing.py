@@ -8,6 +8,9 @@ import torch
 
 from sglang.kernels.ops.attention import flash_attention_v4 as fa4
 
+_normalize_descale = fa4._normalize_kv_descale
+_select_num_splits = fa4._select_num_splits
+
 
 class _FakeCuda:
     def __init__(self, major: int):
@@ -23,60 +26,6 @@ def _tensor(dtype, head_dim=512, heads=8):
 
 def _call(q, k, v, *, causal=True, window_size=(None, None)):
     return fa4._is_sm90_fp8_kv_mma(q, k, v, causal, window_size)
-
-
-def _normalize_descale(descale, *, batch, heads, device="cpu"):
-    """Normalize a K/V descale tensor to the (batch, heads) f32 layout.
-
-    Accepts scalars, (heads,), (batch, heads) and (batch, heads, 1, 1)
-    layouts so callers can pass either FA3-style or FA4-style descales.
-    """
-    if descale is None:
-        return None
-    t = torch.as_tensor(descale, dtype=torch.float32, device=device)
-    if t.ndim == 0:
-        return t.expand(batch, heads).contiguous()
-    if t.ndim == 1:
-        assert t.shape[0] == heads, f"expected {heads} heads, got {t.shape[0]}"
-        return t.unsqueeze(0).expand(batch, heads).contiguous()
-    if t.ndim == 2:
-        assert t.shape == (batch, heads), f"expected {(batch, heads)}, got {tuple(t.shape)}"
-        return t.contiguous()
-    if t.ndim == 4:
-        assert t.shape[0] == batch and t.shape[1] == heads
-        assert t.shape[2] == 1 and t.shape[3] == 1
-        return t.reshape(batch, heads).contiguous()
-    raise ValueError(f"unsupported descale layout: {tuple(t.shape)}")
-
-
-def _select_num_splits(
-    *,
-    fa_version: int,
-    max_seqlen_k: int,
-    num_heads: int,
-    num_kv_heads: int,
-    num_sms: int,
-    is_fp8_mma: bool,
-    cap: int = 32,
-) -> int:
-    """Mirror the FA4 full-attention split auto-selection policy.
-
-    FA4 full-attention layers (including the SM90 d512 FP8-MMA path) are
-    allowed to pick splits automatically without the CUDA-graph cap of 32;
-    FA3 keeps the cap. Returns 0 for "auto" when the caller should let the
-    kernel decide, otherwise a concrete split count.
-    """
-    if fa_version == 3:
-        return cap
-    if not is_fp8_mma:
-        return 0
-    if max_seqlen_k <= 0 or num_sms <= 0:
-        return 1
-    qhead_per_kvhead = max(1, num_heads // max(1, num_kv_heads))
-    # One CTA per (kv head, split); aim for at least two KV tiles per split.
-    tiles = max(1, max_seqlen_k // 128)
-    target = max(1, num_sms // max(1, num_kv_heads * qhead_per_kvhead))
-    return max(1, min(target, tiles))
 
 
 @pytest.mark.parametrize("major", [9])
