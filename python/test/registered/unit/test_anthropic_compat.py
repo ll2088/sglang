@@ -19,6 +19,11 @@ import pytest
 # set (torch, quack-kernels, py-spy, ...). Do not add imports of sglang or the
 # anthropic SDK at module scope; use importlib inside tests instead.
 
+# This module intentionally depends only on the standard library and pytest so
+# it can run in a minimal CI job without installing sglang's full dependency
+# set (torch, quack-kernels, py-spy, ...). Do not add imports of sglang or the
+# anthropic SDK at module scope; use importlib inside tests instead.
+
 
 def _specifier_contains(constraint: str, version: str) -> bool:
     """Minimal PEP 440 lower-bound check without importing packaging.
