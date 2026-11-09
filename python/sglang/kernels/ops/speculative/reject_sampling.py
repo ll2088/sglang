@@ -1,8 +1,28 @@
 import triton
 import triton.language as tl
 
+# A serving iteration rebuilds the sampler tensors from fresh views, so the
+# row/column strides change even though the algorithm does not. Keep every
+# stride out of the Triton specialization key: otherwise each new layout
+# compiles and loads another kernel variant on the sampling path. NUM_SLOTS and
+# VOCAB_SIZE stay constexpr, giving one variant per draft length and vocabulary.
+_CHAIN_STRIDE_ARGS = [
+    'stride_cand_b',
+    'stride_cand_s',
+    'stride_idx_b',
+    'stride_idx_s',
+    'stride_uni_b',
+    'stride_uni_s',
+    'stride_tp_b',
+    'stride_tp_s',
+    'stride_tp_v',
+    'stride_dp_b',
+    'stride_dp_s',
+    'stride_dp_v',
+]
 
-@triton.jit
+
+@triton.jit(do_not_specialize=_CHAIN_STRIDE_ARGS)
 def speculative_sampling_classic_kernel(
     # Pointers
     Predicts,

@@ -217,5 +217,106 @@ def test_target_only_sampling_cdf_boundaries(
     assert accept_token_num.item() == expected_accept_token_num
 
 
+def test_chain_speculative_sampling_one_variant_for_all_strides():
+    '''Serving rebuilds the candidate and probability views every step; strides must not add variants.'''
+    import triton
+
+    from sglang.kernels.ops.speculative.reject_sampling import (
+        chain_speculative_sampling_triton,
+        speculative_sampling_classic_kernel,
+    )
+
+    caches = getattr(speculative_sampling_classic_kernel, 'device_caches', None)
+    if caches is None:
+        pytest.skip('this Triton has no JITFunction.device_caches')
+
+    device = 'cuda'
+    num_slots, vocab = 5, 64
+
+    def rows_view(x, pad, fill):
+        backing = torch.full(
+            (x.shape[0], num_slots + pad), fill, device=device, dtype=x.dtype
+        )
+        backing[:, :num_slots] = x
+        return backing[:, :num_slots]
+
+    def vocab_view(x, stride_v):
+        backing = torch.zeros(
+            (x.shape[0], num_slots, vocab * stride_v), device=device, dtype=x.dtype
+        )
+        backing[:, :, ::stride_v] = x
+        return backing[:, :, ::stride_v]
+
+    def run(bs, row_pad=0, stride_v=1):
+        g = torch.Generator(device=device).manual_seed(1234)
+        cand = torch.randint(
+            0, vocab, (bs, num_slots), device=device, dtype=torch.int64, generator=g
+        )
+        idx = torch.arange(bs * num_slots, device=device, dtype=torch.int64).view(
+            bs, num_slots
+        )
+        uni = torch.rand(
+            (bs, num_slots), device=device, dtype=torch.float32, generator=g
+        )
+        uni_final = torch.rand((bs,), device=device, dtype=torch.float32, generator=g)
+        target = torch.softmax(
+            torch.randn((bs, num_slots, vocab), device=device, generator=g), dim=-1
+        )
+        draft = torch.softmax(
+            torch.randn((bs, num_slots, vocab), device=device, generator=g), dim=-1
+        )
+        if row_pad:
+            cand = rows_view(cand, row_pad, 0)
+            idx = rows_view(idx, row_pad, 0)
+            uni = rows_view(uni, row_pad, 0.0)
+        if stride_v != 1:
+            target = vocab_view(target, stride_v)
+            draft = vocab_view(draft, stride_v)
+
+        predicts = torch.full((bs * num_slots,), -1, dtype=torch.int32, device=device)
+        accept_index = torch.full((bs, num_slots), -1, dtype=torch.int32, device=device)
+        accept_num = torch.zeros((bs,), dtype=torch.int32, device=device)
+        chain_speculative_sampling_triton(
+            predicts,
+            accept_index,
+            accept_num,
+            cand,
+            idx,
+            None,
+            None,
+            uni,
+            uni_final,
+            target,
+            draft,
+            1.0,
+            1.0,
+            True,
+        )
+        return predicts, accept_index, accept_num
+
+    ref = run(4)
+    triton_device = triton.runtime.driver.active.get_current_device()
+    cache_entry = caches.get(triton_device)
+    if cache_entry is None:
+        pytest.skip('no JIT device cache for the active device')
+    try:
+        variants = len(cache_entry[0])
+    except (IndexError, TypeError):
+        pytest.skip('unsupported JITFunction.device_caches layout')
+
+    for bs, row_pad, stride_v in [
+        (4, 3, 1),
+        (4, 0, 2),
+        (1, 2, 1),
+        (7, 5, 2),
+        (4, 0, 1),
+    ]:
+        out = run(bs, row_pad, stride_v)
+        if bs == 4:
+            for got, expected in zip(out, ref):
+                assert torch.equal(got, expected)
+    assert len(cache_entry[0]) == variants
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
