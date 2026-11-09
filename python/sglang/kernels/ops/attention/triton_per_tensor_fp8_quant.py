@@ -207,13 +207,15 @@ def fused_per_tensor_fp8_quant(
         inputs = inputs + (inputs[0],)
         shapes = shapes + [shapes[0]]
 
+    num_inputs = len(inputs)
     if out is None:
         outs: List[torch.Tensor] = [
-            torch.empty(x.shape, dtype=fp8_dtype, device=x.device) for x in inputs[: len(shapes)]
+            torch.empty(x.shape, dtype=fp8_dtype, device=x.device)
+            for x in inputs[:num_inputs]
         ]
     else:
         outs = []
-        for i, x in enumerate(inputs):
+        for i, x in enumerate(inputs[:num_inputs]):
             o = out[i] if i < len(out) else None
             if o is None:
                 o = torch.empty(x.shape, dtype=fp8_dtype, device=x.device)
@@ -254,5 +256,4 @@ def fused_per_tensor_fp8_quant(
         num_warps=8,
     )
 
-    n = len(out) if out is not None else len(inputs)
-    return outs[:n], scales[:n]
+    return outs[:num_inputs], scales[:num_inputs]
