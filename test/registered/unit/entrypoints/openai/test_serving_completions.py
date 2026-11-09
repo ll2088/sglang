@@ -24,6 +24,11 @@ import time
 
 import pytest
 
+# This module must be collectable with only pydantic + pytest installed.
+# It never imports the `sglang` package top level (whose __init__ pulls in
+# the full runtime); instead it loads protocol.py and serving_completions.py
+# from source via importlib with lightweight package stubs.
+
 
 def _install_minimal_stubs() -> None:
     """No-op kept for readability: the helpers are loaded from source below,
@@ -77,6 +82,12 @@ def _load_template_helpers():
     protocol = _load("sglang.srt.entrypoints.openai.protocol", protocol_path)
     serving = _load(
         "sglang.srt.entrypoints.openai.serving_completions", serving_path
+    )
+    # Guard against accidentally importing the real package top level, which
+    # would drag in the full runtime dependency chain during collection.
+    assert "sglang" in sys.modules
+    assert getattr(sys.modules["sglang"], "__file__", None) is None, (
+        "sglang package top level must not be imported by these tests"
     )
     return (
         protocol.CompletionRequest,
@@ -321,11 +332,19 @@ def test_microbench_template_not_slower_than_model():
         return model_frame(REQUEST_ID, MODEL, 0, f"tok{i}")
 
     assert render_template(0) == render_model(0)
-    template_us = _median_render_us(render_template)
-    model_us = _median_render_us(render_model)
+    # Three independent runs, each taking the median of its rounds; report the
+    # median of the run medians so the CI log carries a stable number.
+    template_runs = [_median_render_us(render_template) for _ in range(3)]
+    model_runs = [_median_render_us(render_model) for _ in range(3)]
+    template_us = statistics.median(template_runs)
+    model_us = statistics.median(model_runs)
     print(
-        f"template={template_us:.3f}us model={model_us:.3f}us "
-        f"speedup={model_us / template_us:.2f}x"
+        "microbench template_us=%s model_us=%s speedup=%.2fx"
+        % (
+            [round(v, 3) for v in template_runs],
+            [round(v, 3) for v in model_runs],
+            model_us / template_us,
+        )
     )
     assert template_us <= model_us * 1.10
 
@@ -348,3 +367,21 @@ def test_serialization_field_order_and_escapes():
             "token_ids",
             "prompt_token_ids",
         ]
+
+
+def test_required_tests_are_collected():
+    """Fail loudly if the required test names disappear or get skipped."""
+    required = {
+        "test_template_frame_matches_model_frame",
+        "test_first_middle_last_frames_are_byte_identical",
+        "test_plain_requests_use_template",
+        "test_non_plain_requests_fall_back",
+        "test_fallback_frame_keeps_all_fields",
+        "test_multi_choice_frames_match_model",
+        "test_finish_reason_frame_uses_model_path",
+        "test_microbench_template_not_slower_than_model",
+        "test_serialization_field_order_and_escapes",
+    }
+    present = {name for name in globals() if name.startswith("test_")}
+    missing = required - present
+    assert not missing, f"missing required tests: {sorted(missing)}"

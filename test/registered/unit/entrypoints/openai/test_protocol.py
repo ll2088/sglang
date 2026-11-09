@@ -52,9 +52,12 @@ from sglang.srt.entrypoints.openai.protocol import (
     ToolCall,
     UsageInfo,
 )
-from sglang.test.ci.ci_register import register_cpu_ci
+try:
+    from sglang.test.ci.ci_register import register_cpu_ci
 
-register_cpu_ci(est_time=7, suite="base-a-test-cpu")
+    register_cpu_ci(est_time=7, suite="base-a-test-cpu")
+except ImportError:  # pragma: no cover - CI registry is optional locally
+    pass
 
 
 class TestCompletionRequest(unittest.TestCase):
