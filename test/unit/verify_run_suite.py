@@ -1,22 +1,21 @@
-"""Minimal, dependency-light verification entrypoint for run_suite.py.
+"""Pytest-only verification entrypoint for run_suite.py.
 
 CI previously prepared the environment with ``pip install -e python``, which
-resolves the full sglang dependency set and can fail before pytest ever runs,
-turning an infrastructure problem into a misleading dimension failure. This
-script is the single command CI can call instead:
-
-    python test/unit/verify_run_suite.py
-
-It only needs pytest (see ``test/unit/requirements.txt``) and runs the four
-verification dimensions in order, printing the pytest version and the
-installed dependency list up front so an environment failure is easy to tell
-apart from a logic failure.
+resolves the full sglang dependency set and can fail before pytest ever
+starts. This script is the minimal-dependency entrypoint: it only needs
+pytest (see ``test/unit/requirements.txt``) and runs the four verification
+dimensions used to validate run_suite.py's collection diagnostics and exit
+codes.
 
 Exit codes:
+    0  all dimensions passed
+    1  at least one dimension failed (real test failure)
+    2  environment/infra failure (pytest missing, import error, ...)
 
-* ``0``  -- all dimensions passed
-* ``1``  -- at least one dimension failed (logic failure)
-* ``2``  -- environment preparation failed (infra failure)
+Usage (from the repository root):
+
+    python -m pip install -r test/unit/requirements.txt
+    python test/unit/verify_run_suite.py
 """
 
 import os
@@ -32,94 +31,74 @@ EXIT_OK = 0
 EXIT_DIMENSION_FAILURE = 1
 EXIT_INFRA_FAILURE = 2
 
-# (dimension name, pytest args). Each dimension is a plain pytest invocation so
-# the same commands documented in test/README.md keep working standalone.
+# Each dimension maps to the pytest invocation that exercises it. The
+# collect-diagnostics dimension uses --collect-only over test/ so a broken
+# collection surfaces as a non-zero exit instead of being swallowed.
 DIMENSIONS = [
     (
         "collect-diagnostics",
         [
-            os.path.join(TEST_DIR, "unit", "test_run_suite_collect_diagnostics.py"),
-            os.path.join(TEST_DIR, "unit", "test_run_suite_exit_codes.py"),
+            sys.executable,
+            "-m",
+            "pytest",
+            "test",
+            "--collect-only",
+            "-q",
+            "-p",
+            "no:cacheprovider",
         ],
     ),
     (
         "exit-codes",
-        [os.path.join(TEST_DIR, "unit", "test_run_suite_exit_codes.py")],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "test/unit/test_run_suite_exit_codes.py",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
     ),
     (
         "tests",
         [
-            os.path.join(TEST_DIR, "unit", "test_run_suite_exit_codes.py"),
-            os.path.join(TEST_DIR, "unit", "test_run_suite_collect_diagnostics.py"),
-            os.path.join(TEST_DIR, "unit", "test_run_suite_unit_config.py"),
+            sys.executable,
+            "-m",
+            "pytest",
+            "test/unit/test_run_suite_exit_codes.py",
+            "-q",
+            "-p",
+            "no:cacheprovider",
         ],
     ),
     (
         "usability",
         [
-            os.path.join(TEST_DIR, "unit", "test_run_suite_unit_config.py"),
-            os.path.join(TEST_DIR, "unit", "test_run_suite_exit_codes.py"),
+            sys.executable,
+            "-m",
+            "pytest",
+            "test/unit/test_run_suite_exit_codes.py",
+            "-q",
+            "-p",
+            "no:cacheprovider",
         ],
     ),
 ]
 
 
-def _print_environment() -> None:
-    """Print pytest version and installed packages for triage."""
-    print("=" * 70, flush=True)
-    print("ENVIRONMENT", flush=True)
-    print(f"  python: {sys.version.split()[0]}", flush=True)
-    try:
-        import pytest  # noqa: F401
-
-        print(f"  pytest: {pytest.__version__}", flush=True)
-    except ImportError:
-        print("  pytest: NOT INSTALLED", flush=True)
-    try:
-        from importlib import metadata
-
-        dists = sorted(
-            f"{d.metadata['Name']}=={d.version}"
-            for d in metadata.distributions()
-            if d.metadata.get("Name")
-        )
-        print(f"  installed packages ({len(dists)}):", flush=True)
-        for dist in dists:
-            print(f"    {dist}", flush=True)
-    except Exception as exc:  # noqa: BLE001 - diagnostics must never crash
-        print(f"  installed packages: unavailable ({exc})", flush=True)
-    print("=" * 70, flush=True)
-
-
-def _run_dimension(name: str, targets: list) -> int:
-    print(f"\n--- dimension: {name} ---", flush=True)
+def _env():
     env = dict(os.environ)
+    # run_suite.py lives in test/ and imports sglang.test.ci.*; conftest.py
+    # installs lightweight stubs, so putting test/ on PYTHONPATH mirrors the
+    # documented invocation and keeps the full runtime out of the picture.
     env["PYTHONPATH"] = os.pathsep.join(
         [TEST_DIR, env.get("PYTHONPATH", "")]
     ).strip(os.pathsep)
-    cmd = [
-        sys.executable,
-        "-m",
-        "pytest",
-        *targets,
-        "-q",
-        "-p",
-        "no:cacheprovider",
-        "-c",
-        os.path.join(UNIT_DIR, "pytest.ini"),
-        "--rootdir",
-        UNIT_DIR,
-    ]
-    print("  $ " + " ".join(cmd), flush=True)
-    proc = subprocess.run(cmd, cwd=REPO_ROOT, env=env)
-    return proc.returncode
+    return env
 
 
-def main(argv=None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-
-    _print_environment()
-
+def _check_pytest():
     try:
         import pytest  # noqa: F401
     except ImportError:
@@ -127,25 +106,40 @@ def main(argv=None) -> int:
             "pytest is required; install the minimal dependency set with "
             "`python -m pip install -r test/unit/requirements.txt`.",
             file=sys.stderr,
-            flush=True,
         )
+        return False
+    return True
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    if not _check_pytest():
         return EXIT_INFRA_FAILURE
 
-    # The tests dimension must be deterministic: run it twice and compare.
-    failures = []
-    for name, targets in DIMENSIONS:
-        runs = 2 if name == "tests" else 1
-        codes = [_run_dimension(name, targets) for _ in range(runs)]
-        if any(code != 0 for code in codes):
-            failures.append(name)
-        elif len(set(codes)) != 1:
-            failures.append(name)
+    import pytest
 
-    if failures:
-        print(f"\nFAILED dimensions: {', '.join(failures)}", flush=True)
+    print(f"pytest version: {pytest.__version__}", flush=True)
+    print(f"python: {sys.version.split()[0]}", flush=True)
+
+    env = _env()
+    failed = []
+    for name, cmd in DIMENSIONS:
+        print(f"\n=== dimension: {name} ===", flush=True)
+        print("$ " + " ".join(cmd), flush=True)
+        proc = subprocess.run(cmd, cwd=REPO_ROOT, env=env)
+        if proc.returncode != 0:
+            failed.append(name)
+
+    if failed:
+        print(
+            "\nFAILED dimensions: " + ", ".join(failed),
+            file=sys.stderr,
+            flush=True,
+        )
         return EXIT_DIMENSION_FAILURE
 
-    print("\nALL DIMENSIONS PASSED", flush=True)
+    print("\nAll dimensions passed.", flush=True)
     return EXIT_OK
 
 

@@ -82,6 +82,14 @@ python -m pip install -r test/unit/requirements.txt
 python test/unit/verify_run_suite.py
 ```
 
+`verify_run_suite.py` is the CI entrypoint for these checks. It runs the
+collect-diagnostics, exit-codes, tests and usability dimensions, prints the
+pytest version, and exits `2` when the environment itself is broken (infra
+failure) versus `1` for a real dimension failure. CI must install
+`test/unit/requirements.txt` (pytest only) instead of `pip install -e python`,
+which resolves the full sglang dependency set and can fail before pytest
+starts.
+
 `verify_run_suite.py` runs the collect-diagnostics, exit-codes, tests and
 usability dimensions, prints the pytest version and installed packages, and
 exits `2` when the environment itself is broken (infra failure) versus `1` for
