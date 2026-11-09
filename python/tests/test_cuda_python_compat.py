@@ -1,3 +1,4 @@
+import importlib
 import importlib.metadata
 import subprocess
 import sys
