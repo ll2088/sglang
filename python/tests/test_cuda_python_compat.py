@@ -20,6 +20,15 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _require_cuda_python_13_5():
+    if _CUDA_PYTHON_VERSION is None:
+        pytest.skip("cuda-python is not installed in this environment")
+    if _parse_version(_CUDA_PYTHON_VERSION) < (13, 5, 0):
+        pytest.skip(
+            f"cuda-python {_CUDA_PYTHON_VERSION} is older than the required 13.5.0"
+        )
+
+
 def _parse_version(version):
     parts = []
     for piece in version.split("."):
@@ -36,12 +45,14 @@ def _parse_version(version):
 
 
 def test_cuda_python_version_and_sgl_kernel_import():
+    _require_cuda_python_13_5()
     version = _CUDA_PYTHON_VERSION
     assert _parse_version(version) >= (13, 5, 0), version
     pytest.importorskip("sgl_kernel")
 
 
 def test_load_utils_version_probe():
+    _require_cuda_python_13_5()
     load_utils = pytest.importorskip("sgl_kernel.load_utils")
 
     cuda_home = load_utils._find_cuda_home()
@@ -53,6 +64,7 @@ def test_load_utils_version_probe():
 
 
 def test_check_env_reports_cuda_version(monkeypatch):
+    _require_cuda_python_13_5()
     check_env = pytest.importorskip("sglang.check_env")
 
     monkeypatch.setattr(check_env, "is_cuda_v2", lambda: False)
