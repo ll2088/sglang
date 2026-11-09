@@ -1,0 +1,13 @@
+# Minimal dependency set for the run_suite unit tests.
+#
+# These tests only exercise run_suite.py's exit-code and collection-diagnostic
+# branches; conftest.py stubs out sglang.test.ci.* so the full sglang runtime
+# (torch, kernels, ...) is not needed. CI verification jobs should install this
+# file instead of `pip install -e python`, which resolves the full dependency
+# set and can fail during environment preparation.
+#
+# Usage (from the repository root):
+#
+#     python -m pip install -r test/unit/requirements.txt
+#     PYTHONPATH=test python -m pytest test/unit -q -p no:cacheprovider
+pytest

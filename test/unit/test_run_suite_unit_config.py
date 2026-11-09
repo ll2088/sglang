@@ -38,6 +38,33 @@ def test_unit_launcher_exists_and_is_importable():
     assert "pytest.main" in text
 
 
+def test_unit_requirements_is_pytest_only():
+    """The unit tests must be installable without the full sglang runtime.
+
+    CI environment preparation previously ran `pip install -e python`, which
+    resolves the full sglang dependency set and can fail before any test runs.
+    The pytest-only requirements file is the documented minimal entry point.
+    """
+    req_path = os.path.join(UNIT_DIR, "requirements.txt")
+    assert os.path.exists(req_path)
+    with open(req_path, encoding="utf-8") as f:
+        lines = [
+            line.strip()
+            for line in f
+            if line.strip() and not line.strip().startswith("#")
+        ]
+    assert lines == ["pytest"], lines
+
+
+def test_unit_launcher_documents_minimal_install():
+    """The launcher's missing-pytest diagnostic must name the minimal install."""
+    launcher = os.path.join(UNIT_DIR, "run_unit_tests.py")
+    with open(launcher, encoding="utf-8") as f:
+        text = f.read()
+    assert "test/unit/requirements.txt" in text
+    assert "pip install pytest" in text
+
+
 def test_conftest_installs_stubs_before_collection():
     """conftest.py must install the sglang.test.ci stubs at import time."""
     conftest_path = os.path.join(UNIT_DIR, "conftest.py")

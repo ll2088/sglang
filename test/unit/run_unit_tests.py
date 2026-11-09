@@ -35,9 +35,15 @@ def main(argv=None):
     try:
         import pytest
     except ImportError:  # pragma: no cover - environment guard
+        # Keep the diagnostic actionable: name the exact minimal install so a
+        # CI environment-preparation failure is distinguishable from a code
+        # failure, and point at the pytest-only requirements file rather than
+        # the full sglang dependency set.
         print(
             "pytest is required to run the run_suite unit tests; "
-            "install it with `pip install pytest`.",
+            "install the minimal dependency set with "
+            "`python -m pip install -r test/unit/requirements.txt` "
+            "(or `pip install pytest`).",
             file=sys.stderr,
         )
         return 2
