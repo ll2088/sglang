@@ -21,8 +21,13 @@ def _install_ci_stubs():
     run_suite references, so we always inject stubs into sys.modules. This
     keeps the unit test runnable in a lightweight CI environment where the
     full sglang dependency set is not installed.
+
+    Idempotent: if a real (non-stub) ci_register module is already imported we
+    leave it alone; if only a stub is present we re-install it so the test is
+    robust to import order across the unit test session.
     """
-    if "sglang.test.ci.ci_register" in sys.modules:
+    existing = sys.modules.get("sglang.test.ci.ci_register")
+    if existing is not None and getattr(existing, "_run_suite_stub", False) is False:
         return
 
     import enum
