@@ -18,11 +18,13 @@ These tests only touch the protocol models and the pure helpers in
 ``serving_completions`` so they run without a tokenizer or engine.
 """
 
+import importlib.util
 import json
 import statistics
 import sys
 import time
 import types
+from pathlib import Path
 
 import pytest
 
@@ -109,20 +111,13 @@ def _install_minimal_stubs() -> None:
 
 
 def _load_template_helpers():
-    """Import the pure helpers, stubbing heavy runtime deps if needed.
+    """Import the pure helpers from source with lightweight stubs.
 
     The helpers under test only need the protocol models and ``json``; the
-    serving module pulls in the full sglang runtime. When that import fails
-    (e.g. minimal CI env), load the module source with a stub package so the
-    tests still execute instead of being skipped.
+    serving module pulls in the full sglang runtime. Loading from source with
+    stubs keeps these tests runnable with only pydantic + pytest installed,
+    independent of whether ``pip install -e python`` succeeded in CI setup.
     """
-    import importlib.util
-    from pathlib import Path
-
-    # Always load from source with stubs: importing the real package pulls in
-    # the full sglang runtime (quack-kernels, torch, ...), which is exactly the
-    # dependency chain that fails during `pip install -e python` in CI. The
-    # helpers under test only need the protocol models and `json`.
     _install_minimal_stubs()
 
     repo_root = Path(__file__).resolve().parents[5]
@@ -144,10 +139,6 @@ def _load_template_helpers():
         mod = types.ModuleType(name)
         mod.__path__ = [str(path)]
         sys.modules[name] = mod
-
-    # Install the heavy-module stubs before loading protocol/serving so that
-    # serving_completions.py's module-scope imports resolve to stubs.
-    _install_minimal_stubs()
 
     for name, path in (
         ("sglang", pkg_root),
