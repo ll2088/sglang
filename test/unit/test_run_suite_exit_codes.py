@@ -13,20 +13,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # test environment. Stub the two symbols run_suite needs so the exit-code and
 # collection-diagnostic branches can be exercised without the runtime deps.
 def _install_ci_stubs():
-    """Install lightweight sglang.test.ci stubs when the real runtime is absent.
+    """Install lightweight sglang.test.ci stubs so run_suite imports cleanly.
 
     run_suite imports sglang.test.ci.* at module import time; those modules pull
-    in the full sglang runtime. When it is not installed (lightweight CI), we
-    inject stubs into sys.modules so run_suite can still be imported and its
-    exit-code / collection-diagnostic branches exercised.
+    in the full sglang runtime (torch, kernels, ...). The exit-code and
+    collection-diagnostic branches under test only need the two symbols
+    run_suite references, so we always inject stubs into sys.modules. This
+    keeps the unit test runnable in a lightweight CI environment where the
+    full sglang dependency set is not installed.
     """
     if "sglang.test.ci.ci_register" in sys.modules:
         return
-    try:
-        import sglang.test.ci.ci_register  # noqa: F401
-        return
-    except Exception:  # noqa: BLE001 - fall back to lightweight stubs
-        pass
 
     import enum
 
@@ -120,6 +117,10 @@ def test_collect_failure_returns_dedicated_code(monkeypatch, capsys):
     assert "COLLECTION FAILED" in out
     assert "bad registration in test_x.py" in out
     assert "RuntimeError" in out
+    # The diagnostic must name the scanned file count and include a traceback
+    # so a swallowed collection error is no longer silent.
+    assert "scanned" in out
+    assert "Traceback" in out
 
 
 def test_execution_failure_code_differs_from_collect(monkeypatch):
@@ -179,6 +180,10 @@ def test_pytest_ini_is_loadable():
     # test/ rootdir and discover the registered/ tree from it.
     assert parser.get("pytest", "testpaths").strip() == "registered unit"
     assert parser.get("pytest", "rootdir").strip() == "."
+    # The runner's own unit tests must be discoverable from the same rootdir
+    # so `pytest test/unit/test_run_suite_exit_codes.py` resolves consistently.
+    unit_dir = os.path.join(os.path.dirname(ini_path), "unit")
+    assert os.path.isdir(unit_dir)
 
 
 def test_readme_documents_exit_codes():
