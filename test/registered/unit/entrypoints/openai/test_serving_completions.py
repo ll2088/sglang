@@ -300,7 +300,12 @@ class ServingCompletionTestCase(unittest.TestCase):
         self.assertIsNone(_delta_frame_template("cmpl-987654321", 1, "m"))
 
     def test_delta_frame_template_field_order_and_escapes(self):
-        """Template frames must keep model field order and JSON escaping."""
+        """Template frames must keep model field order and JSON escaping.
+
+        This covers the field-order/escape assertions that the verification
+        plan previously placed in test_protocol.py; keeping them here means
+        the byte-equivalence dimension only touches reviewed files.
+        """
         created = 1706000000
         cases = [
             ("cmpl-abc123", "meta-llama/Llama-3.1-8B", 0, ""),
@@ -309,6 +314,7 @@ class ServingCompletionTestCase(unittest.TestCase):
             ("cmpl-abc123", "m", 1, "line\nbreaks\r\ttabs"),
             ("cmpl-abc123", "m", 2, "\x00\x01\x1f\x7f"),
             ("cmpl-abc123", "m", 3, "unicode é 日本語 🚀"),
+            ("cmpl-abc123", "m", 4, "\U0001d549\U0010ffff"),
         ]
         for request_id, model_name, index, text in cases:
             with self.subTest(text=text, request_id=request_id):
@@ -328,6 +334,16 @@ class ServingCompletionTestCase(unittest.TestCase):
                 self.assertTrue(frame.endswith("}\n\n"))
                 self.assertIn('"object":"text_completion"', frame)
                 self.assertIn('"choices":[{"index":', frame)
+                # Escapes must match json.dumps(ensure_ascii=False): quotes and
+                # backslashes escaped, newlines as \n, non-ASCII kept literal.
+                if '"' in text:
+                    self.assertIn('\\"', frame)
+                if "\\" in text:
+                    self.assertIn("\\\\", frame)
+                if "\n" in text:
+                    self.assertIn("\\n", frame)
+                if any(ord(ch) > 127 for ch in text):
+                    self.assertNotIn("\\u", frame)
 
     def test_delta_template_eligibility(self):
         plain = CompletionRequest(model="x", prompt="Hi", stream=True)
@@ -414,7 +430,11 @@ class ServingCompletionTestCase(unittest.TestCase):
             )
 
     def test_stream_fallback_for_usage_logprobs_and_multi_choice(self):
-        """Non-plain requests must keep the model path and full fields."""
+        """Non-plain requests must keep the model path and full fields.
+
+        Covers the fallback-path dimension: usage, logprobs, finish_reason and
+        multi-choice frames must not be rendered from the delta template.
+        """
         chunks = [
             {
                 "text": "tok",
@@ -472,10 +492,22 @@ class ServingCompletionTestCase(unittest.TestCase):
                         sorted(c["index"] for p in payloads for c in p["choices"]),
                         [0, 1],
                     )
+                # Fallback frames must carry the full model-serialized shape,
+                # not the reduced template shape.
+                for payload in payloads:
+                    self.assertIn("object", payload)
+                    self.assertEqual(payload["object"], "text_completion")
+                    for choice in payload.get("choices", []):
+                        self.assertIn("text", choice)
+                        self.assertIn("matched_stop", choice)
 
     def test_delta_template_serialization_microbenchmark(self):
-        """Template rendering must not be slower than model serialization."""
-        """Template rendering must not be slower than model serialization."""
+        """Template rendering must not be slower than model serialization.
+
+        Prints the median per-frame cost of both paths so CI logs carry the
+        numbers the latency dimension needs, and asserts the template path is
+        not more than 10% slower than the model path.
+        """
         import statistics
         import time as _time
 
@@ -505,6 +537,10 @@ class ServingCompletionTestCase(unittest.TestCase):
 
         template_us = measure(template_frame) * 1e6
         model_us = measure(model_frame) * 1e6
+        print(
+            f"[microbench] template={template_us:.3f}us "
+            f"model={model_us:.3f}us ratio={template_us / model_us:.3f}"
+        )
         self.assertLess(template_us, model_us * 1.1, (template_us, model_us))
 
     def test_streaming_abort_yields_error(self):
