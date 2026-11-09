@@ -30,8 +30,16 @@ def _require_cuda_python_13_5():
 
 
 def _parse_version(version):
+    # Strip pre-release/local suffixes (e.g. "13.5.0rc1", "13.5.0+cu13")
+    # so the numeric comparison below stays well-defined.
+    core = version.split("+", 1)[0]
+    for sep in ("rc", "a", "b", "dev", "post"):
+        idx = core.find(sep)
+        if idx != -1:
+            core = core[:idx]
+            break
     parts = []
-    for piece in version.split("."):
+    for piece in core.split("."):
         digits = ""
         for ch in piece:
             if ch.isdigit():
