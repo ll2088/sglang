@@ -30,6 +30,16 @@ def _require_cuda_python_13_5():
         )
 
 
+def _import_or_skip(module_name):
+    """Import a module, skipping the test if the environment cannot provide it."""
+    try:
+        return importlib.import_module(module_name)
+    except BaseException as exc:  # pragma: no cover - environment dependent
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        pytest.skip(f"{module_name} is not importable in this environment: {exc}")
+
+
 def _parse_version(version):
     # Strip pre-release/local suffixes (e.g. "13.5.0rc1", "13.5.0+cu13")
     # so the numeric comparison below stays well-defined.
@@ -77,15 +87,7 @@ def test_sgl_kernel_import():
 
 def test_load_utils_version_probe():
     _require_cuda_python_13_5()
-    try:
-        load_utils = importlib.import_module("sgl_kernel.load_utils")
-    except BaseException as exc:  # pragma: no cover - environment dependent
-        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-            raise
-        pytest.skip(
-            "sgl_kernel.load_utils is not importable (compiled CUDA extension "
-            f"missing in this environment): {exc}"
-        )
+    load_utils = _import_or_skip("sgl_kernel.load_utils")
 
     cuda_home = load_utils._find_cuda_home()
     assert isinstance(cuda_home, str)
@@ -100,12 +102,7 @@ def test_load_utils_version_probe():
 
 def test_check_env_reports_cuda_version(monkeypatch):
     _require_cuda_python_13_5()
-    try:
-        check_env = importlib.import_module("sglang.check_env")
-    except BaseException as exc:  # pragma: no cover - environment dependent
-        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-            raise
-        pytest.skip(f"sglang.check_env is not importable: {exc}")
+    check_env = _import_or_skip("sglang.check_env")
 
     monkeypatch.setattr(check_env, "is_cuda_v2", lambda: False)
     monkeypatch.setattr(check_env, "is_hip", lambda: False)
