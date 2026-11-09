@@ -94,6 +94,9 @@ def test_setup_env_guard_precedes_pip_install():
     # The guard must match the short form too, so `setup_env.sh -e` cannot
     # slip past into the full dependency resolution.
     assert "-e|--editable" in text
+    # The guard must run before the requirements install so an editable flag
+    # can never reach pip.
+    assert text.find("-e|--editable") < text.find("pip install -r")
 
 
 def test_root_setup_env_delegates_to_unit_setup():
@@ -126,6 +129,9 @@ def test_root_setup_env_delegates_to_unit_setup():
     assert guard_pos != -1
     assert exec_pos != -1
     assert guard_pos < exec_pos
+    # The root entry must not install anything itself: only the unit script
+    # owns the pytest-only requirements install.
+    assert "pip install" not in text
 
 
 def test_setup_env_installs_only_minimal_requirements():
@@ -156,6 +162,10 @@ def test_root_setup_env_rejects_editable_flags():
     assert guard_pos != -1
     assert exec_pos != -1
     assert guard_pos < exec_pos
+    # The rejection must be actionable: name the pytest-only entry and exit
+    # non-zero so CI cannot fall through to the full dependency resolution.
+    assert "test/unit/setup_env.sh" in text
+    assert "exit 2" in text
 
 
 def test_setup_env_does_not_resolve_sglang_dependencies():
@@ -171,6 +181,26 @@ def test_setup_env_does_not_resolve_sglang_dependencies():
         assert "pip install -e python" not in text
         # The only install target is the pytest-only requirements file.
         assert "requirements.txt" in text
+
+
+def test_unit_setup_env_is_standalone_and_pytest_only():
+    """The unit setup script must be runnable without the sglang runtime."""
+    script = os.path.join(UNIT_DIR, "setup_env.sh")
+    with open(script, encoding="utf-8") as f:
+        text = f.read()
+    # It must resolve its own directory so it works from any CWD.
+    assert "BASH_SOURCE" in text
+    assert "SCRIPT_DIR" in text
+    # It must install only the pytest-only requirements file.
+    assert "pip install -r" in text
+    assert "requirements.txt" in text
+    # It must self-check pytest so an environment problem is reported as an
+    # environment failure rather than a test failure.
+    assert "import pytest" in text
+    assert "pytest --version" in text
+    # It must never import or install the sglang runtime.
+    assert "import sglang" not in text
+    assert "pip install -e" not in text
 
 
 def test_verify_entrypoint_exists_and_uses_distinct_exit_codes():
