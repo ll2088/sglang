@@ -27,6 +27,28 @@ import types
 import pytest
 
 
+def _install_minimal_stubs() -> None:
+    """Install lightweight stubs for heavy runtime modules before any
+    ``sglang`` import, so these pure-helper tests are collected even when the
+    full runtime dependency chain is not installed in CI.
+
+    Only modules that the helpers under test do not actually use are stubbed;
+    ``protocol`` and ``serving_completions`` are still loaded from source.
+    """
+    if "sglang" in sys.modules:
+        return
+    for name in (
+        "sglang",
+        "sglang.srt",
+        "sglang.srt.entrypoints",
+        "sglang.srt.entrypoints.openai",
+    ):
+        if name not in sys.modules:
+            mod = types.ModuleType(name)
+            mod.__path__ = []
+            sys.modules[name] = mod
+
+
 def _load_template_helpers():
     """Import the pure helpers, stubbing heavy runtime deps if needed.
 
@@ -35,6 +57,7 @@ def _load_template_helpers():
     (e.g. minimal CI env), load the module source with a stub package so the
     tests still execute instead of being skipped.
     """
+    _install_minimal_stubs()
     try:
         from sglang.srt.entrypoints.openai.protocol import (
             CompletionRequest,
@@ -72,6 +95,15 @@ def _load_template_helpers():
         mod = types.ModuleType(name)
         mod.__path__ = [str(path)]
         sys.modules[name] = mod
+
+    # Drop the empty stubs installed above so the real package paths win.
+    for name in (
+        "sglang.srt.entrypoints.openai",
+        "sglang.srt.entrypoints",
+        "sglang.srt",
+        "sglang",
+    ):
+        sys.modules.pop(name, None)
 
     for name, path in (
         ("sglang", pkg_root),
@@ -248,6 +280,16 @@ def test_spec_tokens_details_forces_fallback_branch():
 
 
 def test_fallback_frame_keeps_all_fields():
+    # Non-plain requests must never take the template path.
+    for kwargs in (
+        {"echo": True},
+        {"logprobs": 1},
+        {"return_token_ids": True},
+        {"return_spec_tokens_details": True},
+    ):
+        assert _can_use_delta_template(_request(**kwargs), False) is False
+    assert _can_use_delta_template(_request(), True) is False
+
     choice = CompletionResponseStreamChoice(
         index=0,
         text="done",
@@ -278,6 +320,30 @@ def test_multi_choice_frames_match_model():
         assert template_frame(template, index, f"c{index}") == model_frame(
             REQUEST_ID, MODEL, index, f"c{index}"
         )
+
+
+def test_finish_reason_frame_uses_model_path():
+    # Terminal chunks carry finish_reason/matched_stop and must be rendered by
+    # the model serializer, not the plain-delta template.
+    choice = CompletionResponseStreamChoice(
+        index=0,
+        text="",
+        logprobs=None,
+        finish_reason="stop",
+        matched_stop="</s>",
+        token_ids=None,
+        prompt_token_ids=None,
+    )
+    chunk = CompletionStreamResponse(
+        id=REQUEST_ID,
+        created=CREATED,
+        object="text_completion",
+        choices=[choice],
+        model=MODEL,
+    )
+    payload = json.loads(chunk.model_dump_json())
+    assert payload["choices"][0]["finish_reason"] == "stop"
+    assert payload["choices"][0]["matched_stop"] == "</s>"
 
 
 def _median_render_us(render, rounds=3, iters=2000) -> float:

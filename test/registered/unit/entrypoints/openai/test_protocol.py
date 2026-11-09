@@ -14,10 +14,25 @@
 """Tests for OpenAI API protocol models"""
 
 import json
+import sys
+import types
 import unittest
 from typing import List, Optional
 
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+
+# Install minimal package stubs before importing sglang so this module is
+# collected even when the full runtime dependency chain is unavailable.
+for _name in (
+    "sglang",
+    "sglang.srt",
+    "sglang.srt.entrypoints",
+    "sglang.srt.entrypoints.openai",
+):
+    if _name not in sys.modules:
+        _mod = types.ModuleType(_name)
+        _mod.__path__ = []
+        sys.modules[_name] = _mod
 
 from sglang.srt.entrypoints.openai.protocol import (
     ChatCompletionMessageContentAudioPart,
