@@ -27,6 +27,11 @@ import types
 
 import pytest
 
+# This module must stay importable with only pytest + pydantic installed.
+# Record the modules present before any loading so we can assert below that
+# no heavy sglang runtime module was pulled in by the helpers under test.
+_PRELOADED_MODULES = frozenset(sys.modules)
+
 # This module must be collectable with only pydantic + pytest installed.
 # It never imports the `sglang` package top level (whose __init__ pulls in
 # the full runtime); instead it imports the protocol models and the pure
@@ -150,6 +155,30 @@ def _load_template_helpers():
     except Exception as exc:  # pragma: no cover - minimal CI without runtime
         pytest.fail(
             f"serving_completions helpers unavailable: {exc}",
+            pytrace=False,
+        )
+
+    # Guard against the loader silently importing the real runtime: the
+    # stubs above must be the only sglang modules in sys.modules.
+    heavy = [
+        name
+        for name in sys.modules
+        if name.startswith("sglang.")
+        and name
+        not in {
+            "sglang.srt.entrypoints.openai.protocol",
+            "sglang.srt.entrypoints.openai.serving_base",
+            "sglang.srt.entrypoints.openai.usage_processor",
+            "sglang.srt.entrypoints.openai.utils",
+            "sglang.srt.managers.io_struct",
+            "sglang.srt.parser.code_completion_parser",
+            "sglang.srt.runtime_context",
+            "sglang.srt.utils.weight_versions",
+        }
+    ]
+    if heavy:
+        pytest.fail(
+            "unexpected sglang runtime modules imported: %s" % sorted(heavy),
             pytrace=False,
         )
 
@@ -419,7 +448,11 @@ def test_microbench_template_not_slower_than_model():
 
 
 def test_serialization_field_order_and_escapes():
-    """Field order and escaping must match the model serializer exactly."""
+    """Field order and escaping must match the model serializer exactly.
+
+    Kept here (rather than in test_protocol.py) so the byte-equivalence
+    command only needs this self-contained module.
+    """
     template = _delta_frame_template(REQUEST_ID, CREATED, MODEL)
     assert template is not None
     for text in ('a"b', "a\\b", "a\nb", "é 日本語 🚀"):
@@ -479,6 +512,28 @@ def test_helpers_are_importable():
     """The template helpers must be importable from the serving module."""
     assert callable(_delta_frame_template)
     assert callable(_can_use_delta_template)
+
+
+def test_no_heavy_runtime_modules_imported():
+    """Loading the helpers must not pull in the sglang runtime.
+
+    This is what lets the CI job run with only pytest + pydantic installed
+    instead of the full sglang dependency set.
+    """
+    heavy_prefixes = (
+        "sglang.srt.managers.tokenizer_manager",
+        "sglang.srt.managers.scheduler",
+        "sglang.srt.server_args",
+        "sglang.srt.model_executor",
+        "torch",
+        "transformers",
+    )
+    loaded = [
+        name
+        for name in sys.modules
+        if name not in _PRELOADED_MODULES and name.startswith(heavy_prefixes)
+    ]
+    assert not loaded, f"heavy runtime modules imported: {sorted(loaded)}"
 
 
 def test_usage_and_logprobs_frames_keep_model_fields():
