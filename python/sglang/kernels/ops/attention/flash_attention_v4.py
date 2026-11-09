@@ -123,15 +123,25 @@ def _maybe_contiguous(x: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
     return x.contiguous() if x is not None and x.stride(-1) != 1 else x
 
 
-from sglang.kernels.ops.attention.fa4_sm90_fp8_policy import (
-    is_sm90_fp8_kv_mma as _is_sm90_fp8_kv_mma,
-)
-from sglang.kernels.ops.attention.fa4_sm90_fp8_policy import (
-    normalize_kv_descale as _normalize_kv_descale,
-)
-from sglang.kernels.ops.attention.fa4_sm90_fp8_policy import (
-    select_num_splits as _select_num_splits,
-)
+try:
+    from sglang.kernels.ops.attention.fa4_sm90_fp8_policy import (
+        is_sm90_fp8_kv_mma as _is_sm90_fp8_kv_mma,
+    )
+    from sglang.kernels.ops.attention.fa4_sm90_fp8_policy import (
+        normalize_kv_descale as _normalize_kv_descale,
+    )
+    from sglang.kernels.ops.attention.fa4_sm90_fp8_policy import (
+        select_num_splits as _select_num_splits,
+    )
+except Exception:  # pragma: no cover - policy module is optional at import time
+    def _is_sm90_fp8_kv_mma(q, k, v, causal, window_size, **_):
+        return False
+
+    def _normalize_kv_descale(descale, **_):
+        return descale
+
+    def _select_num_splits(**_):
+        return 0
 
 
 def _pad_mla_q_heads(q, qv, v, pack_gqa):
