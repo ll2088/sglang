@@ -59,6 +59,15 @@ def test_anthropic_constraint_is_parseable():
     assert re.fullmatch(r">=\d+\.\d+\.\d+", constraint), constraint
 
 
+def test_anthropic_constraint_is_at_least_2_6():
+    # The dependency bump rewrites the manifest; pin the resulting lower bound
+    # so a future edit cannot silently downgrade it below the tested major.
+    constraint = _declared_anthropic_constraint()
+    match = re.search(r">=\s*(\d+)\.(\d+)\.(\d+)", constraint)
+    assert match is not None, constraint
+    assert tuple(int(p) for p in match.groups()) >= (2, 6, 0), constraint
+
+
 def test_anthropic_sdk_importable_if_present():
     # The SDK is optional; when installed, its public client entry point must
     # still be importable under the new major version. Import lazily so this
@@ -144,6 +153,33 @@ def test_repo_has_no_anthropic_sdk_imports():
         if re.search(r"^\s*(import anthropic|from anthropic)", text, re.MULTILINE):
             offenders.append(str(path.relative_to(root)))
     assert not offenders, offenders
+
+
+def test_benchmark_and_cli_modules_do_not_reference_anthropic():
+    # The benchmark and CLI modules are the ones the acceptance criteria call
+    # out; scan them statically so the check works without torch/sglang.
+    for rel in (
+        "sglang/benchmark/endpoint.py",
+        "sglang/benchmark/datasets/agentic_trace.py",
+        "sglang/benchmark/datasets/openai_dataset.py",
+        "sglang/benchmark/utils.py",
+        "sglang/check_env.py",
+        "sglang/cli/generate.py",
+    ):
+        path = REPO_ROOT / rel
+        assert path.is_file(), rel
+        text = path.read_text(encoding="utf-8")
+        assert "anthropic" not in text.lower(), rel
+
+
+def test_check_env_reports_anthropic_without_specifier():
+    # check_env must pass a bare distribution name to importlib.metadata so the
+    # reported version is the installed one, not a specifier string.
+    source = (REPO_ROOT / "sglang" / "check_env.py").read_text(encoding="utf-8")
+    package_block = source.split("PACKAGE_LIST", 1)[1].split("]", 1)[0]
+    assert '"anthropic"' in package_block
+    assert "anthropic>=" not in package_block
+    assert "anthropic==" not in package_block
 
 
 def test_anthropic_sdk_error_classes_if_present():
