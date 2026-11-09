@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import json
 import math
 import time
 from typing import Iterable
@@ -244,6 +245,21 @@ def cudnn_sdpa_fp8_setup(qkv: torch.Tensor, seqlen_q: int, seqlen_k: int, causal
 def _maybe_pass_descales(callable_, **kwargs):
     sig = inspect.signature(callable_)
     return {k: v for k, v in kwargs.items() if k in sig.parameters}
+
+
+def format_fp8_vs_bf16_metrics(*, fp8_median_ms: float, bf16_median_ms: float) -> dict:
+    """Return a JSON-serializable FP8-vs-BF16 latency comparison."""
+    speedup = (
+        bf16_median_ms / fp8_median_ms
+        if fp8_median_ms > 0 and bf16_median_ms > 0
+        else None
+    )
+    return {
+        "fp8_median_ms": fp8_median_ms,
+        "bf16_median_ms": bf16_median_ms,
+        "speedup": speedup,
+        "regression_gt_10pct": speedup is not None and speedup < 0.9,
+    }
 
 
 def format_fp8_vs_bf16_summary(*, fp8_median_ms: float, bf16_median_ms: float) -> str:
@@ -509,6 +525,15 @@ def main(argv: Iterable[str] | None = None) -> int:
                         print(
                             format_fp8_vs_bf16_summary(
                                 fp8_median_ms=fp8_t, bf16_median_ms=bf16_t
+                            )
+                        )
+                        print(
+                            "FP8_VS_BF16_JSON "
+                            + json.dumps(
+                                format_fp8_vs_bf16_metrics(
+                                    fp8_median_ms=fp8_t, bf16_median_ms=bf16_t
+                                ),
+                                sort_keys=True,
                             )
                         )
 

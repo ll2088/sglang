@@ -14,7 +14,8 @@ import sys
 from unittest.mock import patch
 
 import pytest
-import torch
+
+torch = pytest.importorskip("torch", reason="torch is required for numerics tests")
 
 _POLICY_PATH = pathlib.Path(__file__).with_name("fa4_sm90_fp8_policy.py")
 _POLICY_MODULE_NAME = "_fa4_sm90_fp8_policy_numerics_under_test"

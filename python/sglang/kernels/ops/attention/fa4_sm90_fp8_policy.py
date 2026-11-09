@@ -39,17 +39,53 @@ def is_sm90_fp8_kv_mma(
     device_capability_major: Optional[int] = None,
 ) -> bool:
     """Return True when the call should take the SM90 d512 FP8-MMA kernel."""
+    if _device_capability_major(device_capability_major) != 9:
+        return False
     try:
         import torch
     except ImportError:
-        return False
-    if _device_capability_major(device_capability_major) != 9:
         return False
     if k.dtype != torch.float8_e4m3fn or v.dtype != torch.float8_e4m3fn:
         return False
     if q.dtype not in (torch.float16, torch.bfloat16):
         return False
     if not (q.shape[-1] == k.shape[-1] == v.shape[-1] == SM90_FP8_MMA_HEAD_DIM):
+        return False
+    if not causal:
+        window = window_size or (None, None)
+        left = window[0] if len(window) > 0 else None
+        right = window[1] if len(window) > 1 else None
+        if (left is None or left < 0) and (right is None or right < 0):
+            raise NotImplementedError(
+                "SM90 FP8 MMA noncausal full attention has known accuracy errors."
+            )
+    return True
+
+
+def is_sm90_fp8_kv_mma_dtypes(
+    q_dtype,
+    k_dtype,
+    v_dtype,
+    q_head_dim: int,
+    k_head_dim: int,
+    v_head_dim: int,
+    causal: bool,
+    window_size,
+    *,
+    device_capability_major: Optional[int] = None,
+) -> bool:
+    """Torch-free variant of :func:`is_sm90_fp8_kv_mma` for host-side tests."""
+    if _device_capability_major(device_capability_major) != 9:
+        return False
+    try:
+        import torch
+    except ImportError:
+        return False
+    if k_dtype != torch.float8_e4m3fn or v_dtype != torch.float8_e4m3fn:
+        return False
+    if q_dtype not in (torch.float16, torch.bfloat16):
+        return False
+    if not (q_head_dim == k_head_dim == v_head_dim == SM90_FP8_MMA_HEAD_DIM):
         return False
     if not causal:
         window = window_size or (None, None)
