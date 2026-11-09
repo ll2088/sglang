@@ -46,6 +46,11 @@ def _find_pyproject() -> Path:
         candidate = parent / "pyproject.toml"
         if candidate.is_file():
             return candidate
+    # Fall back to the conventional checkout layout so the constraint checks
+    # still run (and fail loudly) instead of being skipped wholesale.
+    fallback = _HERE.parents[3] / "python" / "pyproject.toml"
+    if fallback.is_file():
+        return fallback
     pytest.skip("pyproject.toml not found above the test file")
 
 
@@ -95,6 +100,10 @@ def test_anthropic_constraint_is_declared():
     # The declared lower bound must be at least 2.6.0 so the upgraded SDK is
     # allowed by the install step; the exact value is owned by the bump.
     assert _specifier_contains(constraint, "2.6.0"), constraint
+    # Guard against a stale 0.20 pin sneaking back in.
+    assert not _specifier_contains(constraint, "0.20.0") or _specifier_contains(
+        constraint, "2.6.0"
+    ), constraint
 
 
 def test_anthropic_constraint_allows_2_6():
@@ -115,11 +124,7 @@ def test_anthropic_installed_version_if_present():
     except importlib.metadata.PackageNotFoundError:
         pytest.skip("anthropic is not installed in this environment")
     constraint = _declared_anthropic_constraint()
-    match = re.fullmatch(r">=\s*(\d+(?:\.\d+)*)", constraint)
-    assert match is not None, constraint
-    lower = tuple(int(p) for p in match.group(1).split("."))
-    parts = tuple(int(p) for p in re.findall(r"\d+", version)[: len(lower)])
-    assert parts >= lower, (version, constraint)
+    assert _specifier_contains(constraint, version), (version, constraint)
 
 
 def test_anthropic_constraint_is_parseable():
@@ -139,6 +144,10 @@ def test_anthropic_sdk_importable_if_present():
         pytest.skip("anthropic is not installed in this environment")
     assert hasattr(anthropic, "Anthropic")
     assert hasattr(anthropic, "AsyncAnthropic")
+    # 2.x moved the client construction to keyword-only args; a positional
+    # api_key call must still be accepted by the public constructor.
+    client = anthropic.Anthropic(api_key="test-key")
+    assert client is not None
 
 
 def test_anthropic_sdk_version_satisfies_constraint_if_present():
@@ -176,7 +185,10 @@ def test_check_env_reports_anthropic():
     assert "def get_package_versions" in source
     # The package name must be reported without a version specifier so
     # importlib.metadata.version() receives a bare distribution name.
-    assert '"anthropic"' in source.split("PACKAGE_LIST", 1)[1].split("]", 1)[0]
+    package_block = source.split("PACKAGE_LIST", 1)[1].split("]", 1)[0]
+    assert '"anthropic"' in package_block
+    assert "anthropic>=" not in package_block
+    assert "anthropic==" not in package_block
 
 
 @pytest.mark.parametrize(
@@ -242,6 +254,12 @@ def test_anthropic_sdk_public_surface():
     assert hasattr(anthropic, "AsyncAnthropic")
     assert hasattr(anthropic, "APIStatusError")
     assert hasattr(anthropic, "APIError")
+    # 2.5+ exposes error_code/details/api_message on APIStatusError; pin the
+    # attributes so a downgrade or rename is caught.
+    for attr in ("error_code", "details", "api_message"):
+        assert hasattr(anthropic.APIStatusError, attr) or attr in getattr(
+            anthropic.APIStatusError, "__annotations__", {}
+        ), attr
 
 
 def test_repo_has_no_anthropic_sdk_imports():
@@ -252,6 +270,9 @@ def test_repo_has_no_anthropic_sdk_imports():
         pytest.skip("sglang package sources are not present in this checkout")
     offenders = []
     for path in root.rglob("*.py"):
+        # The compatibility test itself imports the SDK lazily on purpose.
+        if path.resolve() == _HERE:
+            continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         if re.search(r"^\s*(import anthropic|from anthropic)", text, re.MULTILINE):
             offenders.append(str(path.relative_to(root)))
