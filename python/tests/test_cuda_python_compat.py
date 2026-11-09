@@ -118,9 +118,9 @@ def test_check_env_reports_cuda_version(monkeypatch):
 
     versions = env.get_package_versions()
     assert isinstance(versions, dict)
-    # cuda-python is not part of check_env.PACKAGE_LIST; verify the probe
-    # reports the installed version through importlib.metadata instead.
-    assert importlib.metadata.version("cuda-python") == _CUDA_PYTHON_VERSION
+    # cuda-python is part of check_env.PACKAGE_LIST; verify the probe reports
+    # the installed version through importlib.metadata.
+    assert versions.get("cuda-python") == _CUDA_PYTHON_VERSION
 
     result = subprocess.run(
         [sys.executable, "-m", "sglang.check_env"],
@@ -131,3 +131,4 @@ def test_check_env_reports_cuda_version(monkeypatch):
         pytest.skip(f"sglang is not importable in a subprocess: {result.stderr}")
     assert result.returncode == 0, result.stderr
     assert "Python" in result.stdout
+    assert "cuda-python" in result.stdout
