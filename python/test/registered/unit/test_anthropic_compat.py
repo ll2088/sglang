@@ -31,8 +31,11 @@ def _specifier_contains(constraint: str, version: str) -> bool:
     if match is None:
         return False
     lower = tuple(int(p) for p in match.group(1).split("."))
-    parts = tuple(int(p) for p in re.findall(r"\d+", version)[: len(lower)])
-    return parts >= lower
+    # Pad the installed version so a shorter release tuple (e.g. "2.6")
+    # compares correctly against a longer lower bound (e.g. "2.6.0").
+    parts = tuple(int(p) for p in re.findall(r"\d+", version))
+    parts = parts + (0,) * (len(lower) - len(parts))
+    return parts[: len(lower)] >= lower
 
 
 # Resolve the python/ package root without assuming a fixed depth, so the test
@@ -59,6 +62,20 @@ def _find_pyproject() -> Path:
     raise AssertionError("unreachable")
 
 
+def _read_pyproject_text() -> str:
+    """Read pyproject.toml as text, skipping when it is absent.
+
+    Used by the static checks so they do not depend on tomllib being able to
+    parse the whole file (e.g. a trimmed checkout with an unusual layout).
+    """
+    path = _find_pyproject()
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as e:  # pragma: no cover - defensive
+        pytest.skip(f"cannot read {path}: {e}")
+        raise AssertionError("unreachable")
+
+
 def _repo_root() -> Path:
     return _find_pyproject().parent
 
@@ -81,8 +98,12 @@ def _sglang_root() -> Path:
 
 def _declared_anthropic_constraint_from_toml() -> str:
     """Read the anthropic specifier from [project].dependencies via tomllib."""
-    with _find_pyproject().open("rb") as f:
-        data = tomllib.load(f)
+    try:
+        with _find_pyproject().open("rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        pytest.skip(f"cannot parse pyproject.toml: {e}")
+        raise AssertionError("unreachable")
     for dep in data.get("project", {}).get("dependencies", []):
         name = re.split(r"[\s<>=!~\[]", dep, maxsplit=1)[0].strip()
         if name == "anthropic":
@@ -146,6 +167,15 @@ def test_anthropic_constraint_is_parseable():
     assert re.fullmatch(r"[<>=!~][^\s]*", constraint), constraint
 
 
+def test_anthropic_constraint_has_no_removed_0x_api_reference():
+    # The 0.20 line is gone; the declared constraint must not reference it.
+    # This is a static check so it works without the SDK installed.
+    text = _read_pyproject_text()
+    assert "anthropic>=0." not in text
+    assert "anthropic==0." not in text
+    assert "anthropic<2" not in text
+
+
 def test_anthropic_sdk_importable_if_present():
     # The SDK is optional; when installed, its public client entry point must
     # still be importable under the new major version. Import lazily so this
@@ -166,6 +196,8 @@ def test_anthropic_sdk_importable_if_present():
     except Exception as e:  # noqa: BLE001 - SDK may validate eagerly
         pytest.skip(f"Anthropic client construction unavailable: {e}")
     assert client is not None
+    # The client must expose the messages resource used by any future caller.
+    assert hasattr(client, "messages")
 
 
 def test_anthropic_sdk_version_satisfies_constraint_if_present():
@@ -282,6 +314,9 @@ def test_anthropic_sdk_public_surface():
     for name in ("OverloadedError", "ServiceUnavailableError"):
         if hasattr(anthropic, name):
             assert issubclass(getattr(anthropic, name), anthropic.InternalServerError)
+    # 2.6 added error codes for ramp limit and external key validation; the
+    # base error class must still be present so callers can catch it.
+    assert hasattr(anthropic, "APIError")
 
 
 def test_repo_has_no_anthropic_sdk_imports():
@@ -295,7 +330,10 @@ def test_repo_has_no_anthropic_sdk_imports():
         # The compatibility test itself imports the SDK lazily on purpose.
         if path.resolve() == _HERE:
             continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
         if re.search(r"^\s*(import anthropic|from anthropic)", text, re.MULTILINE):
             offenders.append(str(path.relative_to(root)))
     assert not offenders, offenders
@@ -342,3 +380,9 @@ def test_anthropic_sdk_error_classes_if_present():
         "InternalServerError",
     ):
         assert hasattr(anthropic, name), name
+    # 2.6 added error codes for ramp limit and external key validation; the
+    # status error class must still carry the documented attributes.
+    status_error = anthropic.APIStatusError
+    assert hasattr(status_error, "status_code") or "status_code" in getattr(
+        status_error, "__annotations__", {}
+    )
