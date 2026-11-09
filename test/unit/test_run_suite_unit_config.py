@@ -106,6 +106,10 @@ def test_root_setup_env_delegates_to_unit_setup():
     with open(script, encoding="utf-8") as f:
         text = f.read()
     assert "test/unit/setup_env.sh" in text
+    # The entry must announce itself so CI logs prove the lightweight path was
+    # hit instead of a full `pip install -e python` resolution.
+    assert "[setup_env]" in text
+    assert "set -euo pipefail" in text
     # The root entry must never resolve the full sglang dependency set.
     assert "pip install -e" not in text
     assert "pip install --editable" not in text
@@ -183,6 +187,8 @@ def test_setup_env_guard_covers_pip_install_variants():
         assert "-e|--editable" in text
         assert "--editable=*" in text
         assert "-e./*" in text
+        # The glued `-e=...` form must be rejected too.
+        assert "-e=*" in text
         # The guard must exit non-zero so CI cannot continue into a full
         # dependency resolution after a rejected editable install.
         assert "exit 2" in text
@@ -201,6 +207,23 @@ def test_setup_env_does_not_resolve_sglang_dependencies():
         assert "pip install -e python" not in text
         # The only install target is the pytest-only requirements file.
         assert "requirements.txt" in text
+
+
+def test_root_setup_env_guard_precedes_delegation():
+    """The editable guard must run before the delegate is exec'd."""
+    script = os.path.join(REPO_ROOT, "setup_env.sh")
+    with open(script, encoding="utf-8") as f:
+        text = f.read()
+    guard_pos = text.find("-e|--editable")
+    exec_pos = text.find("exec bash")
+    assert guard_pos != -1
+    assert exec_pos != -1
+    assert guard_pos < exec_pos
+    # The entry marker must be printed before delegation so CI logs prove the
+    # lightweight path was hit even when the delegate later fails.
+    marker_pos = text.find("[setup_env]")
+    assert marker_pos != -1
+    assert marker_pos < exec_pos
 
 
 def test_unit_setup_env_is_standalone_and_pytest_only():
