@@ -53,6 +53,20 @@ def _repo_root() -> Path:
     return _find_pyproject().parent
 
 
+def _sglang_root() -> Path:
+    """Locate the sglang package directory without importing it.
+
+    The package lives next to pyproject.toml (python/sglang) in the normal
+    checkout, but tests may also be collected from a layout where the package
+    is one level up. Probe both and return the first that exists.
+    """
+    root = _repo_root()
+    for candidate in (root / "sglang", root.parent / "sglang"):
+        if candidate.is_dir():
+            return candidate
+    return root / "sglang"
+
+
 def _declared_anthropic_constraint_from_toml() -> str:
     """Read the anthropic specifier from [project].dependencies via tomllib."""
     with _find_pyproject().open("rb") as f:
@@ -149,7 +163,7 @@ def test_check_env_reports_anthropic():
     # a bare test environment. Verify the contract statically instead of
     # importing the module, so this test does not depend on the full runtime.
     # Skip when the sglang sources are not present in this checkout.
-    path = _repo_root() / "sglang" / "check_env.py"
+    path = _sglang_root() / "check_env.py"
     if not path.is_file():
         pytest.skip("sglang/check_env.py is not present in this checkout")
     source = path.read_text(encoding="utf-8")
@@ -180,7 +194,7 @@ def test_modules_do_not_import_anthropic(module_path):
     # None of them use the SDK, so the 0.20 -> 2.6 breaking changes cannot
     # affect them; this test pins that fact. Skip when the sglang sources are
     # not present in this checkout (e.g. a bare test environment).
-    path = _repo_root() / module_path
+    path = _sglang_root() / Path(module_path).relative_to("sglang")
     if not path.is_file():
         pytest.skip(f"{module_path} is not present in this checkout")
     source = path.read_text(encoding="utf-8")
@@ -205,7 +219,7 @@ def test_anthropic_sdk_public_surface():
 def test_repo_has_no_anthropic_sdk_imports():
     # The SDK is an optional runtime dependency only; no module may import it,
     # so the 0.20 -> 2.6 breaking changes cannot affect this repository.
-    root = _repo_root() / "sglang"
+    root = _sglang_root()
     if not root.is_dir():
         pytest.skip("sglang package sources are not present in this checkout")
     offenders = []
@@ -229,7 +243,7 @@ def test_benchmark_and_cli_modules_do_not_reference_anthropic():
         "sglang/benchmark/utils.py",
         "sglang/cli/generate.py",
     ):
-        path = _repo_root() / rel
+        path = _sglang_root() / Path(rel).relative_to("sglang")
         if not path.is_file():
             pytest.skip(f"{rel} is not present in this checkout")
         text = path.read_text(encoding="utf-8")
@@ -240,7 +254,7 @@ def test_check_env_reports_anthropic_without_specifier():
     # check_env must pass a bare distribution name to importlib.metadata so the
     # reported version is the installed one, not a specifier string. Skip when
     # the sglang sources are not present in this checkout.
-    path = _repo_root() / "sglang" / "check_env.py"
+    path = _sglang_root() / "check_env.py"
     if not path.is_file():
         pytest.skip("sglang/check_env.py is not present in this checkout")
     source = path.read_text(encoding="utf-8")
