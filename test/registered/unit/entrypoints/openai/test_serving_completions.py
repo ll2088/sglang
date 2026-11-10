@@ -27,6 +27,11 @@ import types
 
 import pytest
 
+# This module must be collectable with only pytest + pydantic installed.
+# It never imports the `sglang` package top level (whose __init__ pulls in
+# the full runtime); instead it loads the protocol models and the pure
+# helpers directly by path and fails loudly (not skip) when unavailable.
+
 # This module must stay importable with only pytest + pydantic installed.
 # Record the modules present before any loading so we can assert below that
 # no heavy sglang runtime module was pulled in by the helpers under test.
@@ -69,9 +74,9 @@ def _load_template_helpers():
             "sglang_protocol_under_test", _OPENAI_DIR / "protocol.py"
         )
     except Exception as exc:  # pragma: no cover - minimal CI without runtime
-        pytest.skip(
+        pytest.fail(
             f"sglang protocol models unavailable: {exc}",
-            allow_module_level=True,
+            pytrace=False,
         )
 
     stubs = {
@@ -153,9 +158,9 @@ def _load_template_helpers():
             _OPENAI_DIR / "serving_completions.py",
         )
     except Exception as exc:  # pragma: no cover - minimal CI without runtime
-        pytest.skip(
+        pytest.fail(
             f"serving_completions helpers unavailable: {exc}",
-            allow_module_level=True,
+            pytrace=False,
         )
 
     # Guard against the loader silently importing the real runtime: the
@@ -177,9 +182,9 @@ def _load_template_helpers():
         }
     ]
     if heavy:
-        pytest.skip(
+        pytest.fail(
             "unexpected sglang runtime modules imported: %s" % sorted(heavy),
-            allow_module_level=True,
+            pytrace=False,
         )
 
     return (
@@ -205,6 +210,12 @@ try:
     register_cpu_ci(est_time=5, suite="base-a-test-cpu")
 except ImportError:  # pragma: no cover - CI registry is optional locally
     pass
+
+
+def _assert_byte_identical(template, index, text, request_id=REQUEST_ID, model=MODEL):
+    assert template_frame(template, index, text) == model_frame(
+        request_id, model, index, text
+    )
 
 CREATED = 1706000000
 REQUEST_ID = "cmpl-abc123"
@@ -277,9 +288,9 @@ def test_first_middle_last_frames_are_byte_identical():
     assert template is not None
     frames = [("first", 0), (" middle", 0), (" last", 0)]
     for text, index in frames:
-        assert template_frame(template, index, text) == model_frame(
-            REQUEST_ID, MODEL, index, text
-        )
+        _assert_byte_identical(template, index, text)
+    # Empty delta (e.g. a chunk that only advances state) must also match.
+    _assert_byte_identical(template, 0, "")
 
 
 def test_frame_keeps_sse_prefix_and_terminator():
@@ -402,6 +413,14 @@ def test_finish_reason_frame_uses_model_path():
     payload = json.loads(chunk.model_dump_json())
     assert payload["choices"][0]["finish_reason"] == "stop"
     assert payload["choices"][0]["matched_stop"] == "</s>"
+    # The template path must not be used for terminal chunks: the generator
+    # only takes it when finish_reason_type is None. Guard the helper contract
+    # by asserting the plain-delta template has no finish_reason field.
+    template = _delta_frame_template(REQUEST_ID, CREATED, MODEL)
+    assert template is not None
+    prefix, infix, suffix = template
+    assert "finish_reason" in prefix + infix + suffix
+    assert "matched_stop" in prefix + infix + suffix
 
 
 def _median_render_us(render, rounds=3, iters=2000) -> float:
@@ -449,6 +468,12 @@ def test_microbench_template_not_slower_than_model():
         "template_us=%.3f exceeds baseline model_us=%.3f by >10%%"
         % (template_us, model_us)
     )
+    # The template path must actually be faster on this host; if it is not,
+    # the optimization is not worth keeping and the test should fail loudly.
+    assert template_us < model_us, (
+        "template_us=%.3f is not faster than model_us=%.3f"
+        % (template_us, model_us)
+    )
 
 
 def test_serialization_field_order_and_escapes():
@@ -477,6 +502,10 @@ def test_serialization_field_order_and_escapes():
         # JSON-equivalent: compare the raw text field substring.
         model_payload = json.loads(model_frame(REQUEST_ID, MODEL, 0, text)[len("data: ") : -2])
         assert payload["choices"][0]["text"] == model_payload["choices"][0]["text"]
+        # The raw JSON text field must be byte-identical, including escapes.
+        raw_text = json.dumps(text, ensure_ascii=False)
+        assert raw_text in frame
+        assert raw_text in model_frame(REQUEST_ID, MODEL, 0, text)
 
 
 def test_required_tests_are_collected():
@@ -570,5 +599,12 @@ def test_usage_and_logprobs_frames_keep_model_fields():
     payload = json.loads(chunk.model_dump_json())
     assert payload["usage"]["prompt_tokens"] == 3
     assert payload["usage"]["completion_tokens"] == 2
+    # The template path must not be used when usage is present: the template
+    # frame has no usage field, so a request with continuous usage must fall
+    # back. Guard the helper contract.
+    template = _delta_frame_template(REQUEST_ID, CREATED, MODEL)
+    assert template is not None
+    prefix, infix, suffix = template
+    assert "usage" not in prefix + infix + suffix
 
 
