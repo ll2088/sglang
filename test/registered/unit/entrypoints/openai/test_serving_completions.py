@@ -702,6 +702,18 @@ class ServingCompletionTestCase(unittest.TestCase):
         )
         self.assertIsNone(template)
 
+    def test_completion_delta_template_ambiguous_text_sentinel_returns_none(self):
+        """If the probe text sentinel collides with a constant field, the
+        template must be rejected rather than producing a corrupt frame."""
+        template = build_completion_delta_frame_template(
+            "cmpl-zZ_sglang_sse_probe_Zz",
+            1706000000,
+            "m",
+            CompletionStreamResponse,
+            CompletionResponseStreamChoice,
+        )
+        self.assertIsNone(template)
+
     def test_completion_delta_template_constant_fields(self):
         """The probe-derived template must carry the per-stream constants
         (id, created, model, object) and leave only index/text variable."""

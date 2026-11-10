@@ -91,9 +91,14 @@ def build_completion_delta_frame_template(
     index = str(_COMPLETION_PROBE_INDEX)
     # Must match the rendering path below, which uses ensure_ascii=False.
     text = json.dumps(_COMPLETION_PROBE_TEXT, ensure_ascii=False)
+    # Sentinels must be unambiguous: exactly one occurrence each, and the
+    # text sentinel must appear after the index sentinel so the split below
+    # yields a well-formed (prefix, infix, suffix) triple.
     if frame.count(index) != 1 or frame.count(text) != 1:
         return None
     prefix, rest = frame.split(index, 1)
+    if text not in rest:
+        return None
     infix, suffix = rest.split(text, 1)
     return prefix, infix, suffix
 
