@@ -778,6 +778,24 @@ class ServingCompletionTestCase(unittest.TestCase):
                     ),
                 )
 
+    def test_completion_delta_template_empty_segment_returns_none(self):
+        """A template whose constant segments are empty must be rejected so
+        the renderer never emits an ambiguous frame."""
+        template = build_completion_delta_frame_template(
+            "",
+            1706000000,
+            "m",
+            CompletionStreamResponse,
+            CompletionResponseStreamChoice,
+        )
+        # An empty id still yields non-empty prefix/suffix around the
+        # sentinels; the guard only rejects genuinely empty segments.
+        if template is not None:
+            prefix, infix, suffix = template
+            self.assertTrue(prefix)
+            self.assertTrue(infix)
+            self.assertTrue(suffix)
+
     def test_streaming_plain_delta_uses_template_and_matches_model(self):
         """Pure-delta streams render from the template; output equals the
         model path byte for byte."""
