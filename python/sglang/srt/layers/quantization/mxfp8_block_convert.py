@@ -60,6 +60,57 @@ def bf16_to_block_fp8_128(
     return qweight, scale
 
 
+def requant_block_fp8_to_mxfp8(
+    weight: torch.Tensor, scale: torch.Tensor
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Requantize block-FP8 weights to E4M3 with one UE8M0 scale per 1x32.
+
+    Inverse direction of :func:`convert_mxfp8_weight_to_block_fp8`: a
+    checkpoint stored as E4M3 with one float32 scale per ``[block_m, block_k]``
+    block is dequantized and re-quantized to the MXFP8 layout consumed by
+    block-scaled MMA kernels (power-of-two scale per row and 32 columns).
+
+    Args:
+        weight: ``[N, K]`` E4M3 values.
+        scale: ``[ceil(N/block_m), ceil(K/block_k)]`` float32 dequantization
+            scales (``real = weight * scale``).
+
+    Returns:
+        ``(qweight, scale_u8)``: E4M3 weights ``[N, K]`` and UE8M0 scale bytes
+        ``[N, K // 32]`` uint8.
+    """
+    n, k = weight.shape
+    if k % MXFP8_BLOCK_SIZE != 0:
+        raise ValueError(
+            f"requant_block_fp8_to_mxfp8 requires K divisible by "
+            f"{MXFP8_BLOCK_SIZE}, got {k}."
+        )
+    blocks_m, blocks_k = scale.shape
+    block_m = (n + blocks_m - 1) // blocks_m
+    block_k = (k + blocks_k - 1) // blocks_k
+    real = weight.to(torch.float32).view(
+        blocks_m, block_m, blocks_k, block_k
+    )
+    real = real * scale[:, None, :, None]
+    real = real.reshape(blocks_m * block_m, blocks_k * block_k)[:n, :k]
+    return _bf16_to_mxfp8_1x32(real)
+
+
+def _bf16_to_mxfp8_1x32(
+    weight: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Quantize a 2D fp32/bf16 tensor to E4M3 + UE8M0 scales per 1x32 block."""
+    n, k = weight.shape
+    x = weight.to(torch.float32).view(n, k // MXFP8_BLOCK_SIZE, MXFP8_BLOCK_SIZE)
+    amax = x.abs().amax(dim=-1).clamp(min=1e-30)
+    # Round the scale up to the next power of two so the mantissa fits E4M3.
+    scale_biased = torch.ceil(torch.log2(amax / 448.0)) + 127.0
+    scale_biased = scale_biased.clamp(min=0.0, max=254.0)
+    descale = torch.exp2(scale_biased - 127.0)
+    xq = (x / descale.unsqueeze(-1)).clamp(-448.0, 448.0).to(torch.float8_e4m3fn)
+    return xq.view(n, k).contiguous(), scale_biased.to(torch.uint8)
+
+
 def convert_mxfp8_weight_to_block_fp8(
     weight: torch.Tensor, scale_u8: torch.Tensor, block: int = 128
 ) -> Tuple[torch.Tensor, torch.Tensor]:
