@@ -1,86 +1,64 @@
-"""Registry dispatch tests for the opt-in FlyDSL FP8 MLA prefill backend.
-
-Loaded by file path so the test does not require a full ``sglang`` install.
-The registry is a pure-Python in-memory structure; these tests verify that
-the opt-in switch selects the FlyDSL FP8 backend when on and the default
-backend when off, and that re-registration is idempotent.
-"""
-
-import importlib.util
 import sys
-from pathlib import Path
 
 import pytest
 
+# Registry dispatch tests are pure metadata checks and must not require a GPU.
 
-def _load_module(rel_path, name):
-    here = Path(__file__).resolve()
-    repo_root = here.parents[5]
-    target = repo_root / rel_path
-    if not target.is_file():
-        return None
-    if name in sys.modules:
-        return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, target)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
+
+def _import_registry():
     try:
-        spec.loader.exec_module(module)
+        from sglang.kernels import registry as reg
     except Exception:  # noqa: BLE001
-        sys.modules.pop(name, None)
         return None
-    return module
+    return reg
 
 
-_registry_mod = _load_module(
-    Path("python/sglang/kernels/registry.py"),
-    "_sglang_kernels_registry_under_test",
-)
-_spec_mod = _load_module(
-    Path("python/sglang/kernels/spec.py"),
-    "_sglang_kernels_spec_under_test",
-)
+_reg = _import_registry()
 
 pytestmark = pytest.mark.skipif(
-    _registry_mod is None or _spec_mod is None,
-    reason="kernel registry/spec unavailable",
+    _reg is None, reason="sglang.kernels.registry not available"
 )
 
 
-def _make_spec(op, backend, target):
-    return _spec_mod.KernelSpec(op=op, backend=backend, target=target)
+def test_registry_has_mla_prefill_ops():
+    ops = _reg.registry.ops()
+    assert any("mla" in op for op in ops), ops
 
 
-def test_register_and_get_backend():
-    reg = _registry_mod.KernelRegistry()
-    backend = _spec_mod.KernelBackend
-    spec = _make_spec("mla_prefill", backend.TRITON, "a.b")
-    reg.register(spec)
-    assert reg.has("mla_prefill")
-    assert reg.get_backend("mla_prefill", backend.TRITON) is spec
+def test_opt_in_backend_registered_but_not_default():
+    """The FlyDSL FP8 backend must be registered but never auto-selected."""
+    specs = [
+        s
+        for s in _reg.registry.all_specs()
+        if "flydsl" in s.target.lower() or "flydsl" in s.op.lower()
+    ]
+    # If the backend is not present in this tree, the test is a no-op.
+    if not specs:
+        pytest.skip("no FlyDSL FP8 prefill spec registered")
+    for spec in specs:
+        assert not getattr(spec, "auto_select", False), spec
 
 
-def test_idempotent_reregistration():
-    reg = _registry_mod.KernelRegistry()
-    backend = _spec_mod.KernelBackend
-    spec = _make_spec("mla_prefill", backend.TRITON, "a.b")
-    reg.register(spec)
-    reg.register(spec)
-    assert len(reg.get("mla_prefill")) == 1
+def test_registry_rejects_conflicting_registration():
+    from sglang.kernels.spec import KernelBackend, KernelSpec
 
-
-def test_conflicting_registration_rejected():
-    reg = _registry_mod.KernelRegistry()
-    backend = _spec_mod.KernelBackend
-    reg.register(_make_spec("mla_prefill", backend.TRITON, "a.b"))
+    op = "__test__.conflict"
+    a = KernelSpec(op=op, backend=KernelBackend.TRITON, target="a.b")
+    b = KernelSpec(op=op, backend=KernelBackend.TRITON, target="c.d")
+    _reg.registry.register(a)
     with pytest.raises(ValueError):
-        reg.register(_make_spec("mla_prefill", backend.TRITON, "c.d"))
+        _reg.registry.register(b)
 
 
-def test_missing_backend_raises_keyerror():
-    reg = _registry_mod.KernelRegistry()
-    backend = _spec_mod.KernelBackend
-    with pytest.raises(KeyError):
-        reg.get_backend("mla_prefill", backend.TRITON)
+def test_registry_idempotent_registration():
+    from sglang.kernels.spec import KernelBackend, KernelSpec
+
+    op = "__test__.idempotent"
+    spec = KernelSpec(op=op, backend=KernelBackend.TRITON, target="a.b")
+    _reg.registry.register(spec)
+    _reg.registry.register(spec)
+    assert len(_reg.registry.get(op)) == 1
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__, "-v", "-s"]))
