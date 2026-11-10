@@ -12,6 +12,7 @@ import sys
 import pytest
 
 pytest.importorskip("torch", reason="torch is required for benchmark helper")
+pytest.importorskip("einops", reason="einops is required by the benchmark script")
 
 _BENCH_PATH = (
     pathlib.Path(__file__).resolve().parents[5]
