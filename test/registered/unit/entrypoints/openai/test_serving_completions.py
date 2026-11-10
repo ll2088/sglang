@@ -714,6 +714,18 @@ class ServingCompletionTestCase(unittest.TestCase):
         )
         self.assertIsNone(template)
 
+    def test_completion_delta_template_text_sentinel_before_index_returns_none(self):
+        """If the text sentinel appears before the index sentinel, the split
+        would produce a malformed triple; the template must be rejected."""
+        template = build_completion_delta_frame_template(
+            "cmpl-987654321",
+            1706000000,
+            "zZ_sglang_sse_probe_Zz",
+            CompletionStreamResponse,
+            CompletionResponseStreamChoice,
+        )
+        self.assertIsNone(template)
+
     def test_completion_delta_template_constant_fields(self):
         """The probe-derived template must carry the per-stream constants
         (id, created, model, object) and leave only index/text variable."""
