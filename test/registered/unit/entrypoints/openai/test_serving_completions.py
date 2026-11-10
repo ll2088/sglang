@@ -702,6 +702,58 @@ class ServingCompletionTestCase(unittest.TestCase):
         )
         self.assertIsNone(template)
 
+    def test_completion_delta_template_constant_fields(self):
+        """The probe-derived template must carry the per-stream constants
+        (id, created, model, object) and leave only index/text variable."""
+        created = 1706000000
+        chunk_id = "cmpl-const"
+        model = "some/model"
+        template = build_completion_delta_frame_template(
+            chunk_id,
+            created,
+            model,
+            CompletionStreamResponse,
+            CompletionResponseStreamChoice,
+        )
+        self.assertIsNotNone(template)
+        prefix, infix, suffix = template
+        self.assertIn(chunk_id, prefix)
+        self.assertIn(str(created), prefix)
+        self.assertIn(model, prefix)
+        self.assertIn('"object":"text_completion"', prefix)
+        self.assertIn('"index":', prefix)
+        self.assertIn('"text":', infix)
+        self.assertIn('"finish_reason":null', suffix)
+
+    def test_completion_delta_template_empty_and_boundary_text(self):
+        """Empty delta and first/last-frame boundary texts must render
+        byte-identically to the model path."""
+        created = 1706000000
+        chunk_id = "cmpl-boundary"
+        model = "m"
+        template = build_completion_delta_frame_template(
+            chunk_id,
+            created,
+            model,
+            CompletionStreamResponse,
+            CompletionResponseStreamChoice,
+        )
+        self.assertIsNotNone(template)
+        prefix, infix, suffix = template
+        for index, text in [(0, ""), (0, "first"), (3, "last")]:
+            with self.subTest(index=index, text=text):
+                frame = (
+                    f"{prefix}{index}{infix}"
+                    f"{json.dumps(text, ensure_ascii=False)}"
+                    f"{suffix}"
+                )
+                self.assertEqual(
+                    frame,
+                    self._model_completion_frame(
+                        chunk_id, created, model, index, text
+                    ),
+                )
+
     def test_streaming_plain_delta_uses_template_and_matches_model(self):
         """Pure-delta streams render from the template; output equals the
         model path byte for byte."""
@@ -747,6 +799,50 @@ class ServingCompletionTestCase(unittest.TestCase):
                     "cmpl-parity", created, "x", 0, text
                 ),
             )
+
+    def test_streaming_continuous_usage_falls_back_to_model_path(self):
+        """Continuous usage stats must keep the model path so usage is
+        emitted on every chunk."""
+
+        async def _mock_generate(*args, **kwargs):
+            yield {
+                "text": "Hello",
+                "meta_info": {
+                    "id": "cmpl-usage",
+                    "prompt_tokens": 2,
+                    "completion_tokens": 1,
+                    "cached_tokens": 0,
+                    "finish_reason": None,
+                },
+                "index": 0,
+            }
+
+        self.sc.tokenizer_manager.generate_request = _mock_generate
+        req = CompletionRequest(
+            model="x",
+            prompt="Hi",
+            max_tokens=10,
+            stream=True,
+            stream_options={
+                "include_usage": True,
+                "continuous_usage_stats": True,
+            },
+        )
+        adapted_request, _ = self.sc._convert_to_internal_request(req)
+
+        async def run_stream():
+            return [
+                chunk
+                async for chunk in self.sc._generate_completion_stream(
+                    adapted_request, req, self.fastapi_request
+                )
+            ]
+
+        chunks = get_or_create_event_loop().run_until_complete(run_stream())
+        self.assertEqual(chunks[-1], "data: [DONE]\n\n")
+        data = json.loads(chunks[0][len("data: ") :])
+        self.assertEqual(data["choices"][0]["text"], "Hello")
+        self.assertIn("usage", data)
 
     def test_streaming_non_plain_delta_falls_back_to_model_path(self):
         """Requests with logprobs/echo/token_ids or terminal chunks keep the

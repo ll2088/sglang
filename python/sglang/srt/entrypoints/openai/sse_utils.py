@@ -89,7 +89,8 @@ def build_completion_delta_frame_template(
     )
     frame = f"data: {probe.model_dump_json()}\n\n"
     index = str(_COMPLETION_PROBE_INDEX)
-    text = json.dumps(_COMPLETION_PROBE_TEXT)
+    # Must match the rendering path below, which uses ensure_ascii=False.
+    text = json.dumps(_COMPLETION_PROBE_TEXT, ensure_ascii=False)
     if frame.count(index) != 1 or frame.count(text) != 1:
         return None
     prefix, rest = frame.split(index, 1)
