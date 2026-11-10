@@ -10,6 +10,8 @@ import torch
 import triton
 import triton.language as tl
 
+# The kernels below need a CUDA/ROCm device; the module itself stays importable
+# on CPU-only hosts so the registry can inventory it without a GPU.
 FP8_MAX = 448.0
 MIN_DESCALE = 1e-6
 
@@ -61,6 +63,11 @@ def _quant_kernel(
 
 
 def _quant_one(x: torch.Tensor):
+    if not x.is_cuda:
+        raise RuntimeError(
+            "fused_per_tensor_fp8_quant requires a CUDA/ROCm tensor; "
+            f"got device {x.device}"
+        )
     n = x.numel()
     partial = torch.empty(_PARTS, dtype=torch.float32, device=x.device)
     scale = torch.empty(1, dtype=torch.float32, device=x.device)
