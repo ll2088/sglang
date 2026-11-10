@@ -104,6 +104,70 @@ def test_normalize_kv_descale_none_and_scalar():
     assert policy.normalize_kv_descale(0.5, batch=2, heads=4) == 0.5
 
 
+def test_normalize_kv_descale_python_layouts():
+    # Torch-free path: nested Python sequences must normalize identically.
+    out = policy.normalize_kv_descale([0.25], batch=2, heads=4)
+    assert out == [[0.25] * 4, [0.25] * 4]
+    out = policy.normalize_kv_descale([1.0, 2.0, 3.0, 4.0], batch=2, heads=4)
+    assert out == [[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0]]
+    out = policy.normalize_kv_descale([[1.0, 2.0, 3.0, 4.0]], batch=2, heads=4)
+    assert out == [[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0]]
+    with pytest.raises(ValueError):
+        policy.normalize_kv_descale([1.0, 2.0, 3.0], batch=2, heads=4)
+
+
+def test_is_sm90_fp8_kv_mma_dtypes_torch_free():
+    # dtype-name based gating must work without torch tensors.
+    assert policy.is_sm90_fp8_kv_mma_dtypes(
+        "bfloat16",
+        "float8_e4m3fn",
+        "float8_e4m3fn",
+        512,
+        512,
+        512,
+        True,
+        (None, None),
+        device_capability_major=9,
+    )
+    assert not policy.is_sm90_fp8_kv_mma_dtypes(
+        "bfloat16",
+        "float8_e4m3fn",
+        "float8_e4m3fn",
+        256,
+        256,
+        256,
+        True,
+        (None, None),
+        device_capability_major=9,
+    )
+    assert not policy.is_sm90_fp8_kv_mma_dtypes(
+        "bfloat16",
+        "float8_e4m3fn",
+        "float8_e4m3fn",
+        512,
+        512,
+        512,
+        True,
+        (None, None),
+        device_capability_major=10,
+    )
+
+
+def test_gemma4_full_attention_d512_split_selection():
+    # Gemma-4 full attention: d512, GQA 4:1, H200-class SM count.
+    assert (
+        policy.select_num_splits(
+            fa_version=4,
+            max_seqlen_k=32768,
+            num_heads=32,
+            num_kv_heads=8,
+            num_sms=132,
+            is_fp8_mma=True,
+        )
+        == 4
+    )
+
+
 torch = pytest.importorskip("torch", reason="tensor descale cases need torch")
 
 

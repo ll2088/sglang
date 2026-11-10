@@ -29,6 +29,24 @@ def _device_capability_major(device_capability_major: Optional[int]) -> Optional
         return None
 
 
+def _dtype_name(dtype) -> str:
+    """Return a stable dtype name without importing torch."""
+    if dtype is None:
+        return ""
+    name = getattr(dtype, "__name__", None)
+    if name:
+        return str(name)
+    return str(dtype).rsplit(".", 1)[-1]
+
+
+def _is_fp8_e4m3(dtype) -> bool:
+    return _dtype_name(dtype) in ("float8_e4m3fn", "float8_e4m3fnuz")
+
+
+def _is_fp16_or_bf16(dtype) -> bool:
+    return _dtype_name(dtype) in ("float16", "bfloat16", "half", "BFloat16", "Half")
+
+
 def is_sm90_fp8_kv_mma(
     q,
     k,
@@ -41,13 +59,9 @@ def is_sm90_fp8_kv_mma(
     """Return True when the call should take the SM90 d512 FP8-MMA kernel."""
     if _device_capability_major(device_capability_major) != 9:
         return False
-    try:
-        import torch
-    except ImportError:
+    if not _is_fp8_e4m3(k.dtype) or not _is_fp8_e4m3(v.dtype):
         return False
-    if k.dtype != torch.float8_e4m3fn or v.dtype != torch.float8_e4m3fn:
-        return False
-    if q.dtype not in (torch.float16, torch.bfloat16):
+    if not _is_fp16_or_bf16(q.dtype):
         return False
     if not (q.shape[-1] == k.shape[-1] == v.shape[-1] == SM90_FP8_MMA_HEAD_DIM):
         return False
@@ -77,13 +91,9 @@ def is_sm90_fp8_kv_mma_dtypes(
     """Torch-free variant of :func:`is_sm90_fp8_kv_mma` for host-side tests."""
     if _device_capability_major(device_capability_major) != 9:
         return False
-    try:
-        import torch
-    except ImportError:
+    if not _is_fp8_e4m3(k_dtype) or not _is_fp8_e4m3(v_dtype):
         return False
-    if k_dtype != torch.float8_e4m3fn or v_dtype != torch.float8_e4m3fn:
-        return False
-    if q_dtype not in (torch.float16, torch.bfloat16):
+    if not _is_fp16_or_bf16(q_dtype):
         return False
     if not (q_head_dim == k_head_dim == v_head_dim == SM90_FP8_MMA_HEAD_DIM):
         return False
@@ -110,10 +120,10 @@ def normalize_kv_descale(descale, *, batch: int, heads: int):
         return float(descale)
     try:
         import torch
-    except ImportError as exc:  # pragma: no cover - torch is a hard dep in-tree
-        raise RuntimeError(
-            "normalize_kv_descale needs torch for tensor descales"
-        ) from exc
+    except ImportError:
+        # Torch-free fallback: accept nested Python sequences so the routing
+        # policy stays testable on a CPU-only runner without torch.
+        return _normalize_kv_descale_py(descale, batch=batch, heads=heads)
 
     if not isinstance(descale, torch.Tensor):
         raise ValueError(f"Unsupported descale type: {type(descale)!r}")
@@ -139,6 +149,33 @@ def normalize_kv_descale(descale, *, batch: int, heads: int):
             return t.reshape(batch, heads).contiguous()
         raise ValueError(f"4-D descale must be (1,1,1,1) or ({batch},{heads},1,1), got {tuple(t.shape)}")
     raise ValueError(f"Unsupported descale ndim={t.ndim}")
+
+
+def _normalize_kv_descale_py(descale, *, batch: int, heads: int):
+    """Torch-free descale normalization for nested Python sequences."""
+    if isinstance(descale, (list, tuple)):
+        if len(descale) == 1 and isinstance(descale[0], (list, tuple)):
+            row = list(descale[0])
+            if len(row) == 1:
+                return [[float(row[0])] * heads for _ in range(batch)]
+            if len(row) == heads:
+                return [[float(x) for x in row] for _ in range(batch)]
+            raise ValueError(
+                f"2-D descale must be (1, {heads}) or ({batch}, {heads}), got (1, {len(row)})"
+            )
+        if len(descale) == batch and all(
+            isinstance(r, (list, tuple)) and len(r) == heads for r in descale
+        ):
+            return [[float(x) for x in r] for r in descale]
+        if len(descale) == 1:
+            return [[float(descale[0])] * heads for _ in range(batch)]
+        if len(descale) == heads:
+            row = [float(x) for x in descale]
+            return [list(row) for _ in range(batch)]
+        raise ValueError(
+            f"1-D descale must have 1 or {heads} elements, got {len(descale)}"
+        )
+    raise ValueError(f"Unsupported descale type: {type(descale)!r}")
 
 
 def select_num_splits(

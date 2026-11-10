@@ -320,12 +320,18 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     if flash_attn_cute_fwd is None:
-        raise RuntimeError(
+        # Skip instead of failing so CPU-only CI can collect this benchmark.
+        import pytest
+
+        pytest.skip(
             "FA4 CuTe interface is unavailable; install flash-attn-4 with its "
-            "CUDA/CUTE dependencies before running this benchmark."
-        ) from _FA4_IMPORT_ERROR
+            "CUDA/CUTE dependencies before running this benchmark.",
+            allow_module_level=True,
+        )
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is required")
+        import pytest
+
+        pytest.skip("CUDA is required", allow_module_level=True)
     major, minor = torch.cuda.get_device_capability()
     if major != 10:
         raise RuntimeError(
