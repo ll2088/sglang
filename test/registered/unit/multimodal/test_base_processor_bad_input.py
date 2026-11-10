@@ -18,6 +18,7 @@ import requests
 from PIL import Image
 
 from sglang.srt.managers.schedule_batch import Modality
+from sglang.srt.multimodal.mm_utils import load_image_from_base64
 from sglang.srt.multimodal.processors.base_processor import BaseMultimodalProcessor
 from sglang.srt.utils.common import CLIENT_MEDIA_EXCEPTIONS
 from sglang.test.test_utils import CustomTestCase
@@ -76,6 +77,38 @@ class TestBadInputIsClientError(CustomTestCase):
                 ) as ctx:
                     _StubProcessor._load_single_item(media, Modality.IMAGE)
                 self.assertIsInstance(ctx.exception.__cause__.__cause__, OSError)
+
+    def test_decompression_bomb_image_bytes(self):
+        # Pillow raises DecompressionBombError (not an OSError) above its
+        # pixel limit; it must be reported as a client-side ValueError.
+        with patch.object(Image, "MAX_IMAGE_PIXELS", 50):
+            buf = io.BytesIO()
+            Image.new("RGB", (20, 20), (0, 255, 0)).save(buf, format="PNG")
+            data = buf.getvalue()
+            with self.assertRaisesRegex(
+                ValueError, "Could not decode image"
+            ) as ctx:
+                _StubProcessor._load_single_item(data, Modality.IMAGE)
+            self.assertIsInstance(
+                ctx.exception.__cause__.__cause__, Image.DecompressionBombError
+            )
+
+    def test_decompression_bomb_mm_utils(self):
+        with patch.object(Image, "MAX_IMAGE_PIXELS", 50):
+            buf = io.BytesIO()
+            Image.new("RGB", (20, 20), (0, 255, 0)).save(buf, format="PNG")
+            encoded = base64.b64encode(buf.getvalue()).decode()
+            with self.assertRaisesRegex(
+                ValueError, "Failed to load image"
+            ) as ctx:
+                load_image_from_base64(encoded)
+            self.assertIsInstance(ctx.exception.__cause__, Image.DecompressionBombError)
+
+    def test_normal_image_still_decodes(self):
+        buf = io.BytesIO()
+        Image.new("RGB", (8, 8), (1, 2, 3)).save(buf, format="PNG")
+        image = load_image_from_base64(base64.b64encode(buf.getvalue()).decode())
+        self.assertEqual(image.size, (8, 8))
 
     def test_undecodable_audio_bytes(self):
         # soundfile raises LibsndfileError, a RuntimeError -- not a ValueError.
