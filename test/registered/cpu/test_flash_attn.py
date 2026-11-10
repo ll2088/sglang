@@ -262,15 +262,19 @@ class TestFlashAttn(CustomTestCase):
         assert out.shape == (total, num_heads, head_dim)
 
         # A per-batch index tensor with the wrong length must be rejected.
-        for bad in (
-            torch.tensor([], dtype=torch.int32),
-            torch.tensor([seqlen], dtype=torch.int32),
-            torch.tensor([seqlen, seqlen, seqlen], dtype=torch.int32),
-        ):
-            with self.assertRaises((RuntimeError, AssertionError, ValueError)):
+        # Slices of one buffer reproduce the out-of-bounds read scenario: the
+        # memory right after a short slice holds valid indices.
+        buf = torch.tensor([seqlen, seqlen, seqlen], dtype=torch.int32)
+        for bad in (buf[:0], buf[:1], buf):  # 0, 1 and 3 indices for 2 sequences
+            with self.assertRaises((RuntimeError, AssertionError, ValueError)) as ctx:
                 flash_attn_varlen_func(
                     q, k, v, cu_seqlens, cu_seqlens, seqlen, seqlen, False, seqused_k=bad
                 )
+            msg = str(ctx.exception)
+            self.assertTrue(
+                "seqused_k" in msg or "shape" in msg or "batch" in msg,
+                f"error message should mention the offending tensor or shape, got: {msg}",
+            )
 
 
 if __name__ == "__main__":

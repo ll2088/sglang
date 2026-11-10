@@ -73,19 +73,21 @@ def test_stage1_seqused_k_length_must_equal_batch_size():
         causal=False,
     )
 
-    # Positive control: one index per sequence must NOT raise.
-    out = sgl.infllmv2_attn_stage1(
-        q, k, k, seqused_k=torch.tensor([seqlen_k], dtype=torch.int32, device="cuda"), **common
-    )
+    # Positive control: one index per sequence must NOT raise, and must match
+    # the reference output (fixed seed) so the valid path is not regressed.
+    seqused_k_ok = torch.tensor([seqlen_k], dtype=torch.int32, device="cuda")
+    out = sgl.infllmv2_attn_stage1(q, k, k, seqused_k=seqused_k_ok, **common)
+    out_ref = ref.infllmv2_attn_stage1(q, k, k, seqused_k=seqused_k_ok, **common)
     assert out.shape == (seqlen_q, n_heads, head_dim)
     assert not out.isnan().any()
+    _assert_close(out, out_ref, "stage1_seqused_k")
 
     # Regression: a seqused_k whose length is not batch_size must be rejected.
     # Slices of one buffer, as in the upstream issue: the memory right after a
     # short slice holds valid indices, so only the explicit length check catches it.
     buf = torch.tensor([seqlen_k, seqlen_k, seqlen_k], dtype=torch.int32, device="cuda")
     for seqused_k in (buf[:0], buf[:2], buf):  # 0, 2 and 3 indices for 1 sequence
-        with pytest.raises(RuntimeError, match="seqused_k must have shape"):
+        with pytest.raises(RuntimeError, match=r"seqused_k must have shape \(1\)"):
             sgl.infllmv2_attn_stage1(q, k, k, seqused_k=seqused_k, **common)
 
 
@@ -107,17 +109,19 @@ def test_stage1_leftpad_k_length_must_equal_batch_size():
         causal=False,
     )
 
-    # Positive control: one index per sequence must NOT raise.
-    out = sgl.infllmv2_attn_stage1(
-        q, k, k, leftpad_k=torch.tensor([0], dtype=torch.int32, device="cuda"), **common
-    )
+    # Positive control: one index per sequence must NOT raise, and must match
+    # the reference output (fixed seed) so the valid path is not regressed.
+    leftpad_k_ok = torch.tensor([0], dtype=torch.int32, device="cuda")
+    out = sgl.infllmv2_attn_stage1(q, k, k, leftpad_k=leftpad_k_ok, **common)
+    out_ref = ref.infllmv2_attn_stage1(q, k, k, leftpad_k=leftpad_k_ok, **common)
     assert out.shape == (seqlen_q, n_heads, head_dim)
     assert not out.isnan().any()
+    _assert_close(out, out_ref, "stage1_leftpad_k")
 
     # Regression: a leftpad_k whose length is not batch_size must be rejected.
     buf = torch.tensor([0, 0, 0], dtype=torch.int32, device="cuda")
     for leftpad_k in (buf[:0], buf[:2], buf):  # 0, 2 and 3 indices for 1 sequence
-        with pytest.raises(RuntimeError, match="leftpad_k must have shape"):
+        with pytest.raises(RuntimeError, match=r"leftpad_k must have shape \(1\)"):
             sgl.infllmv2_attn_stage1(q, k, k, leftpad_k=leftpad_k, **common)
 
 
