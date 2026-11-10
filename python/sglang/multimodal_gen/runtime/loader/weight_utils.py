@@ -6,6 +6,7 @@
 
 import hashlib
 import os
+import random
 import tempfile
 from collections import defaultdict
 from collections.abc import Callable, Generator, Iterable
@@ -42,6 +43,7 @@ def checkpoint_weights_iterator(
     to_cpu: bool = True,
     key_filter: Callable[[str], bool] | None = None,
     index_file: str = _DEFAULT_SAFETENSORS_INDEX,
+    shuffle_safetensors_files: bool | None = None,
 ) -> Generator[tuple[str, torch.Tensor], None, None]:
     """Read a materialized component checkpoint, preferring indexed safetensors."""
     files = _list_safetensors_files(
@@ -49,7 +51,10 @@ def checkpoint_weights_iterator(
     )
     if files:
         yield from safetensors_weights_iterator(
-            files, to_cpu=to_cpu, key_filter=key_filter
+            files,
+            to_cpu=to_cpu,
+            key_filter=key_filter,
+            shuffle_safetensors_files=shuffle_safetensors_files,
         )
         return
     if os.path.isfile(model_path):
@@ -216,6 +221,41 @@ def _raise_if_duplicate_safetensors_keys(
     )
 
 
+_SHUFFLE_SAFETENSORS_FILES_ENV = "SGLANG_SHUFFLE_SAFETENSORS_FILES"
+
+
+def _shuffle_files_enabled_from_env() -> bool:
+    """Opt-in default for file shuffling: off unless the env var is truthy."""
+    value = os.environ.get(_SHUFFLE_SAFETENSORS_FILES_ENV, "").strip().lower()
+    return value in ("1", "true", "yes", "on")
+
+
+def _get_shuffle_rank() -> int:
+    """Rank used to seed the shuffle, 0 outside distributed execution."""
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        return torch.distributed.get_rank()
+    return 0
+
+
+def _shuffle_files(hf_weights_files: list[str], seed_offset: int = 0) -> list[str]:
+    """Return *hf_weights_files* shuffled with a rank-dependent seed.
+
+    Sorting first makes the permutation depend only on the file set and the
+    rank, not on the order in which the caller discovered the files.
+    """
+    rank = _get_shuffle_rank()
+    seed = rank + seed_offset
+    shuffled = sorted(hf_weights_files)
+    random.Random(seed).shuffle(shuffled)
+    logger.info(
+        "Shuffled %d safetensors files with seed %d (rank %d)",
+        len(shuffled),
+        seed,
+        rank,
+    )
+    return shuffled
+
+
 def safetensors_weights_iterator(
     hf_weights_files: list[str],
     to_cpu: bool = True,
@@ -223,8 +263,20 @@ def safetensors_weights_iterator(
     key_filter: Callable[[str], bool] | None = None,
     clone_streamed_tensors: bool = True,
     weight_load_plan: WeightLoadPlan | None = None,
+    shuffle_safetensors_files: bool | None = None,
 ) -> Generator[tuple[str, torch.Tensor], None, None]:
-    """Iterate over the weights in the model safetensor files."""
+    """Iterate over the weights in the model safetensor files.
+
+    When ``shuffle_safetensors_files`` is enabled the file list is shuffled
+    with a seed derived from the distributed rank, so ranks read different
+    files first and startup I/O contention drops. The set of files is
+    unchanged and the order is reproducible per rank. ``None`` falls back to
+    the SGLANG_SHUFFLE_SAFETENSORS_FILES env var (default: disabled).
+    """
+    if shuffle_safetensors_files is None:
+        shuffle_safetensors_files = _shuffle_files_enabled_from_env()
+    if shuffle_safetensors_files:
+        hf_weights_files = _shuffle_files(hf_weights_files)
     enable_tqdm = (
         not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
     )
