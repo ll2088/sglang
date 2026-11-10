@@ -262,6 +262,17 @@ def format_fp8_vs_bf16_metrics(*, fp8_median_ms: float, bf16_median_ms: float) -
     }
 
 
+def median_ms(samples: Iterable[float]) -> float:
+    """Return the median of latency samples, or NaN when empty."""
+    values = sorted(float(s) for s in samples)
+    if not values:
+        return float("nan")
+    mid = len(values) // 2
+    if len(values) % 2:
+        return values[mid]
+    return 0.5 * (values[mid - 1] + values[mid])
+
+
 def format_fp8_vs_bf16_summary(*, fp8_median_ms: float, bf16_median_ms: float) -> str:
     """Format the FP8-vs-BF16 median latency comparison line.
 
