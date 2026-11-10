@@ -71,6 +71,11 @@ _TRITON_KERNELS = [
     ("mla_prefill_fp8_selector", "select_mla_prefill_backend"),
     ("mla_prefill_fp8_selector", "resolve_mla_prefill_kernel"),
 ]
+# The selector pair above is registered exactly once; keep the inventory free of
+# duplicate (op, backend) entries so registry.register stays idempotent.
+assert len({(m, f) for m, f in _TRITON_KERNELS}) == len(_TRITON_KERNELS), (
+    "duplicate Triton kernel entry in _TRITON_KERNELS"
+)
 for _mod, _fn in _TRITON_KERNELS:
     register_kernel(
         KernelSpec(

@@ -7,11 +7,21 @@ importable without torch/triton.
 from __future__ import annotations
 
 import torch
-import triton
-import triton.language as tl
 
 # The kernels below need a CUDA/ROCm device; the module itself stays importable
-# on CPU-only hosts so the registry can inventory it without a GPU.
+# on CPU-only hosts so the registry can inventory it without a GPU. Triton is
+# optional at import time: without it the public entry points raise instead of
+# breaking `import sglang.kernels.ops.attention`.
+try:
+    import triton
+    import triton.language as tl
+
+    _HAS_TRITON = True
+except ImportError:  # pragma: no cover - exercised on CPU-only hosts
+    triton = None
+    tl = None
+    _HAS_TRITON = False
+
 FP8_MAX = 448.0
 MIN_DESCALE = 1e-6
 
@@ -19,8 +29,10 @@ _BLOCK = 4096
 _PARTS = 256
 
 
-@triton.jit
-def _partial_amax_kernel(
+if _HAS_TRITON:
+
+    @triton.jit
+    def _partial_amax_kernel(
     X,
     Partial,
     N,
@@ -34,11 +46,10 @@ def _partial_amax_kernel(
         offsets = start + step * PARTS * BLOCK + tl.arange(0, BLOCK)
         x = tl.load(X + offsets, offsets < N, other=0.0).to(tl.float32)
         acc = tl.maximum(acc, tl.abs(x))
-    tl.store(Partial + pid, tl.max(acc, 0))
+        tl.store(Partial + pid, tl.max(acc, 0))
 
-
-@triton.jit
-def _quant_kernel(
+    @triton.jit
+    def _quant_kernel(
     X,
     Y,
     Partial,
@@ -58,11 +69,16 @@ def _quant_kernel(
         descale = tl.where(amax > 0, amax / FP8_MAX, MIN_DESCALE)
         y = tl.maximum(tl.minimum(x / descale, FP8_MAX), -FP8_MAX)
         tl.store(Y + offsets, y.to(Y.dtype.element_ty), offsets < N)
-        if pid == 0:
-            tl.store(Scale, descale)
+            if pid == 0:
+                tl.store(Scale, descale)
 
 
 def _quant_one(x: torch.Tensor):
+    if not _HAS_TRITON:
+        raise RuntimeError(
+            "fused_per_tensor_fp8_quant requires triton; install it or use "
+            "reference_per_tensor_fp8_quant"
+        )
     if not x.is_cuda:
         raise RuntimeError(
             "fused_per_tensor_fp8_quant requires a CUDA/ROCm tensor; "
