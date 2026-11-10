@@ -239,6 +239,78 @@ class TestFlashAttn(CustomTestCase):
         # returns True → dispatches to flash_attn_varlen_kernel_impl
         self._test_flash_attn_large_seq_causal_mask_once([5000, 4999])
 
+    def _skip_if_free_memory_below(self, gib):
+        if not torch.cuda.is_available():
+            self.skipTest("needs CUDA")
+        free, _ = torch.cuda.mem_get_info()
+        if free < gib * 2**30:
+            self.skipTest(f"needs {gib} GiB of free GPU memory")
+
+    def _with_row_stride(self, x, row_stride):
+        """Return the values of `x` (batch 1) with consecutive rows `row_stride` elements apart."""
+        _, seqlen, nheads, d = x.shape
+        buf = torch.empty(
+            (seqlen - 1) * row_stride + nheads * d, device=x.device, dtype=x.dtype
+        )
+        y = buf.as_strided(x.shape, (seqlen * row_stride, row_stride, d, 1))
+        y.copy_(x)
+        return y
+
+    def test_flash_attn_kvcache_large_row_stride(self):
+        # The split-KV kernel steps K/V back one block of kBlockN rows at a time.
+        # A row stride of 2**31 / kBlockN or more used to wrap in 32-bit arithmetic.
+        self._skip_if_free_memory_below(12)
+        torch.random.manual_seed(0)
+        device, dtype = "cuda", torch.bfloat16
+        nheads, d, row_stride = 2, 256, 2**25 + 128
+        seqlen_k = 65
+        q = torch.randn(1, 1, nheads, d, device=device, dtype=dtype)
+        k_cache = torch.randn(1, seqlen_k, nheads, d, device=device, dtype=dtype)
+        v_cache = torch.randn_like(k_cache)
+        kwargs = dict(
+            cache_batch_idx=torch.zeros(1, device=device, dtype=torch.int32),
+            num_splits=1,
+        )
+
+        def run(strided_name):
+            args = {"k_cache": k_cache.clone(), "v_cache": v_cache.clone()}
+            if strided_name is not None:
+                args[strided_name] = self._with_row_stride(args[strided_name], row_stride)
+            out = flash_attn_with_kvcache(
+                q, args["k_cache"], args["v_cache"], **kwargs
+            )
+            return out, args["k_cache"], args["v_cache"]
+
+        out_ref, k_cache_ref, v_cache_ref = run(None)
+        out, k_cache_out, v_cache_out = run("k_cache")
+        torch.cuda.synchronize()
+        self.assertTrue(torch.equal(out, out_ref))
+        self.assertTrue(torch.equal(k_cache_out, k_cache_ref))
+        self.assertTrue(torch.equal(v_cache_out, v_cache_ref))
+
+    def test_flash_attn_kvcache_splitkv_large_accum(self):
+        # The split-KV out_accum offsets and the combine kernel's offsets were
+        # 32-bit products; compare against the unsplit kernel.
+        self._skip_if_free_memory_below(16)
+        torch.random.manual_seed(0)
+        device, dtype = "cuda", torch.bfloat16
+        nheads, d, seqlen_q, num_splits = 2, 128, 81920, 16
+        q = torch.randn(1, seqlen_q, nheads, d, device=device, dtype=dtype)
+        k_cache = torch.randn(1, 128, nheads, d, device=device, dtype=dtype)
+        v_cache = torch.randn_like(k_cache)
+        kwargs = dict(
+            cache_batch_idx=torch.zeros(1, device=device, dtype=torch.int32),
+            cache_seqlens=torch.full((1,), 128, device=device, dtype=torch.int32),
+        )
+        out_ref = flash_attn_with_kvcache(
+            q, k_cache, v_cache, num_splits=1, **kwargs
+        )
+        out = flash_attn_with_kvcache(
+            q, k_cache, v_cache, num_splits=num_splits, **kwargs
+        )
+        torch.cuda.synchronize()
+        torch.testing.assert_close(out, out_ref, atol=1e-2, rtol=1e-2)
+
 
 if __name__ == "__main__":
     unittest.main()
