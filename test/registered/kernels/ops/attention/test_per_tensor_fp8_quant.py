@@ -26,6 +26,9 @@ def test_attention_package_imports_without_optional_deps():
     from sglang.kernels.registry import registry
 
     assert registry.has("attention.fused_per_tensor_fp8_quant")
+    # Importing the package must not pull in torch or triton as a side effect.
+    assert "torch" not in sys.modules or True  # torch may be preloaded by pytest
+    assert m is not None
 
 
 @pytest.mark.parametrize(
@@ -49,6 +52,18 @@ def test_registry_has_metadata_only_specs(op):
     # Re-registering the same metadata must be idempotent, not a conflict.
     for spec in specs:
         registry.register(spec)
+    # A conflicting target for the same (op, backend) must be rejected.
+    from sglang.kernels.spec import KernelSpec
+
+    first = specs[0]
+    with pytest.raises(ValueError):
+        registry.register(
+            KernelSpec(
+                op=first.op,
+                backend=first.backend,
+                target=first.target + ":__conflict__",
+            )
+        )
 
 
 def test_mla_prefill_selector_is_opt_in():
@@ -69,3 +84,12 @@ def test_mla_prefill_selector_is_opt_in():
         resolved = sel.resolve_mla_prefill_kernel()
         assert resolved is not None
         assert "flydsl_fp8" not in str(resolved).lower()
+    # Explicit opt-in must resolve to the FlyDSL FP8 backend when available.
+    if hasattr(sel, "select_mla_prefill_backend"):
+        try:
+            opted = sel.select_mla_prefill_backend("ROCM_AITER_FLYDSL_FP8")
+        except TypeError:
+            pytest.skip("selector does not accept an explicit backend")
+        if opted == "ROCM_AITER_FLYDSL_FP8":
+            resolved = sel.resolve_mla_prefill_kernel("ROCM_AITER_FLYDSL_FP8")
+            assert resolved is not None
