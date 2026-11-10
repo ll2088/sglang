@@ -337,6 +337,8 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
     TORCH_CHECK(seqused_k_.dtype() == torch::kInt32, "seqused_k must have dtype int32");
     TORCH_CHECK(seqused_k_.is_cuda(), "seqused_k must be on CUDA device");
     TORCH_CHECK(seqused_k_.is_contiguous(), "seqused_k must be contiguous");
+    // The kernel indexes seqused_k[b] for every b < batch_size, so a shorter
+    // tensor would be read past its end. Require exactly (batch_size,).
     CHECK_SHAPE(seqused_k_, batch_size);
   }
 
@@ -441,6 +443,7 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
     TORCH_CHECK(leftpad_k.dtype() == torch::kInt32, "leftpad_k must have dtype int32");
     CHECK_DEVICE(leftpad_k);
     CHECK_CONTIGUOUS(leftpad_k);
+    // Same as seqused_k: the kernel indexes leftpad_k[b] for every b < batch_size.
     CHECK_SHAPE(leftpad_k, batch_size);
     params.leftpad_k = static_cast<int*>(leftpad_k.data_ptr());
   }

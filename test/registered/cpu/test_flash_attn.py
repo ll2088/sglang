@@ -239,6 +239,39 @@ class TestFlashAttn(CustomTestCase):
         # returns True → dispatches to flash_attn_varlen_kernel_impl
         self._test_flash_attn_large_seq_causal_mask_once([5000, 4999])
 
+    def test_flash_attn_varlen_index_tensor_length_check(self):
+        # Mirrors the upstream cache_batch_idx length check: any tensor the
+        # kernel indexes per batch must have length batch_size. The CPU
+        # reference path has no such kernel, so this only asserts that the
+        # entry point is collectable and that a mismatched length is rejected
+        # by the Python wrapper when it validates shapes.
+        batch, seqlen, num_heads, head_dim = 2, 8, 4, 32
+        dtype = torch.bfloat16
+        seqlens = torch.full((batch,), seqlen, dtype=torch.int32)
+        cu_seqlens = torch.zeros((batch + 1,), dtype=torch.int32)
+        cu_seqlens[1:] = torch.cumsum(seqlens, 0)
+        total = cu_seqlens[-1].item()
+        q = torch.randn(total, num_heads, head_dim, dtype=dtype)
+        k = torch.randn(total, num_heads, head_dim, dtype=dtype)
+        v = torch.randn(total, num_heads, head_dim, dtype=dtype)
+
+        # Positive control: one index per sequence must NOT raise.
+        out = flash_attn_varlen_func(
+            q, k, v, cu_seqlens, cu_seqlens, seqlen, seqlen, False
+        )
+        assert out.shape == (total, num_heads, head_dim)
+
+        # A per-batch index tensor with the wrong length must be rejected.
+        for bad in (
+            torch.tensor([], dtype=torch.int32),
+            torch.tensor([seqlen], dtype=torch.int32),
+            torch.tensor([seqlen, seqlen, seqlen], dtype=torch.int32),
+        ):
+            with self.assertRaises((RuntimeError, AssertionError, ValueError)):
+                flash_attn_varlen_func(
+                    q, k, v, cu_seqlens, cu_seqlens, seqlen, seqlen, False, seqused_k=bad
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
