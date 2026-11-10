@@ -35,6 +35,11 @@ on:
         required: false
         default: ""
         type: string
+      runner:
+        description: "Runner label: self-hosted when the repo has one, otherwise GitHub-hosted"
+        required: false
+        default: "ubuntu-latest"
+        type: string
 
 permissions:
   contents: read
@@ -46,7 +51,7 @@ concurrency:
 jobs:
   pick:
     name: dimensions
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.pick.outputs.matrix }}
@@ -64,7 +69,7 @@ jobs:
   validation:
     name: ${{ matrix.dimension.key }}
     needs: pick
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -85,7 +90,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
-          path: .mergelens-runner
+          path: .jump-runner
           fetch-depth: 1
           persist-credentials: false
           sparse-checkout: |
@@ -100,14 +105,14 @@ jobs:
 
       - name: Validate ${{ matrix.dimension.key }}
         env:
-          MERGELENS_VALIDATION_ID: ${{ inputs.validation_id }}
-          MERGELENS_CANDIDATE_ID: ${{ inputs.candidate_id }}
-          MERGELENS_SOURCE_REPO: ${{ inputs.source_repo }}
-          MERGELENS_SOURCE_PR: ${{ inputs.source_pr }}
-          MERGELENS_DIMENSION: ${{ matrix.dimension.key }}
-          MERGELENS_DIMENSION_LABEL: ${{ matrix.dimension.label }}
-          MERGELENS_DIMENSION_COMMAND: ${{ matrix.dimension.command }}
-          MERGELENS_DIMENSION_RUNS: ${{ matrix.dimension.runs }}
-          MERGELENS_DIMENSION_TIMEOUT: ${{ matrix.dimension.timeout_minutes }}
-          MERGELENS_CONFIG: .mergelens-runner/.self-improvement.json
-        run: node .mergelens-runner/.github/self-improvement/run-dimension.mjs "$MERGELENS_DIMENSION"
+          JUMP_VALIDATION_ID: ${{ inputs.validation_id }}
+          JUMP_CANDIDATE_ID: ${{ inputs.candidate_id }}
+          JUMP_SOURCE_REPO: ${{ inputs.source_repo }}
+          JUMP_SOURCE_PR: ${{ inputs.source_pr }}
+          JUMP_DIMENSION: ${{ matrix.dimension.key }}
+          JUMP_DIMENSION_LABEL: ${{ matrix.dimension.label }}
+          JUMP_DIMENSION_COMMAND: ${{ matrix.dimension.command }}
+          JUMP_DIMENSION_RUNS: ${{ matrix.dimension.runs }}
+          JUMP_DIMENSION_TIMEOUT: ${{ matrix.dimension.timeout_minutes }}
+          JUMP_CONFIG: .jump-runner/.self-improvement.json
+        run: node .jump-runner/.github/self-improvement/run-dimension.mjs "$JUMP_DIMENSION"
