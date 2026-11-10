@@ -100,6 +100,10 @@ def build_completion_delta_frame_template(
     if text not in rest:
         return None
     infix, suffix = rest.split(text, 1)
+    # Guard against a malformed triple if the text sentinel somehow precedes
+    # the index sentinel in the serialized frame.
+    if not prefix or not infix or not suffix:
+        return None
     return prefix, infix, suffix
 
 
