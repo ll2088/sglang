@@ -55,6 +55,40 @@ def test_stage1_matches_reference(head_dim, causal, seqlen_q, seqlen_k):
     _assert_close(out_sgl, out_ref, "stage1")
 
 
+def test_stage1_seqused_k_length_must_equal_batch_size():
+    torch.manual_seed(0)
+    n_heads, n_kv_heads, seqlen_q, seqlen_k, head_dim = 8, 2, 16, 16, 64
+    dtype = torch.bfloat16
+
+    q = torch.randn(seqlen_q, n_heads, head_dim, dtype=dtype, device="cuda")
+    k = torch.randn(seqlen_k, n_kv_heads, head_dim, dtype=dtype, device="cuda")
+    cu_seqlens = torch.tensor([0, seqlen_q], dtype=torch.int32, device="cuda")
+
+    common = dict(
+        cu_seqlens_q=cu_seqlens,
+        cu_seqlens_k=cu_seqlens,
+        cu_seqlens_v=cu_seqlens,
+        max_seqlen_q=seqlen_q,
+        max_seqlen_k=seqlen_k,
+        causal=False,
+    )
+
+    # Positive control: one index per sequence must NOT raise.
+    out = sgl.infllmv2_attn_stage1(
+        q, k, k, seqused_k=torch.tensor([seqlen_k], dtype=torch.int32, device="cuda"), **common
+    )
+    assert out.shape == (seqlen_q, n_heads, head_dim)
+    assert not out.isnan().any()
+
+    # Regression: a seqused_k whose length is not batch_size must be rejected.
+    for seqused_k in (
+        torch.tensor([], dtype=torch.int32, device="cuda"),
+        torch.tensor([seqlen_k, seqlen_k], dtype=torch.int32, device="cuda"),
+    ):
+        with pytest.raises(RuntimeError, match="seqused_k must have shape"):
+            sgl.infllmv2_attn_stage1(q, k, k, seqused_k=seqused_k, **common)
+
+
 if __name__ == "__main__":
     import sys
 
