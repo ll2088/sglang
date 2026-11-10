@@ -687,6 +687,24 @@ class TestModelSerialization(unittest.TestCase):
         self.assertEqual(choice["text"], "hi")
         self.assertIsNone(choice["logprobs"])
         self.assertIsNone(choice["finish_reason"])
+        # Field set and order stay stable so the SSE frame template can be
+        # derived from this serializer without drifting from the model path.
+        self.assertEqual(
+            list(data.keys()),
+            ["id", "object", "created", "model", "choices"],
+        )
+        self.assertEqual(
+            list(choice.keys()),
+            [
+                "index",
+                "text",
+                "logprobs",
+                "finish_reason",
+                "matched_stop",
+                "token_ids",
+                "prompt_token_ids",
+            ],
+        )
 
     def test_prompt_token_ids_and_meta_info_serialization(self):
         """Test that prompt_token_ids and meta_info serialize only when set."""
