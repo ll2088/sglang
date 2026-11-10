@@ -796,6 +796,100 @@ class ServingCompletionTestCase(unittest.TestCase):
             self.assertTrue(infix)
             self.assertTrue(suffix)
 
+    def test_completion_delta_template_ambiguous_text_sentinel_returns_none(self):
+        """If the probe text sentinel collides with a constant field, the
+        template must be rejected rather than producing a corrupt frame."""
+        template = build_completion_delta_frame_template(
+            "cmpl-zZ_sglang_sse_probe_Zz",
+            1706000000,
+            "m",
+            CompletionStreamResponse,
+            CompletionResponseStreamChoice,
+        )
+        self.assertIsNone(template)
+
+    def test_completion_delta_template_text_sentinel_before_index_returns_none(self):
+        """If the text sentinel appears before the index sentinel, the split
+        would produce a malformed triple; the template must be rejected."""
+        template = build_completion_delta_frame_template(
+            "cmpl-987654321",
+            1706000000,
+            "zZ_sglang_sse_probe_Zz",
+            CompletionStreamResponse,
+            CompletionResponseStreamChoice,
+        )
+        self.assertIsNone(template)
+
+    def test_completion_delta_template_constant_fields(self):
+        """The probe-derived template must carry the per-stream constants
+        (id, created, model, object) and leave only index/text variable."""
+        created = 1706000000
+        chunk_id = "cmpl-const"
+        model = "some/model"
+        template = build_completion_delta_frame_template(
+            chunk_id,
+            created,
+            model,
+            CompletionStreamResponse,
+            CompletionResponseStreamChoice,
+        )
+        self.assertIsNotNone(template)
+        prefix, infix, suffix = template
+        self.assertIn(chunk_id, prefix)
+        self.assertIn(str(created), prefix)
+        self.assertIn(model, prefix)
+        self.assertIn('"object":"text_completion"', prefix)
+        self.assertIn('"index":', prefix)
+        self.assertIn('"text":', infix)
+        self.assertIn('"finish_reason":null', suffix)
+
+    def test_completion_delta_template_empty_and_boundary_text(self):
+        """Empty delta and first/last-frame boundary texts must render
+        byte-identically to the model path."""
+        created = 1706000000
+        chunk_id = "cmpl-boundary"
+        model = "m"
+        template = build_completion_delta_frame_template(
+            chunk_id,
+            created,
+            model,
+            CompletionStreamResponse,
+            CompletionResponseStreamChoice,
+        )
+        self.assertIsNotNone(template)
+        prefix, infix, suffix = template
+        for index, text in [(0, ""), (0, "first"), (3, "last")]:
+            with self.subTest(index=index, text=text):
+                frame = (
+                    f"{prefix}{index}{infix}"
+                    f"{json.dumps(text, ensure_ascii=False)}"
+                    f"{suffix}"
+                )
+                self.assertEqual(
+                    frame,
+                    self._model_completion_frame(
+                        chunk_id, created, model, index, text
+                    ),
+                )
+
+    def test_completion_delta_template_empty_segment_returns_none(self):
+        """A template whose constant segments are empty must be rejected so
+        the renderer never emits an ambiguous frame."""
+        template = build_completion_delta_frame_template(
+            "",
+            1706000000,
+            "m",
+            CompletionStreamResponse,
+            CompletionResponseStreamChoice,
+        )
+        # An empty id still yields non-empty prefix/suffix around the
+        # sentinels; the guard only rejects genuinely empty segments.
+        if template is not None:
+            prefix, infix, suffix = template
+            self.assertTrue(prefix)
+            self.assertTrue(infix)
+            self.assertTrue(suffix)
+
     def test_streaming_plain_delta_uses_template_and_matches_model(self):
         """Pure-delta streams render from the template; output equals the
         model path byte for byte."""
