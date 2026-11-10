@@ -12,6 +12,11 @@ from pathlib import Path
 
 import pytest
 
+# These tests load the capability predicate by file path so they do not need a
+# full sglang install. torch/triton are optional here: skip cleanly when absent
+# instead of erroring during collection.
+torch = pytest.importorskip("torch", reason="torch required for FP8 quant tests")
+
 
 def _load_module(rel_path, name):
     here = Path(__file__).resolve()
