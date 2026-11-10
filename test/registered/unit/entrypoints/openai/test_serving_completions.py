@@ -884,6 +884,42 @@ class ServingCompletionTestCase(unittest.TestCase):
         self.assertEqual(data["choices"][0]["finish_reason"], "stop")
         self.assertIn("logprobs", data["choices"][0])
 
+    def test_streaming_terminal_chunk_falls_back_to_model_path(self):
+        """Terminal chunks (finish_reason set) must use the model path even
+        when the request is otherwise plain-delta eligible."""
+
+        async def _mock_generate(*args, **kwargs):
+            yield {
+                "text": "Hello",
+                "meta_info": {
+                    "id": "cmpl-terminal",
+                    "prompt_tokens": 2,
+                    "completion_tokens": 1,
+                    "cached_tokens": 0,
+                    "finish_reason": {"type": "stop", "matched": None},
+                },
+                "index": 0,
+            }
+
+        self.sc.tokenizer_manager.generate_request = _mock_generate
+        req = CompletionRequest(model="x", prompt="Hi", max_tokens=10, stream=True)
+        adapted_request, _ = self.sc._convert_to_internal_request(req)
+
+        async def run_stream():
+            return [
+                chunk
+                async for chunk in self.sc._generate_completion_stream(
+                    adapted_request, req, self.fastapi_request
+                )
+            ]
+
+        chunks = get_or_create_event_loop().run_until_complete(run_stream())
+        self.assertEqual(chunks[-1], "data: [DONE]\n\n")
+        data = json.loads(chunks[0][len("data: ") :])
+        self.assertEqual(data["choices"][0]["text"], "Hello")
+        self.assertEqual(data["choices"][0]["finish_reason"], "stop")
+        self.assertIn("matched_stop", data["choices"][0])
+
     def test_streaming_cached_tokens_details_emits_sglext(self):
         """Test that streaming completion responses emit cached token details in sglext."""
 
