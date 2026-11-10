@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import AsyncGenerator
@@ -19,6 +20,9 @@ from sglang.srt.entrypoints.openai.protocol import (
     SglExt,
 )
 from sglang.srt.entrypoints.openai.serving_base import OpenAIServingBase
+from sglang.srt.entrypoints.openai.sse_utils import (
+    build_completion_delta_frame_template,
+)
 from sglang.srt.entrypoints.openai.usage_processor import UsageProcessor
 from sglang.srt.entrypoints.openai.utils import (
     cached_tokens_details_from_dict,
@@ -253,6 +257,23 @@ class OpenAIServingCompletion(OpenAIServingBase):
                 get_serving().stream_response_default_include_usage,
             )
 
+            # Requests that can only emit plain delta chunks render them from a
+            # per-stream template; everything else uses the model path below.
+            delta_template = None
+            if (
+                not request.echo
+                and request.logprobs is None
+                and not request.return_token_ids
+                and not continuous_usage_stats
+            ):
+                delta_template = build_completion_delta_frame_template(
+                    adapted_request.rid or "",
+                    created,
+                    request.model,
+                    CompletionStreamResponse,
+                    CompletionResponseStreamChoice,
+                )
+
             async for content in self.tokenizer_manager.generate_request(
                 adapted_request, raw_request
             ):
@@ -370,6 +391,16 @@ class OpenAIServingCompletion(OpenAIServingBase):
                     )
                     yield f"data: {error}\n\n"
                     break
+
+                if delta_template is not None and finish_reason_type is None:
+                    prefix, infix, suffix = delta_template
+                    yield (
+                        f"{prefix}{index}{infix}"
+                        f"{json.dumps(delta, ensure_ascii=False)}"
+                        f"{suffix}"
+                    )
+                    stream_started = True
+                    continue
 
                 choice_data = CompletionResponseStreamChoice(
                     index=index,

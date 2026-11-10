@@ -658,6 +658,36 @@ class TestModelSerialization(unittest.TestCase):
         self.assertIn("hidden_states", data["choices"][0])
         self.assertEqual(data["choices"][0]["hidden_states"], [0.1, 0.2, 0.3])
 
+    def test_completion_stream_chunk_serialization_fields(self):
+        """Completion stream chunks keep their serialized field set stable."""
+        chunk = CompletionStreamResponse(
+            id="cmpl-test",
+            created=1706000000,
+            object="text_completion",
+            choices=[
+                CompletionResponseStreamChoice(
+                    index=0,
+                    text="hi",
+                    logprobs=None,
+                    finish_reason=None,
+                    matched_stop=None,
+                    token_ids=None,
+                    prompt_token_ids=None,
+                )
+            ],
+            model="test-model",
+        )
+        data = json.loads(chunk.model_dump_json())
+        self.assertEqual(data["id"], "cmpl-test")
+        self.assertEqual(data["object"], "text_completion")
+        self.assertEqual(data["created"], 1706000000)
+        self.assertEqual(data["model"], "test-model")
+        choice = data["choices"][0]
+        self.assertEqual(choice["index"], 0)
+        self.assertEqual(choice["text"], "hi")
+        self.assertIsNone(choice["logprobs"])
+        self.assertIsNone(choice["finish_reason"])
+
     def test_prompt_token_ids_and_meta_info_serialization(self):
         """Test that prompt_token_ids and meta_info serialize only when set."""
         default_choice = ChatCompletionResponseChoice(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import List, Optional, Union
 
 import msgspec
@@ -47,6 +48,53 @@ class StreamChunk(msgspec.Struct, omit_defaults=True):
 
 
 _stream_encoder = msgspec.json.Encoder()
+
+_COMPLETION_PROBE_TEXT = "zZ_sglang_sse_probe_Zz"
+_COMPLETION_PROBE_INDEX = 987654321
+
+
+def build_completion_delta_frame_template(
+    chunk_id: str,
+    created: int,
+    model: str,
+    response_cls,
+    choice_cls,
+) -> Optional[tuple[str, str, str]]:
+    """Split a probe completion chunk into the parts of a plain-delta SSE
+    frame that are constant for a stream, so only index and text are rendered
+    per chunk.
+
+    The template is derived from the real serializer so frames stay
+    byte-identical to ``model_dump_json()`` if the models gain fields.
+
+    Returns:
+        ``(prefix, infix, suffix)``, or None if the sentinels are ambiguous.
+    """
+    probe = response_cls(
+        id=chunk_id,
+        created=created,
+        object="text_completion",
+        choices=[
+            choice_cls(
+                index=_COMPLETION_PROBE_INDEX,
+                text=_COMPLETION_PROBE_TEXT,
+                logprobs=None,
+                finish_reason=None,
+                matched_stop=None,
+                token_ids=None,
+                prompt_token_ids=None,
+            )
+        ],
+        model=model,
+    )
+    frame = f"data: {probe.model_dump_json()}\n\n"
+    index = str(_COMPLETION_PROBE_INDEX)
+    text = json.dumps(_COMPLETION_PROBE_TEXT)
+    if frame.count(index) != 1 or frame.count(text) != 1:
+        return None
+    prefix, rest = frame.split(index, 1)
+    infix, suffix = rest.split(text, 1)
+    return prefix, infix, suffix
 
 
 def build_sse_content(
