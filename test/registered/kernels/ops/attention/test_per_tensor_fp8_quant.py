@@ -7,7 +7,11 @@ module-level guards below only skip the GPU cases instead of failing setup.
 import pytest
 import torch
 
-from sglang.kernels.ops.attention import _per_tensor_fp8_quant_triton as q
+# Collection must not import triton: the module is optional on CPU-only hosts.
+q = pytest.importorskip(
+    "sglang.kernels.ops.attention._per_tensor_fp8_quant_triton",
+    reason="per-tensor FP8 quant module needs triton",
+)
 
 _HAS_CUDA = torch.cuda.is_available()
 
@@ -18,6 +22,13 @@ def test_import_ok_without_opt_in():
 
     assert hasattr(q, "fused_per_tensor_fp8_quant")
     assert hasattr(q, "reference_per_tensor_fp8_quant")
+
+
+def test_attention_package_imports_without_triton():
+    """The registry package import must not pull in triton or a GPU."""
+    import sglang.kernels.ops.attention as m
+
+    assert m is not None
 
 
 def test_reference_quant_all_zero_and_extreme():
