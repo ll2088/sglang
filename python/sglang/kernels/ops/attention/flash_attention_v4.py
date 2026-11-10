@@ -315,7 +315,7 @@ def flash_attn_varlen_func(
     # The policy raises for noncausal full attention on the SM90 FP8 path and
     # returns False for every other unsupported combination.
     if k.dtype == torch.float8_e4m3fn and not _is_sm90_fp8_kv_mma(
-        q, k, v, causal, window_size
+        q, k, v, causal, window_size, device_capability_major=9
     ):
         raise NotImplementedError(
             "FA4 on SM90 supports FP8 K/V only with q/k/v head_size=512, got "
