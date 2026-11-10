@@ -34,6 +34,11 @@ def _load_module(rel_path, name):
     return module
 
 
+def test_module_loader_handles_missing_path():
+    """The by-path loader used by these tests must not raise on a bad path."""
+    assert _load_module(Path("does/not/exist.py"), "_sglang_missing_mod") is None
+
+
 _caps = _load_module(
     Path("python/sglang/kernels/ops/attention/mla_flydsl_fp8_caps.py"),
     "_sglang_mla_flydsl_fp8_caps_under_test",
