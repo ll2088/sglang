@@ -249,6 +249,7 @@ def _maybe_pass_descales(callable_, **kwargs):
 
 def format_fp8_vs_bf16_metrics(*, fp8_median_ms: float, bf16_median_ms: float) -> dict:
     """Return a JSON-serializable FP8-vs-BF16 latency comparison."""
+    """Return a JSON-serializable FP8-vs-BF16 latency comparison."""
     speedup = (
         bf16_median_ms / fp8_median_ms
         if fp8_median_ms > 0 and bf16_median_ms > 0

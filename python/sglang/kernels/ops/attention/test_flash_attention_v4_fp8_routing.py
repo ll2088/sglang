@@ -13,6 +13,10 @@ import pytest
 
 _POLICY_PATH = pathlib.Path(__file__).with_name("fa4_sm90_fp8_policy.py")
 
+# This module must be collectable without torch or a compiled FA4 extension so
+# the CI smoke job can run it with only pytest installed.
+torch = pytest.importorskip("torch", reason="tensor descale cases need torch")
+
 
 def _load_policy():
     spec = importlib.util.spec_from_file_location(
@@ -166,9 +170,6 @@ def test_gemma4_full_attention_d512_split_selection():
         )
         == 4
     )
-
-
-torch = pytest.importorskip("torch", reason="tensor descale cases need torch")
 
 
 def test_normalize_kv_descale_layouts():
