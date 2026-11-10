@@ -1,4 +1,6 @@
+import importlib.util
 import sys
+from pathlib import Path
 
 import pytest
 import torch
@@ -13,12 +15,33 @@ except Exception:  # noqa: BLE001
         return ci
 
 
-try:
-    from sglang.kernels.ops.attention.mla_kv_pack_quantize_fp8 import (
-        mla_kv_pack_quantize_fp8,
-    )
-except Exception:  # noqa: BLE001
-    mla_kv_pack_quantize_fp8 = None
+def _load_kv_pack_module():
+    """Load the kernel by file path so importing it does not pull in sglang."""
+    here = Path(__file__).resolve()
+    repo_root = here.parents[5]
+    target = repo_root / "python/sglang/kernels/ops/attention/mla_kv_pack_quantize_fp8.py"
+    if not target.is_file():
+        return None
+    name = "_sglang_mla_kv_pack_quantize_fp8_under_test"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, target)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:  # noqa: BLE001
+        sys.modules.pop(name, None)
+        return None
+    return module
+
+
+_kv_pack_mod = _load_kv_pack_module()
+mla_kv_pack_quantize_fp8 = (
+    None if _kv_pack_mod is None else _kv_pack_mod.mla_kv_pack_quantize_fp8
+)
 
 try:
     from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
