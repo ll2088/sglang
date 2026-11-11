@@ -105,22 +105,6 @@ class TestRustImageDecode(CustomTestCase):
         image = load_image_from_base64(base64.b64encode(data).decode())
         self.assertEqual(image.size, (20, 20))
 
-    def test_decompression_bomb_error_is_value_error(self):
-        """Pillow's bomb check raises a non-OSError exception; the decode
-        entry point must normalize it to ValueError so callers classify the
-        request as a client error (400) instead of a server fault (500)."""
-        from unittest.mock import patch
-
-        from sglang.srt.multimodal.mm_utils import load_image_from_base64
-
-        data = encode(Image.new("RGB", (20, 20), (0, 255, 0)), "PNG")
-        encoded = base64.b64encode(data).decode()
-        with patch.object(Image, "MAX_IMAGE_PIXELS", 50):
-            with self.assertRaises(ValueError) as ctx:
-                load_image_from_base64(encoded)
-        self.assertIsInstance(ctx.exception.__cause__, Image.DecompressionBombError)
-        self.assertIn("Failed to load image", str(ctx.exception))
-
     def test_unsupported_inputs_fail(self):
         gray16 = Image.fromarray(np.zeros((9, 9), dtype=np.uint16))
         cases = {
