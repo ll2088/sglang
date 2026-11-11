@@ -46,14 +46,16 @@ class TestMxfp8DispatchCache(unittest.TestCase):
         self.gemm_base = _FakeGemmBase()
         self.raw_calls = []
 
-        def raw_mm(a, b, a_scale, b_scale, out_dtype, use_8x4_sf_layout, backend, skip_check=False):
+        def raw_mm(
+            a, b, a_scale, b_scale, out_dtype, use_8x4_sf_layout, backend,
+            skip_check=False,
+        ):
             self.raw_calls.append(skip_check)
             return "out"
 
         self.raw_mm = raw_mm
 
     def _wrap(self):
-        # Patch the module-level gemm_base and version so the cache is built.
         _mxfp8_dispatch_cache.gemm_base = self.gemm_base
         _mxfp8_dispatch_cache.flashinfer_version = "0.7.0"
         return maybe_cache_mxfp8_dispatch(self.raw_mm)
@@ -75,7 +77,6 @@ class TestMxfp8DispatchCache(unittest.TestCase):
         args = self._tensors(64, 128)
         cached(*args, torch.bfloat16, True, "cute-dsl")
         cached(*args, torch.bfloat16, True, "cute-dsl")
-        # First call validates, second skips validation.
         self.assertEqual(self.raw_calls, [False, True])
 
     def test_shape_change_invalidates(self):
@@ -101,7 +102,6 @@ class TestMxfp8DispatchCache(unittest.TestCase):
     def test_runner_factory_is_memoized(self):
         self._wrap()
         self._wrap()
-        # The stateless runner factory is wrapped once per process.
         self.assertEqual(self.gemm_base.calls, 0)
         self.gemm_base._cute_dsl_gemm_mxfp8_runner(1, 2)
         self.gemm_base._cute_dsl_gemm_mxfp8_runner(1, 2)

@@ -57,6 +57,12 @@ def _block_fp8(real: torch.Tensor, power_of_two: bool = False):
     return (real / full).to(FP8), scale
 
 
+def _dequant_block(weight: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    return weight.float() * scale.repeat_interleave(BLOCK, 0).repeat_interleave(
+        BLOCK, 1
+    )
+
+
 def _dequant_ue8m0(weight: torch.Tensor, sf: torch.Tensor) -> torch.Tensor:
     return weight.float() * torch.exp2(sf.float() - 127).repeat_interleave(
         MXFP8_BLOCK_SIZE, -1
@@ -77,8 +83,7 @@ class TestBlockFp8ToMxfp8Requant(CustomTestCase):
         # A finer power-of-two scale only shifts exponents, so nothing rounds.
         torch.testing.assert_close(
             _dequant_ue8m0(requant, sf),
-            weight.float()
-            * scale.repeat_interleave(BLOCK, 0).repeat_interleave(BLOCK, 1),
+            _dequant_block(weight, scale),
             rtol=0.0,
             atol=0.0,
         )
@@ -91,9 +96,7 @@ class TestBlockFp8ToMxfp8Requant(CustomTestCase):
         requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
 
         deq = _dequant_ue8m0(requant, sf)
-        ref = weight.float() * scale.repeat_interleave(BLOCK, 0).repeat_interleave(
-            BLOCK, 1
-        )
+        ref = _dequant_block(weight, scale)
         self.assertTrue(torch.isfinite(deq).all())
         # One extra power-of-two rounding step: relative error stays small.
         rel = (deq - ref).abs() / ref.abs().clamp(min=1e-6)
@@ -120,6 +123,19 @@ class TestBlockFp8ToMxfp8Requant(CustomTestCase):
         scale = torch.ones((1, 1), dtype=torch.float32)
         with self.assertRaises(ValueError):
             requant_block_fp8_to_mxfp8(weight, scale)
+
+    def test_partial_last_block_is_padded_and_trimmed(self):
+        # 192 rows with two 128-row scale blocks: the padded tail must be
+        # trimmed back to the original N and stay finite.
+        torch.manual_seed(2)
+        real = torch.randn(192, 256) * 0.05
+        weight, scale = _block_fp8(
+            torch.nn.functional.pad(real, (0, 0, 0, 64)), power_of_two=True
+        )
+        requant, sf = requant_block_fp8_to_mxfp8(weight[:192], scale)
+        self.assertEqual(requant.shape, (192, 256))
+        self.assertEqual(sf.shape, (192, 256 // MXFP8_BLOCK_SIZE))
+        self.assertTrue(torch.isfinite(requant.float()).all())
 
     def test_rejects_scale_shape_that_does_not_cover_weight(self):
         weight = torch.zeros((256, 256), dtype=FP8)
@@ -164,6 +180,15 @@ class TestBlockFp8ToMxfp8Requant(CustomTestCase):
         self.assertEqual(sf.shape, (1024, 512 // MXFP8_BLOCK_SIZE))
         self.assertEqual(sf.dtype, torch.uint8)
         self.assertTrue(torch.isfinite(requant.float()).all())
+
+    def test_zero_block_scale_does_not_divide_by_zero(self):
+        # An all-zero 128x128 block yields scale 0; the clamp must keep the
+        # output finite instead of producing inf/nan.
+        weight = torch.zeros((128, 128), dtype=FP8)
+        scale = torch.zeros((1, 1), dtype=torch.float32)
+        requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
+        self.assertTrue(torch.isfinite(requant.float()).all())
+        self.assertTrue((sf <= 254).all())
 
 
 if __name__ == "__main__":
