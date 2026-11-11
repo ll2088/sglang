@@ -8,6 +8,7 @@ Covers ``decode_rgb`` in ``rust/sglang-mm/src/common/mod.rs`` (via the
 import io
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import numpy as np
