@@ -147,6 +147,12 @@ For example, during prefetching, `all_reduce(op=min)` is used to ensure that all
 
 However, because GPU KV computation is naturally performed layer by layer, the GPU inherently operates in a `layer first` layout. When transferring `page first` data from L2 to the GPU, data must be transferred at the granularity of one token per layer. The `page first direct` layout mitigates this issue by grouping together all tokens of a given layer within a page, allowing transfers from L2 to GPU to be aggregated at the page-layer level.
 
+**Host Buffer Allocation**: The host KV pool is backed by a single `mmap` mapping per rank, sized to the resolved KV blocks and rounded up to the selected page size. The mapping is split into contiguous tensor views, so the pool's footprint is exact and registration boundaries are easy to compute. Pinning is done in page-aligned chunks of at most 256 GiB that never bisect a KV block or a backing page, and unpinning uses exactly the same ranges.
+
+**HugeTLB Pages**: Setting `--hicache-hugepage-block-size` to `2MB` or `1GB` backs the host mapping with explicit HugeTLB pages. A HugeTLB pool or container hugetlb limit that is too small fails at startup with an error naming the shortfall; the mapping never silently falls back to 4 KiB pages. Without the flag, ordinary pages are used and behavior is unchanged.
+
+**Fork Isolation**: The host mapping is marked `MADV_DONTFORK`, so child processes created by `fork()` do not inherit it and cannot make pinned pages copy-on-write.
+
 **CPU-to-GPU Transfer Optimizations**: In HiCache, moving data from CPU memory to GPU is as performance-critical as prefetching data from L3 to L2. HiCache employs several optimizations for this process:
 
 * **Compute-Transfer Overlap**: During the prefill phase, when transferring data from CPU to GPU, HiCache overlaps layers by concurrently loading the KV cache of layer N+1 while computing layer N. This effectively hides data transfer latency.
@@ -197,6 +203,8 @@ Specifically, **LMCache**, an efficient KV cache layer for enterprise-scale LLM 
   - `write_through`: Immediately writes data to all tiers (strongest caching benefits)
   - `write_through_selective`: Uses hit-count tracking to back up only frequently accessed data
   - `write_back`: Writes data back to slower tiers only when eviction is needed (reduces I/O load)
+
+- **`--hicache-hugepage-block-size {none,2MB,1GB}`**: Back the host KV pool with explicit HugeTLB pages. Default `none` uses ordinary pages. When enabled, a HugeTLB pool or container hugetlb limit that is too small fails at startup instead of falling back to 4 KiB pages. See [Data Transfer Optimization](#data-transfer-optimization) for details.
 
 - **`--hicache-io-backend {direct,kernel}`**: Choose the I/O backend for KV cache transfer between CPU and GPU. See [Data Transfer Optimization](#data-transfer-optimization) for details.
   - `direct`: Standard CUDA memory copy operations

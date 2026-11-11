@@ -1,10 +1,14 @@
 """Exercise container and ancestor budgets using synthetic procfs/cgroup files."""
 
 import functools
+import mmap
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
+
+import torch
 
 from sglang.srt.mem_cache import host_memory
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -222,6 +226,104 @@ class TestHostMemory(unittest.TestCase):
                     self.available()
                 with self.assertLogs(host_memory.logger, level="WARNING"):
                     self.assertEqual(self.available(allow_cgroup_fallback=True), 5000)
+
+    def test_split_host_buffer_views_are_contiguous(self):
+        buf = host_memory.alloc_host_buffer(3 * mmap.PAGESIZE)
+        views = host_memory.split_host_buffer(buf, [mmap.PAGESIZE, 2 * mmap.PAGESIZE])
+        self.assertEqual(len(views), 2)
+        self.assertEqual(views[0].data_ptr() + views[0].nbytes, views[1].data_ptr())
+        self.assertEqual(sum(v.nbytes for v in views), buf.nbytes)
+        with self.assertRaises(ValueError):
+            host_memory.split_host_buffer(buf, [buf.nbytes + 1])
+
+    def test_alloc_host_buffer_rounds_to_page(self):
+        buf = host_memory.alloc_host_buffer(1)
+        self.assertEqual(buf.nbytes, mmap.PAGESIZE)
+        self.assertEqual(buf.dtype, torch.int8)
+
+    def test_parse_hugepage_size(self):
+        self.assertIsNone(host_memory.parse_hugepage_size(None))
+        self.assertIsNone(host_memory.parse_hugepage_size("none"))
+        self.assertEqual(host_memory.parse_hugepage_size("2MB"), 2 << 20)
+        self.assertEqual(host_memory.parse_hugepage_size("1GB"), 1 << 30)
+        with self.assertRaises(ValueError):
+            host_memory.parse_hugepage_size("4KB")
+
+    def test_hugepage_shortfall_raises(self):
+        # Requesting more HugeTLB pages than the host has must fail explicitly.
+        with self.assertRaisesRegex(RuntimeError, "HugeTLB"):
+            host_memory.alloc_host_buffer(1 << 40, hugepage_size=1 << 30)
+
+    def test_madvise_dontfork_is_called(self):
+        calls = []
+        real_mmap = mmap.mmap
+
+        class RecordingMmap(real_mmap):
+            def madvise(self, option, start=0, length=0):
+                calls.append(option)
+                return super().madvise(option, start, length)
+
+        with patch.object(host_memory.mmap, "mmap", RecordingMmap):
+            host_memory.alloc_host_buffer(mmap.PAGESIZE)
+        self.assertIn(mmap.MADV_DONTFORK, calls)
+
+    def test_host_registration_ranges_align_to_pages(self):
+        page = mmap.PAGESIZE
+        block = 4 * page
+        sizes = [8 * block, 8 * block]
+        total = sum(sizes)
+        ranges = host_memory.host_registration_ranges(
+            sizes, 8, total, max_chunk_bytes=5 * block, page_size=page
+        )
+        self.assertEqual(ranges[0][0], 0)
+        self.assertEqual(ranges[-1][1], total)
+        for start, end in ranges:
+            self.assertEqual(start % page, 0)
+            self.assertEqual(end % page, 0)
+            self.assertLessEqual(end - start, 5 * block)
+        for (_, prev_end), (next_start, _) in zip(ranges, ranges[1:]):
+            self.assertEqual(prev_end, next_start)
+
+    def test_host_registration_ranges_rejects_misaligned_pool(self):
+        with self.assertRaises(ValueError):
+            host_memory.host_registration_ranges(
+                [mmap.PAGESIZE], 1, mmap.PAGESIZE + 1
+            )
+
+    def test_pin_unpin_chunked_round_trip(self):
+        page = mmap.PAGESIZE
+        block = 4 * page
+        sizes = [4 * block]
+        buf = host_memory.alloc_host_buffer(sum(sizes))
+        cudart = Mock()
+        cudart.cudaHostRegister.return_value = Mock(value=0)
+        cudart.cudaHostUnregister.return_value = Mock(value=0)
+        with patch.object(torch.cuda, "cudart", return_value=cudart):
+            ranges = host_memory.pin_tensor_chunked(
+                buf, sizes, 4, page_size=page
+            )
+            host_memory.unpin_tensor_chunked(buf, ranges)
+        self.assertEqual(cudart.cudaHostRegister.call_count, len(ranges))
+        self.assertEqual(cudart.cudaHostUnregister.call_count, len(ranges))
+        registered = [c.args[0] for c in cudart.cudaHostRegister.call_args_list]
+        unregistered = [c.args[0] for c in cudart.cudaHostUnregister.call_args_list]
+        self.assertEqual(registered, unregistered)
+
+    def test_pin_chunked_rolls_back_on_failure(self):
+        page = mmap.PAGESIZE
+        block = 4 * page
+        sizes = [4 * block]
+        buf = host_memory.alloc_host_buffer(sum(sizes))
+        cudart = Mock()
+        cudart.cudaHostRegister.side_effect = [
+            Mock(value=0),
+            Mock(value=1),
+        ]
+        cudart.cudaHostUnregister.return_value = Mock(value=0)
+        with patch.object(torch.cuda, "cudart", return_value=cudart):
+            with self.assertRaises(RuntimeError):
+                host_memory.pin_tensor_chunked(buf, sizes, 4, page_size=page)
+        self.assertEqual(cudart.cudaHostUnregister.call_count, 1)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,12 @@ L1 and L2 are private to a single inference instance; only L3 can be shared. Hos
 --hicache-io-backend kernel           # The I/O backend of moving data between CPU and GPU
 --hicache-write-policy write_through  # Cache write policy from GPU to CPU
 --hicache-storage-backend             # Optional storage backend (e.g., hf3fs, mooncake, etc.)
+--hicache-hugepage-block-size none    # Optional: 2MB or 1GB HugeTLB pages for the host pool
 ```
+
+### HugeTLB Host Pages
+
+By default the host KV pool uses ordinary pages. Setting `--hicache-hugepage-block-size 2MB` or `--hicache-hugepage-block-size 1GB` backs the pool with explicit HugeTLB pages, which reduces pinning time and TLB pressure for large pools. Each rank needs `ceil(resolved cache bytes / page size)` HugeTLB pages reserved on the host; on Kubernetes, request them as `hugepages-<size>`. If the pool or container hugetlb limit is too small, startup fails with an error naming the shortfall rather than silently falling back to 4 KiB pages. The host mapping is also marked `MADV_DONTFORK`, so `fork()` children do not inherit it.
 
 Notes:
 
