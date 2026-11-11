@@ -190,6 +190,37 @@ class TestBlockFp8ToMxfp8Requant(CustomTestCase):
         self.assertTrue(torch.isfinite(requant.float()).all())
         self.assertTrue((sf <= 254).all())
 
+    def test_empty_expert_batch_contract(self):
+        # Empty expert batch: zero rows must still produce a valid empty tensor
+        # with the kernel's expected dtype/shape contract.
+        weight = torch.zeros((0, 128), dtype=FP8)
+        scale = torch.ones((0, 1), dtype=torch.float32)
+        requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
+        self.assertEqual(requant.shape, (0, 128))
+        self.assertEqual(requant.dtype, FP8)
+        self.assertEqual(sf.shape, (0, 128 // MXFP8_BLOCK_SIZE))
+        self.assertEqual(sf.dtype, torch.uint8)
+
+    def test_single_token_contract(self):
+        # Single row: shapes stay stable and values finite.
+        weight = torch.zeros((1, 128), dtype=FP8)
+        scale = torch.ones((1, 1), dtype=torch.float32)
+        requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
+        self.assertEqual(requant.shape, (1, 128))
+        self.assertEqual(sf.shape, (1, 128 // MXFP8_BLOCK_SIZE))
+        self.assertTrue(torch.isfinite(requant.float()).all())
+
+    def test_large_batch_shape_contract(self):
+        # Large batch: shapes and dtypes must stay stable for the kernel layout.
+        weight = torch.zeros((1024, 512), dtype=FP8)
+        scale = torch.ones((8, 4), dtype=torch.float32)
+        requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
+        self.assertEqual(requant.shape, (1024, 512))
+        self.assertEqual(requant.dtype, FP8)
+        self.assertEqual(sf.shape, (1024, 512 // MXFP8_BLOCK_SIZE))
+        self.assertEqual(sf.dtype, torch.uint8)
+        self.assertTrue(torch.isfinite(requant.float()).all())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=3)
