@@ -10,6 +10,9 @@ import unittest
 
 import torch
 
+# This guard must run without the sglang package installed: it imports the
+# module under test by path and never imports sglang.*.
+
 # NOTE: this guard must run in a clean environment where the sglang package is
 # not installed (CI setup may fail before `pip install -e python`). Import the
 # module under test by path and never import sglang.* here.
@@ -20,6 +23,7 @@ _MODULE_PATH = (
     pathlib.Path(__file__).resolve().parents[6]
     / "python/sglang/srt/layers/quantization/mxfp8_block_convert.py"
 )
+assert _MODULE_PATH.is_file(), f"module under test not found: {_MODULE_PATH}"
 assert _MODULE_PATH.is_file(), f"module under test not found: {_MODULE_PATH}"
 _spec = importlib.util.spec_from_file_location(
     "_mxfp8_block_convert_under_test", _MODULE_PATH
