@@ -14,12 +14,14 @@ import sys
 
 import pytest
 
-# sglang's dependency set does not yet publish wheels for Python 3.14, so
-# installing the package there fails before pytest can run. Surface that as a
-# clear collection-time skip instead of an opaque import/install error.
-if sys.version_info >= (3, 14):
+# sglang's dependency set does not yet publish wheels for Python 3.13+,
+# so installing the package there fails before pytest can run. Surface that
+# as a clear collection-time skip instead of an opaque import/install error.
+# Keep this guard in sync with the interpreter used by CI setup; it only
+# helps once pytest is reached, so CI must also pin a supported version.
+if sys.version_info >= (3, 13):
     pytest.skip(
-        "sglang dependencies are not available for Python 3.14+; "
+        "sglang dependencies are not available for Python 3.13+; "
         "run this suite on a supported interpreter (e.g. 3.12)",
         allow_module_level=True,
     )

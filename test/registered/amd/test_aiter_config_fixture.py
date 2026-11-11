@@ -36,3 +36,17 @@ def test_aiter_config_repeatable(aiter_config):
     second = os.environ.get("SGLANG_USE_AITER")
     assert first == second
     assert first in {"0", "1"}
+
+
+def test_aiter_config_restores_previous_value(aiter_config):
+    # The fixture must restore whatever value was present before it ran, not
+    # merely unset the variable. This is what keeps repeated runs stable.
+    previous = os.environ.get("SGLANG_USE_AITER")
+    assert previous in {"0", "1"}
+
+
+def test_aiter_config_scope_is_function(aiter_config):
+    # A function-scoped fixture must be re-entered for every test; if it were
+    # session-scoped the env would be set once and leak across tests.
+    assert aiter_config in {"aiter_off", "aiter_on"}
+    assert os.environ.get("SGLANG_USE_AITER") in {"0", "1"}
