@@ -2,7 +2,10 @@ import random
 import sys
 
 import pytest
-import torch
+
+# torch is optional at collection time: without it (or without a GPU) the module
+# must still be collectible and report skips instead of import errors.
+torch = pytest.importorskip("torch", reason="torch is not installed")
 
 
 def _ops():
@@ -14,6 +17,14 @@ def _ops():
     return (
         sgl_kernel.es_sm100_mxfp8_blockscaled_grouped_mm,
         sgl_kernel.es_sm100_mxfp8_blockscaled_grouped_quant,
+    )
+
+
+def is_sm100_supported(device=None) -> bool:
+    if not torch.cuda.is_available():
+        return False
+    return (torch.cuda.get_device_capability(device)[0] == 10) and (
+        torch.version.cuda is not None and torch.version.cuda >= "12.8"
     )
 
 
@@ -132,14 +143,6 @@ def calc_diff(x, y):
     denominator = (x * x + y * y).sum()
     sim = 2 * (x * y).sum() / denominator
     return 1 - sim
-
-
-def is_sm100_supported(device=None) -> bool:
-    if not torch.cuda.is_available():
-        return False
-    return (torch.cuda.get_device_capability(device)[0] == 10) and (
-        torch.version.cuda is not None and torch.version.cuda >= "12.8"
-    )
 
 
 @pytest.mark.skipif(
