@@ -16,6 +16,13 @@ def _ops():
         sgl_kernel.es_sm100_mxfp8_blockscaled_grouped_quant,
     )
 
+
+if not is_sm100_supported():
+    pytest.skip(
+        "test_es_sm100_mxfp8_blockscaled_grouped_mm is only supported on sm100",
+        allow_module_level=True,
+    )
+
 random.seed(42)
 torch.manual_seed(42)
 torch.cuda.manual_seed(42)

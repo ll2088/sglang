@@ -41,6 +41,12 @@ def _ops():
     )
 
 
+if not is_sm100_supported():
+    pytest.skip(
+        "bounds tests are only supported on sm100", allow_module_level=True
+    )
+
+
 @pytest.mark.skipif(
     not is_sm100_supported(),
     reason="bounds tests are only supported on sm100",
