@@ -6,13 +6,15 @@ import torch
 
 
 def _ops():
-    # Import lazily so that collection does not fail when the extension is not built.
-    from sgl_kernel import (
-        es_sm100_mxfp8_blockscaled_grouped_mm,
-        es_sm100_mxfp8_blockscaled_grouped_quant,
+    # Import lazily and skip (not fail) when the extension is not built, so that
+    # collection never pulls in the sglang top-level package or its dependencies.
+    sgl_kernel = pytest.importorskip(
+        "sgl_kernel", reason="sgl_kernel extension is not built"
     )
-
-    return es_sm100_mxfp8_blockscaled_grouped_mm, es_sm100_mxfp8_blockscaled_grouped_quant
+    return (
+        sgl_kernel.es_sm100_mxfp8_blockscaled_grouped_mm,
+        sgl_kernel.es_sm100_mxfp8_blockscaled_grouped_quant,
+    )
 
 random.seed(42)
 torch.manual_seed(42)
@@ -33,8 +35,10 @@ def calc_diff(x, y):
 
 
 def is_sm100_supported(device=None) -> bool:
+    if not torch.cuda.is_available():
+        return False
     return (torch.cuda.get_device_capability(device)[0] == 10) and (
-        torch.version.cuda >= "12.8"
+        torch.version.cuda is not None and torch.version.cuda >= "12.8"
     )
 
 
