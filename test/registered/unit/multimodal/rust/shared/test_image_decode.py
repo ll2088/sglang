@@ -97,6 +97,14 @@ class TestRustImageDecode(CustomTestCase):
                 with self.assertRaises(ValueError):
                     DECODE(data)
 
+    def test_decompression_bomb_rejected(self):
+        """A PNG above Pillow's pixel limit must surface as ValueError, matching
+        the Python-side mapping in mm_utils.load_image_from_base64."""
+        with unittest.mock.patch.object(Image, "MAX_IMAGE_PIXELS", 50):
+            data = encode(Image.new("RGB", (20, 20), (0, 255, 0)), "PNG")
+            with self.assertRaises(ValueError):
+                DECODE(data)
+
 
 if __name__ == "__main__":
     unittest.main()
