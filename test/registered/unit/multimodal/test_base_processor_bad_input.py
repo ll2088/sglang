@@ -12,6 +12,7 @@ import base64
 import binascii
 import io
 import unittest
+import unittest.mock
 from unittest.mock import MagicMock, patch
 
 import requests
