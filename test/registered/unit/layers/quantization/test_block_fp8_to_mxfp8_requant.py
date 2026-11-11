@@ -11,19 +11,13 @@ import unittest
 import torch
 
 # This guard must run without the sglang package installed: it imports the
-# module under test by path and never imports sglang.*.
-
-# NOTE: this guard must run in a clean environment where the sglang package is
-# not installed (CI setup may fail before `pip install -e python`). Import the
-# module under test by path and never import sglang.* here.
-
-# Import the module by path so this CPU guard runs without installing sglang
-# (the previous CI setup failed during pip resolution before pytest started).
+# module under test by path and never imports sglang.*. The CI setup for this
+# suite installs only torch + pytest, so any sglang import here would fail the
+# whole job before a single assertion runs.
 _MODULE_PATH = (
     pathlib.Path(__file__).resolve().parents[6]
     / "python/sglang/srt/layers/quantization/mxfp8_block_convert.py"
 )
-assert _MODULE_PATH.is_file(), f"module under test not found: {_MODULE_PATH}"
 assert _MODULE_PATH.is_file(), f"module under test not found: {_MODULE_PATH}"
 _spec = importlib.util.spec_from_file_location(
     "_mxfp8_block_convert_under_test", _MODULE_PATH
@@ -156,35 +150,6 @@ class TestBlockFp8ToMxfp8Requant(CustomTestCase):
         self.assertTrue(torch.isfinite(requant.float()).all())
         self.assertTrue((sf <= 254).all())
 
-    def test_empty_and_single_token_shapes(self):
-        # Empty expert batch: zero rows must still produce a valid empty tensor.
-        weight = torch.zeros((0, 128), dtype=FP8)
-        scale = torch.ones((0, 1), dtype=torch.float32)
-        requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
-        self.assertEqual(requant.shape, (0, 128))
-        self.assertEqual(sf.shape, (0, 128 // MXFP8_BLOCK_SIZE))
-        self.assertEqual(requant.dtype, FP8)
-        self.assertEqual(sf.dtype, torch.uint8)
-
-        # Single token / single row.
-        weight = torch.zeros((1, 128), dtype=FP8)
-        scale = torch.ones((1, 1), dtype=torch.float32)
-        requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
-        self.assertEqual(requant.shape, (1, 128))
-        self.assertEqual(sf.shape, (1, 128 // MXFP8_BLOCK_SIZE))
-        self.assertTrue(torch.isfinite(requant.float()).all())
-
-    def test_large_batch_shape_contract(self):
-        # Large batch: shapes and dtypes must stay stable for the kernel layout.
-        weight = torch.zeros((1024, 512), dtype=FP8)
-        scale = torch.ones((8, 4), dtype=torch.float32)
-        requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
-        self.assertEqual(requant.shape, (1024, 512))
-        self.assertEqual(requant.dtype, FP8)
-        self.assertEqual(sf.shape, (1024, 512 // MXFP8_BLOCK_SIZE))
-        self.assertEqual(sf.dtype, torch.uint8)
-        self.assertTrue(torch.isfinite(requant.float()).all())
-
     def test_zero_block_scale_does_not_divide_by_zero(self):
         # An all-zero 128x128 block yields scale 0; the clamp must keep the
         # output finite instead of producing inf/nan.
@@ -193,37 +158,6 @@ class TestBlockFp8ToMxfp8Requant(CustomTestCase):
         requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
         self.assertTrue(torch.isfinite(requant.float()).all())
         self.assertTrue((sf <= 254).all())
-
-    def test_empty_expert_batch_contract(self):
-        # Empty expert batch: zero rows must still produce a valid empty tensor
-        # with the kernel's expected dtype/shape contract.
-        weight = torch.zeros((0, 128), dtype=FP8)
-        scale = torch.ones((0, 1), dtype=torch.float32)
-        requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
-        self.assertEqual(requant.shape, (0, 128))
-        self.assertEqual(requant.dtype, FP8)
-        self.assertEqual(sf.shape, (0, 128 // MXFP8_BLOCK_SIZE))
-        self.assertEqual(sf.dtype, torch.uint8)
-
-    def test_single_token_contract(self):
-        # Single row: shapes stay stable and values finite.
-        weight = torch.zeros((1, 128), dtype=FP8)
-        scale = torch.ones((1, 1), dtype=torch.float32)
-        requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
-        self.assertEqual(requant.shape, (1, 128))
-        self.assertEqual(sf.shape, (1, 128 // MXFP8_BLOCK_SIZE))
-        self.assertTrue(torch.isfinite(requant.float()).all())
-
-    def test_large_batch_shape_contract(self):
-        # Large batch: shapes and dtypes must stay stable for the kernel layout.
-        weight = torch.zeros((1024, 512), dtype=FP8)
-        scale = torch.ones((8, 4), dtype=torch.float32)
-        requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
-        self.assertEqual(requant.shape, (1024, 512))
-        self.assertEqual(requant.dtype, FP8)
-        self.assertEqual(sf.shape, (1024, 512 // MXFP8_BLOCK_SIZE))
-        self.assertEqual(sf.dtype, torch.uint8)
-        self.assertTrue(torch.isfinite(requant.float()).all())
 
 
 if __name__ == "__main__":

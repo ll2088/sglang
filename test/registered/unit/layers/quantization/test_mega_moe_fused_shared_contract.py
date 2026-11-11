@@ -12,6 +12,8 @@ import unittest
 
 import torch
 
+# Self-contained: load the requant helper by path so this guard runs in a
+# torch+pytest-only environment (no sglang install, no pip resolution).
 _MODULE_PATH = (
     pathlib.Path(__file__).resolve().parents[6]
     / "python/sglang/srt/layers/quantization/mxfp8_block_convert.py"
@@ -25,6 +27,7 @@ _mxfp8_block_convert = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mxfp8_block_convert)
 requant_block_fp8_to_mxfp8 = _mxfp8_block_convert.requant_block_fp8_to_mxfp8
 MXFP8_BLOCK_SIZE = _mxfp8_block_convert.MXFP8_BLOCK_SIZE
+assert "sglang" not in _mxfp8_block_convert.__dict__.get("__name__", "")
 
 FP8 = torch.float8_e4m3fn
 BLOCK = 128
