@@ -327,6 +327,8 @@ def load_image_from_base64(image):
         # client-side decode error instead of letting it escape as a 500.
         # ValueError is part of CLIENT_MEDIA_EXCEPTIONS, so the multimodal
         # processor classifies it as bad client input rather than a server fault.
+        # Keep the original exception chained so callers/tests can inspect the
+        # underlying Pillow error while still seeing a client-side ValueError.
         raise ValueError(f"Failed to load image: {e}") from e
 
 
