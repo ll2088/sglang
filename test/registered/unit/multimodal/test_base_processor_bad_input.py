@@ -81,6 +81,8 @@ class TestBadInputIsClientError(CustomTestCase):
     def test_decompression_bomb_image_bytes(self):
         # Pillow raises DecompressionBombError (not an OSError) above its
         # pixel limit; it must be reported as a client-side ValueError.
+        # MAX_IMAGE_PIXELS is patched low so the test stays cheap; the
+        # exception type is what the mapping keys on, not the pixel count.
         with patch.object(Image, "MAX_IMAGE_PIXELS", 50):
             buf = io.BytesIO()
             Image.new("RGB", (20, 20), (0, 255, 0)).save(buf, format="PNG")
