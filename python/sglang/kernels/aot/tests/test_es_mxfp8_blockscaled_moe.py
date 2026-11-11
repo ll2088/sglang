@@ -3,10 +3,16 @@ import sys
 
 import pytest
 import torch
-from sgl_kernel import (
-    es_sm100_mxfp8_blockscaled_grouped_mm,
-    es_sm100_mxfp8_blockscaled_grouped_quant,
-)
+
+
+def _ops():
+    # Import lazily so that collection does not fail when the extension is not built.
+    from sgl_kernel import (
+        es_sm100_mxfp8_blockscaled_grouped_mm,
+        es_sm100_mxfp8_blockscaled_grouped_quant,
+    )
+
+    return es_sm100_mxfp8_blockscaled_grouped_mm, es_sm100_mxfp8_blockscaled_grouped_quant
 
 random.seed(42)
 torch.manual_seed(42)
@@ -39,6 +45,7 @@ def is_sm100_supported(device=None) -> bool:
 @pytest.mark.parametrize("num_experts", [8, 16, 32, 64])
 @pytest.mark.parametrize("out_dtype", [torch.half, torch.bfloat16])
 def test_es_sm100_mxfp8_blockscaled_grouped_mm(num_experts, out_dtype):
+    es_sm100_mxfp8_blockscaled_grouped_mm, es_sm100_mxfp8_blockscaled_grouped_quant = _ops()
     device = "cuda"
     alignment = 128
     n_g = random.randint(1, 64) * alignment
@@ -160,6 +167,7 @@ def test_es_sm100_mxfp8_blockscaled_grouped_mm(num_experts, out_dtype):
 @pytest.mark.parametrize("out_dtype", [torch.half, torch.bfloat16])
 def test_es_sm100_mxfp8_blockscaled_grouped_mm_tail_shapes(num_experts, out_dtype):
     """Non-tile-aligned M/N and 1-row/1-column experts must not write past C or SF allocations."""
+    es_sm100_mxfp8_blockscaled_grouped_mm, es_sm100_mxfp8_blockscaled_grouped_quant = _ops()
     device = "cuda"
     alignment = 128
     # N is a multiple of 128 for the kernel contract, but M is deliberately not tile aligned.
