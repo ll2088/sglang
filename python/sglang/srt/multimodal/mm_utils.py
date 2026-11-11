@@ -333,6 +333,9 @@ def load_image_from_base64(image):
         # Convert them all to ValueError (part of CLIENT_MEDIA_EXCEPTIONS) so
         # the processor maps them to a 400 response instead of a 500, while
         # chaining the original exception for callers/tests to inspect.
+        # Note: Image.open is lazy, so the bomb check may fire on the first
+        # decode access rather than here; callers must keep the same mapping
+        # around their decode step (see BaseMultimodalProcessor).
         raise ValueError(f"Failed to load image: {e}") from e
 
 
