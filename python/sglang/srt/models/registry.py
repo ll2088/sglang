@@ -16,11 +16,55 @@ from sglang.srt.environ import envs
 logger = logging.getLogger(__name__)
 
 
+def _parse_version(version: str) -> Tuple[int, ...]:
+    parts: List[int] = []
+    for piece in version.split("."):
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def _get_transformers_version() -> Optional[str]:
+    try:
+        import transformers
+    except Exception:
+        return None
+    return getattr(transformers, "__version__", None)
+
+
+def check_min_transformers_version(
+    arch: str, min_version: str, reason: Optional[str] = None
+) -> None:
+    """Raise a readable ImportError when the installed transformers is too old."""
+    installed = _get_transformers_version()
+    if installed is None:
+        return
+    if _parse_version(installed) >= _parse_version(min_version):
+        return
+    detail = f" ({reason})" if reason else ""
+    raise ImportError(
+        f"Model architecture '{arch}' requires transformers>={min_version}, "
+        f"but transformers {installed} is installed{detail}. "
+        f"Please upgrade transformers: pip install -U 'transformers>={min_version}'."
+    )
+
+
 @dataclass
 class _ModelRegistry:
     # Keyed by model_arch
     models: Dict[str, Union[Type[nn.Module], str]] = field(default_factory=dict)
+    # Optional minimum transformers version per model_arch, plus a human
+    # readable reason shown in the ImportError when the gate is not met.
+    min_transformers_versions: Dict[str, str] = field(default_factory=dict)
+    transformers_version_reasons: Dict[str, str] = field(default_factory=dict)
     _default_models_loaded: bool = True
+
+    def set_min_transformers_version(
+        self, model_arch: str, min_version: str, reason: Optional[str] = None
+    ) -> None:
+        self.min_transformers_versions[model_arch] = min_version
+        if reason:
+            self.transformers_version_reasons[model_arch] = reason
 
     def _load_default_models(self):
         if self._default_models_loaded:
@@ -68,6 +112,14 @@ class _ModelRegistry:
     def _try_load_model_cls(self, model_arch: str) -> Optional[Type[nn.Module]]:
         if model_arch not in self.models:
             return None
+
+        min_version = self.min_transformers_versions.get(model_arch)
+        if min_version is not None:
+            check_min_transformers_version(
+                model_arch,
+                min_version,
+                self.transformers_version_reasons.get(model_arch),
+            )
 
         return self.models[model_arch]
 
@@ -151,6 +203,14 @@ def import_model_classes(package_name: str, strict: bool = False):
 
 
 ModelRegistry = _ModelRegistry()
+# Models that are only usable through the Transformers modeling backend need a
+# minimum transformers release. Declaring it here keeps the failure mode a
+# readable ImportError instead of an obscure AttributeError at load time.
+ModelRegistry.set_min_transformers_version(
+    "AriaForConditionalGeneration",
+    "5.18.0",
+    "Needs https://github.com/huggingface/transformers/pull/48907",
+)
 if external_pkg := envs.SGLANG_EXTERNAL_MODEL_PACKAGE.get():
     # Defer default model imports to speed up startup when using external models.
     ModelRegistry._default_models_loaded = False

@@ -529,6 +529,14 @@ For instance, suppose we have four LoRA adapters: `lora0`, `lora1`, `lora2`, and
 In this scenario, overlap loading reduces adapter-load overhead, but the loss of multi-adapter prefill batching dominates and leads to higher TTFT.
 
 
+## Module Aliases and Shared Expert LoRA
+
+Some MoE blocks expose the same module instance through more than one attribute path. For example, a `MoERunner` may hold a reference to the block's gate or to its shared experts, so the module is reachable both as `moe.gate` (the canonical path that adapters target) and as `moe.runner.gate` (an alias path).
+
+When LoRA wrappers are registered, SGLang visits canonical paths first and defers alias paths so that the canonical path is the one tracked in the LoRA module map. Without this ordering, an alias path could be recorded instead of the canonical one, and adapters targeting the shared experts would be silently dropped.
+
+If you add a new MoE block with aliased submodules, make sure the canonical attribute path is the one adapters target, and add a test that loads a shared-expert adapter and asserts it changes the output.
+
 ## Future Works
 
 The development roadmap for LoRA-related features can be found in this [issue](https://github.com/sgl-project/sglang/issues/2929). Other features, including Embedding Layer, Unified Paging, Cutlass backend are still under development.

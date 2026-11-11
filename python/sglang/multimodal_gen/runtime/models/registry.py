@@ -21,6 +21,38 @@ from sglang.multimodal_gen.runtime.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
 
+
+def _parse_version(version: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for piece in version.split("."):
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def _get_transformers_version() -> str | None:
+    try:
+        import transformers
+    except Exception:
+        return None
+    return getattr(transformers, "__version__", None)
+
+
+def check_min_transformers_version(
+    arch: str, min_version: str, reason: str | None = None
+) -> None:
+    installed = _get_transformers_version()
+    if installed is None:
+        return
+    if _parse_version(installed) >= _parse_version(min_version):
+        return
+    detail = f" ({reason})" if reason else ""
+    raise ImportError(
+        f"Model architecture '{arch}' requires transformers>={min_version}, "
+        f"but transformers {installed} is installed{detail}. "
+        f"Please upgrade transformers: pip install -U 'transformers>={min_version}'."
+    )
+
 MODELS_PATH = os.path.dirname(__file__)
 COMPONENT_DIRS = [
     d
@@ -33,6 +65,18 @@ COMPONENT_DIRS = [
 _IMAGE_ENCODER_MODELS: dict[str, tuple] = {
     # "HunyuanVideoTransformer3DModel": ("image_encoder", "hunyuanvideo", "HunyuanVideoImageEncoder"),
     "CLIPVisionModelWithProjection": ("encoders", "clip", "CLIPVisionModel"),
+}
+
+# Models that are only usable through the Transformers modeling backend need a
+# minimum transformers release. Keep the declaration next to the registry so
+# the failure mode is a readable ImportError instead of an obscure crash.
+_MIN_TRANSFORMERS_VERSIONS: dict[str, str] = {
+    "AriaForConditionalGeneration": "5.18.0",
+}
+_TRANSFORMERS_VERSION_REASONS: dict[str, str] = {
+    "AriaForConditionalGeneration": (
+        "Needs https://github.com/huggingface/transformers/pull/48907"
+    ),
 }
 
 # Global alias mapping: external_path -> canonical_class_name
@@ -272,6 +316,14 @@ class _ModelRegistry:
         if model_arch not in self.registered_models:
             return None
 
+        min_version = _MIN_TRANSFORMERS_VERSIONS.get(model_arch)
+        if min_version is not None:
+            check_min_transformers_version(
+                model_arch,
+                min_version,
+                _TRANSFORMERS_VERSION_REASONS.get(model_arch),
+            )
+
         return _try_load_model_cls(model_arch, self.registered_models[model_arch])
 
     def _normalize_archs(
@@ -327,4 +379,12 @@ ModelRegistry = _ModelRegistry(
             cls_name,
         ) in _SGLANG_DIFFUSION_MODELS.items()
     }
+)
+
+# Aria is served through the Transformers modeling backend; register it here so
+# the multimodal_gen registry exposes the same architecture name and version
+# gate as the main model registry.
+ModelRegistry.register_model(
+    "AriaForConditionalGeneration",
+    "sglang.srt.models.transformers:TransformersMultiModalMoEForCausalLM",
 )

@@ -15,6 +15,18 @@ python3 -m sglang.launch_server \
   --model-impl transformers
 ```
 
+## Version gates
+
+Some architectures are only usable through the Transformers modeling backend once a minimum `transformers` release is installed. The registry declares this with `min_transformers_version` (and an optional reason), and resolution raises a readable `ImportError` when the installed version is too old:
+
+```text
+Model architecture 'AriaForConditionalGeneration' requires transformers>=5.18.0,
+but transformers 5.10.0 is installed (Needs https://github.com/huggingface/transformers/pull/48907).
+Please upgrade transformers: pip install -U 'transformers>=5.18.0'.
+```
+
+Aria (`AriaForConditionalGeneration`) is served through the Transformers modeling backend and requires `transformers>=5.18.0`.
+
 ## Supported features
 
 ### Quantization
