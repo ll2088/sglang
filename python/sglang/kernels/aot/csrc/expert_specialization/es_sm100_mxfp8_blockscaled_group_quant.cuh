@@ -246,7 +246,8 @@ __inline__ __device__ void mxfp8_group_quant_tile(
 
   // The SF layout keeps rest-N as the inner mode, so a padded M block would
   // alias the next 128 rows' SFs. Skip the bulk store when this tile's M block
-  // starts past the last valid row.
+  // starts past the last valid row. `m` is the expert's row count and the tile
+  // is BLOCK_M rows tall, so a tile is only valid when its first row is < m.
   if (threadIdx.x == 0 && m > 0) {
     cuda::ptx::cp_async_bulk(
         cuda::ptx::space_global,
