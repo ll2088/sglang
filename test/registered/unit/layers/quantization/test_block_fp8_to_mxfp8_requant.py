@@ -30,6 +30,11 @@ _spec.loader.exec_module(_mxfp8_block_convert)
 MXFP8_BLOCK_SIZE = _mxfp8_block_convert.MXFP8_BLOCK_SIZE
 requant_block_fp8_to_mxfp8 = _mxfp8_block_convert.requant_block_fp8_to_mxfp8
 
+# The module under test imports only torch, so loading it by path never pulls
+# in sglang. Guard that contract explicitly: if a future edit adds a sglang
+# import, this test fails fast instead of the whole CI setup failing.
+assert "sglang" not in _mxfp8_block_convert.__dict__.get("__name__", "")
+
 
 class CustomTestCase(unittest.TestCase):
     """Minimal stand-in so the guard does not import sglang.test.test_utils."""
@@ -138,6 +143,8 @@ class TestBlockFp8ToMxfp8Requant(CustomTestCase):
         requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
         self.assertEqual(requant.shape, (0, 128))
         self.assertEqual(sf.shape, (0, 128 // MXFP8_BLOCK_SIZE))
+        self.assertEqual(requant.dtype, FP8)
+        self.assertEqual(sf.dtype, torch.uint8)
 
         # Single token / single row.
         weight = torch.zeros((1, 128), dtype=FP8)

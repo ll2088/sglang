@@ -23,6 +23,10 @@ _mxfp8_dispatch_cache = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mxfp8_dispatch_cache)
 maybe_cache_mxfp8_dispatch = _mxfp8_dispatch_cache.maybe_cache_mxfp8_dispatch
 
+# The module under test only imports flashinfer (optional) and packaging, so
+# loading it by path never pulls in sglang. Keep that contract explicit.
+assert "sglang" not in _mxfp8_dispatch_cache.__dict__.get("__name__", "")
+
 
 class _FakeGemmBase:
     """Stand-in for flashinfer.gemm.gemm_base with a stateless runner factory."""
@@ -86,6 +90,22 @@ class TestMxfp8DispatchCache(unittest.TestCase):
         cached(*args, torch.bfloat16, True, "cutlass")
         cached(*args, torch.bfloat16, True, "cutlass")
         self.assertEqual(self.raw_calls, [False, False])
+
+    def test_dtype_change_invalidates(self):
+        cached = self._wrap()
+        a, b, a_scale, b_scale = self._tensors(64, 128)
+        cached(a, b, a_scale, b_scale, torch.bfloat16, True, "cute-dsl")
+        cached(a, b, a_scale, b_scale, torch.float16, True, "cute-dsl")
+        self.assertEqual(self.raw_calls, [False, False])
+
+    def test_runner_factory_is_memoized(self):
+        self._wrap()
+        self._wrap()
+        # The stateless runner factory is wrapped once per process.
+        self.assertEqual(self.gemm_base.calls, 0)
+        self.gemm_base._cute_dsl_gemm_mxfp8_runner(1, 2)
+        self.gemm_base._cute_dsl_gemm_mxfp8_runner(1, 2)
+        self.assertEqual(self.gemm_base.calls, 1)
 
 
 if __name__ == "__main__":
