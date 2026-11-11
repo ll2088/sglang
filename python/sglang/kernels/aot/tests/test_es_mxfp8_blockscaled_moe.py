@@ -7,6 +7,11 @@ import pytest
 # must still be collectible and report skips instead of import errors.
 torch = pytest.importorskip("torch", reason="torch is not installed")
 
+# Skip the whole module before touching sgl_kernel when the interpreter or the
+# CUDA runtime cannot possibly run these kernels, so collection never fails.
+if sys.version_info < (3, 9):
+    pytest.skip("requires Python >= 3.9", allow_module_level=True)
+
 # The bounds tests live in a sibling module; import them lazily so that a
 # missing sgl_kernel extension skips this module instead of failing collection.
 

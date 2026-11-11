@@ -244,7 +244,10 @@ __inline__ __device__ void mxfp8_group_quant_tile(
   cuda::ptx::fence_proxy_async(cuda::ptx::space_shared);  // b)
   __syncthreads();
 
-  if (threadIdx.x == 0) {
+  // The SF layout keeps rest-N as the inner mode, so a padded M block would
+  // alias the next 128 rows' SFs. Skip the bulk store when this tile's M block
+  // starts past the last valid row.
+  if (threadIdx.x == 0 && m > 0) {
     cuda::ptx::cp_async_bulk(
         cuda::ptx::space_global,
         cuda::ptx::space_shared,

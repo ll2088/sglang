@@ -6,6 +6,9 @@ import pytest
 # must still be collectible and report skips instead of import errors.
 torch = pytest.importorskip("torch", reason="torch is not installed")
 
+if sys.version_info < (3, 9):
+    pytest.skip("requires Python >= 3.9", allow_module_level=True)
+
 
 def _ops():
     sgl_kernel = pytest.importorskip(
@@ -118,6 +121,9 @@ def test_es_mxfp8_blockscaled_moe_tail_bounds(num_experts, out_dtype, m_sizes):
     assert torch.equal(a_scale_factor[a_blockscale_offset:], a_sf_sentinel), (
         "scale-factor store wrote past the allocated SF rows"
     )
+    # Every valid SF row must be non-zero for non-zero input, i.e. the guard did
+    # not drop a valid store along with the padded one.
+    assert a_scale_factor[:a_blockscale_offset].any(), "valid SF rows were not written"
 
     b_quant = b_quant.view(num_experts, n_g, k_g).transpose(1, 2)
     b_scale_factor = b_scale_factor.view(num_experts, n_g, k_g // 32).transpose(1, 2)
