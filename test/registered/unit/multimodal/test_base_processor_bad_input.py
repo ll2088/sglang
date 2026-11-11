@@ -104,6 +104,23 @@ class TestBadInputIsClientError(CustomTestCase):
                 load_image_from_base64(encoded)
             self.assertIsInstance(ctx.exception.__cause__, Image.DecompressionBombError)
 
+    def test_decompression_bomb_data_url(self):
+        # The data: URL path used by chat_utils goes through the same
+        # load_image_from_base64 entry, so it must also surface ValueError.
+        with patch.object(Image, "MAX_IMAGE_PIXELS", 50):
+            buf = io.BytesIO()
+            Image.new("RGB", (20, 20), (0, 255, 0)).save(buf, format="PNG")
+            data_url = "data:image/png;base64," + base64.b64encode(
+                buf.getvalue()
+            ).decode()
+            with self.assertRaisesRegex(
+                ValueError, "Failed to load image"
+            ) as ctx:
+                _StubProcessor._load_single_item(data_url, Modality.IMAGE)
+            self.assertIsInstance(
+                ctx.exception.__cause__.__cause__, Image.DecompressionBombError
+            )
+
     def test_normal_image_still_decodes(self):
         buf = io.BytesIO()
         Image.new("RGB", (8, 8), (1, 2, 3)).save(buf, format="PNG")
