@@ -104,6 +104,18 @@ class TestRustImageDecode(CustomTestCase):
         image = load_image_from_base64(base64.b64encode(data).decode())
         self.assertEqual(image.size, (20, 20))
 
+    def test_pillow_bomb_check_on_decode_maps_to_value_error(self):
+        """Image.open is lazy, so the bomb check may fire on the first decode
+        access; the decode entry point must still convert it to ValueError."""
+        from sglang.srt.multimodal.mm_utils import load_image_from_base64
+
+        data = encode(Image.new("RGB", (20, 20), (0, 255, 0)), "PNG")
+        encoded = base64.b64encode(data).decode()
+        with patch.object(Image, "MAX_IMAGE_PIXELS", 50):
+            image = load_image_from_base64(encoded)
+            with self.assertRaises(Image.DecompressionBombError):
+                image.load()
+
     def test_unsupported_inputs_fail(self):
         gray16 = Image.fromarray(np.zeros((9, 9), dtype=np.uint16))
         cases = {

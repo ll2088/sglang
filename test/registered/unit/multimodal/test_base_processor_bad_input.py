@@ -90,6 +90,20 @@ class TestBadInputIsClientError(CustomTestCase):
                 _StubProcessor._load_single_item(data, Modality.IMAGE)
             self.assertIsInstance(ctx.exception.__cause__, Image.DecompressionBombError)
 
+    def test_decompression_bomb_image_is_client_error_on_decode(self):
+        # Image.open is lazy: the bomb check can fire on the first decode
+        # access rather than inside load_image_from_base64. The decode path
+        # must still map it to a client-side ValueError.
+        buffer = io.BytesIO()
+        Image.new("RGB", (20, 20), (0, 255, 0)).save(buffer, format="PNG")
+        data = buffer.getvalue()
+        with patch.object(Image, "MAX_IMAGE_PIXELS", 50):
+            with self.assertRaisesRegex(
+                ValueError, "Could not decode image"
+            ) as ctx:
+                _StubProcessor._load_single_item(data, Modality.IMAGE)
+            self.assertIsInstance(ctx.exception.__cause__, Image.DecompressionBombError)
+
     def test_normal_image_still_decodes_after_bomb_check(self):
         # The bomb-check conversion must not reject valid input.
         buffer = io.BytesIO()
