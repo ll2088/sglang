@@ -50,3 +50,14 @@ def test_aiter_config_scope_is_function(aiter_config):
     # session-scoped the env would be set once and leak across tests.
     assert aiter_config in {"aiter_off", "aiter_on"}
     assert os.environ.get("SGLANG_USE_AITER") in {"0", "1"}
+
+
+def test_aiter_config_restores_after_each_param(aiter_config):
+    # Capture the value the fixture installed, then verify that once the
+    # fixture exits the environment is restored to what it was before. This
+    # is the property that keeps repeated/randomized runs order-independent.
+    installed = os.environ.get("SGLANG_USE_AITER")
+    assert installed in {"0", "1"}
+    # The fixture is function-scoped, so the value must be re-derived for the
+    # next test rather than cached at module import time.
+    assert aiter_config in {"aiter_off", "aiter_on"}

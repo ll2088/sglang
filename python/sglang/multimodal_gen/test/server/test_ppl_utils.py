@@ -49,3 +49,19 @@ def test_build_answer_mask_marks_trailing_answer():
 def test_build_answer_mask_returns_all_false_when_absent():
     mask = build_answer_mask([1, 2, 3], [9, 9])
     assert mask == [False, False, False]
+
+
+def test_answer_token_ppl_prompt_vs_answer_comparison():
+    # Same model output, two scoring scopes. Prompt tokens are noisy and
+    # near-zero log-prob; answer tokens are confident. Scoring only the
+    # answer must be strictly better (lower PPL) than scoring everything.
+    logprobs = [-12.0, -11.5, -0.1, -0.2]
+    all_tokens = answer_token_ppl(logprobs, [True, True, True, True])
+    answer_only = answer_token_ppl(logprobs, [False, False, True, True])
+    assert answer_only < all_tokens
+    assert answer_only == pytest.approx(math.exp(0.15))
+
+
+def test_answer_token_ppl_single_answer_token():
+    ppl = answer_token_ppl([-5.0, -0.5], [False, True])
+    assert ppl == pytest.approx(math.exp(0.5))
