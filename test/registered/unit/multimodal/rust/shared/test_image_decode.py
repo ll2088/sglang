@@ -104,6 +104,13 @@ class TestRustImageDecode(CustomTestCase):
         image = load_image_from_base64(base64.b64encode(data).decode())
         self.assertEqual(image.size, (20, 20))
 
+    def test_normal_image_decodes_through_python_entry(self):
+        from sglang.srt.multimodal.mm_utils import load_image_from_base64
+
+        data = encode(Image.new("RGB", (20, 20), (0, 255, 0)), "PNG")
+        image = load_image_from_base64(base64.b64encode(data).decode())
+        self.assertEqual(image.size, (20, 20))
+
     def test_unsupported_inputs_fail(self):
         gray16 = Image.fromarray(np.zeros((9, 9), dtype=np.uint16))
         cases = {

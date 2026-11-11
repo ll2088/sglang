@@ -90,6 +90,12 @@ class TestBadInputIsClientError(CustomTestCase):
                 _StubProcessor._load_single_item(data, Modality.IMAGE)
             self.assertIsInstance(ctx.exception.__cause__, Image.DecompressionBombError)
 
+    def test_normal_image_still_decodes_after_bomb_check(self):
+        # The bomb-check conversion must not reject valid input.
+        buffer = io.BytesIO()
+        Image.new("RGB", (20, 20), (0, 255, 0)).save(buffer, format="PNG")
+        _StubProcessor._load_single_item(buffer.getvalue(), Modality.IMAGE)
+
     def test_normal_image_still_decodes(self):
         buffer = io.BytesIO()
         Image.new("RGB", (20, 20), (0, 255, 0)).save(buffer, format="PNG")

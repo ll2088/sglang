@@ -333,6 +333,10 @@ def load_image_from_base64(image):
         # the normal decode path is unaffected because only this exception is
         # converted and all other errors propagate unchanged.
         raise ValueError(f"Failed to load image: {e}") from e
+    except (Image.UnidentifiedImageError, SyntaxError, RuntimeError) as e:
+        # Other undecodable-image errors are also client input problems; keep
+        # them as ValueError so the processor maps them to a 400 response.
+        raise ValueError(f"Failed to load image: {e}") from e
 
 
 def expand2square(pil_img, background_color):
