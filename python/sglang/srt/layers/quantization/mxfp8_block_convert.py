@@ -88,6 +88,11 @@ def requant_block_fp8_to_mxfp8(
     blocks_m, blocks_k = scale.shape
     block_m = (n + blocks_m - 1) // blocks_m
     block_k = (k + blocks_k - 1) // blocks_k
+    if block_m * blocks_m < n or block_k * blocks_k < k:
+        raise ValueError(
+            f"requant_block_fp8_to_mxfp8 scale shape {tuple(scale.shape)} "
+            f"does not cover weight shape {(n, k)}."
+        )
     real = weight.to(torch.float32).view(
         blocks_m, block_m, blocks_k, block_k
     )
@@ -102,6 +107,9 @@ def _bf16_to_mxfp8_1x32(
     """Quantize a 2D fp32/bf16 tensor to E4M3 + UE8M0 scales per 1x32 block."""
     n, k = weight.shape
     x = weight.to(torch.float32).view(n, k // MXFP8_BLOCK_SIZE, MXFP8_BLOCK_SIZE)
+    # Non-finite inputs must not poison the scale: treat them as zero so the
+    # output stays finite and the caller can detect the bad block via amax.
+    x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
     amax = x.abs().amax(dim=-1).clamp(min=1e-30)
     # Round the scale up to the next power of two so the mantissa fits E4M3.
     scale_biased = torch.ceil(torch.log2(amax / 448.0)) + 127.0

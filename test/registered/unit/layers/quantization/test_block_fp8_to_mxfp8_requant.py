@@ -4,15 +4,30 @@ from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=10, suite="base-a-test-cpu")
 
+import importlib.util
+import pathlib
 import unittest
 
 import torch
 
-from sglang.srt.layers.quantization.mxfp8_block_convert import (
-    MXFP8_BLOCK_SIZE,
-    requant_block_fp8_to_mxfp8,
+# Import the module by path so this CPU guard runs without installing sglang
+# (the previous CI setup failed during pip resolution before pytest started).
+_MODULE_PATH = (
+    pathlib.Path(__file__).resolve().parents[6]
+    / "python/sglang/srt/layers/quantization/mxfp8_block_convert.py"
 )
-from sglang.test.test_utils import CustomTestCase
+_spec = importlib.util.spec_from_file_location(
+    "_mxfp8_block_convert_under_test", _MODULE_PATH
+)
+assert _spec is not None and _spec.loader is not None
+_mxfp8_block_convert = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_mxfp8_block_convert)
+MXFP8_BLOCK_SIZE = _mxfp8_block_convert.MXFP8_BLOCK_SIZE
+requant_block_fp8_to_mxfp8 = _mxfp8_block_convert.requant_block_fp8_to_mxfp8
+
+
+class CustomTestCase(unittest.TestCase):
+    """Minimal stand-in so the guard does not import sglang.test.test_utils."""
 
 FP8 = torch.float8_e4m3fn
 BLOCK = 128
@@ -85,6 +100,37 @@ class TestBlockFp8ToMxfp8Requant(CustomTestCase):
         scale = torch.ones((1, 1), dtype=torch.float32)
         with self.assertRaises(ValueError):
             requant_block_fp8_to_mxfp8(weight, scale)
+
+    def test_rejects_scale_shape_that_does_not_cover_weight(self):
+        weight = torch.zeros((256, 256), dtype=FP8)
+        scale = torch.ones((1, 1), dtype=torch.float32)
+        with self.assertRaises(ValueError):
+            requant_block_fp8_to_mxfp8(weight, scale)
+
+    def test_non_finite_inputs_stay_finite(self):
+        weight = torch.full((128, 128), 448.0, dtype=FP8)
+        scale = torch.full((1, 1), float("inf"), dtype=torch.float32)
+
+        requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
+
+        self.assertTrue(torch.isfinite(requant.float()).all())
+        self.assertTrue((sf <= 254).all())
+
+    def test_empty_and_single_token_shapes(self):
+        # Empty expert batch: zero rows must still produce a valid empty tensor.
+        weight = torch.zeros((0, 128), dtype=FP8)
+        scale = torch.ones((0, 1), dtype=torch.float32)
+        requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
+        self.assertEqual(requant.shape, (0, 128))
+        self.assertEqual(sf.shape, (0, 128 // MXFP8_BLOCK_SIZE))
+
+        # Single token / single row.
+        weight = torch.zeros((1, 128), dtype=FP8)
+        scale = torch.ones((1, 1), dtype=torch.float32)
+        requant, sf = requant_block_fp8_to_mxfp8(weight, scale)
+        self.assertEqual(requant.shape, (1, 128))
+        self.assertEqual(sf.shape, (1, 128 // MXFP8_BLOCK_SIZE))
+        self.assertTrue(torch.isfinite(requant.float()).all())
 
 
 if __name__ == "__main__":
