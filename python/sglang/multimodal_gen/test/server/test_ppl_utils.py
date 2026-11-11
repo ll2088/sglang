@@ -1,13 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
+import sys
 
 import pytest
 
-from sglang.multimodal_gen.test.server.ppl_utils import (
-    answer_token_ppl,
-    build_answer_mask,
-)
+# Import the helper module directly so this unit test does not require the
+# full sglang package (and its heavy dependencies) to be importable.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from ppl_utils import answer_token_ppl, build_answer_mask  # noqa: E402
 
 
 def test_answer_token_ppl_ignores_prompt_tokens():

@@ -28,15 +28,19 @@ def _refresh_backend_envs():
     SGLang reads backend switches through ``os.environ`` at import/init time.
     Tests that flip them must invalidate whatever cache exists so the next
     test does not observe the previous configuration. This helper is a no-op
-    when no cache is present, which keeps it safe across versions.
+    when no cache is present, which keeps it safe across versions and when the
+    sglang package is not importable (e.g. a minimal CI image).
     """
     try:
         from sglang.srt.utils import envs as sglang_envs
-    except ImportError:
+    except Exception:
         return
     disable = getattr(sglang_envs, "disable_envs_cache", None)
     if callable(disable):
-        disable()
+        try:
+            disable()
+        except Exception:
+            pass
 
 
 def _aiter_supported() -> bool:
@@ -45,10 +49,9 @@ def _aiter_supported() -> bool:
         return True
     try:
         import torch
-
-        return bool(getattr(torch.version, "hip", None))
-    except ImportError:
+    except Exception:
         return False
+    return bool(getattr(getattr(torch, "version", None), "hip", None))
 
 
 @pytest.fixture(
