@@ -7,6 +7,9 @@ import pytest
 # must still be collectible and report skips instead of import errors.
 torch = pytest.importorskip("torch", reason="torch is not installed")
 
+# The bounds tests live in a sibling module; import them lazily so that a
+# missing sgl_kernel extension skips this module instead of failing collection.
+
 
 def _ops():
     # Import lazily and skip (not fail) when the extension is not built, so that
@@ -14,16 +17,21 @@ def _ops():
     sgl_kernel = pytest.importorskip(
         "sgl_kernel", reason="sgl_kernel extension is not built"
     )
-    return (
-        sgl_kernel.es_sm100_mxfp8_blockscaled_grouped_mm,
-        sgl_kernel.es_sm100_mxfp8_blockscaled_grouped_quant,
-    )
+    mm = getattr(sgl_kernel, "es_sm100_mxfp8_blockscaled_grouped_mm", None)
+    quant = getattr(sgl_kernel, "es_sm100_mxfp8_blockscaled_grouped_quant", None)
+    if mm is None or quant is None:
+        pytest.skip("sgl_kernel was built without the sm100 blockscaled MoE ops")
+    return mm, quant
 
 
 def is_sm100_supported(device=None) -> bool:
     if not torch.cuda.is_available():
         return False
-    return (torch.cuda.get_device_capability(device)[0] == 10) and (
+    try:
+        major = torch.cuda.get_device_capability(device)[0]
+    except Exception:
+        return False
+    return (major == 10) and (
         torch.version.cuda is not None and torch.version.cuda >= "12.8"
     )
 
@@ -127,12 +135,6 @@ def test_es_mxfp8_blockscaled_moe_tail_bounds(num_experts, out_dtype, m_sizes):
         diff = calc_diff(actual, baseline)
         assert diff < 0.001, f"expert {g} m={baseline.shape[0]} diff={diff:.5f}"
 
-random.seed(42)
-torch.manual_seed(42)
-torch.cuda.manual_seed(42)
-torch.cuda.manual_seed_all(42)
-
-
 def align(val: int, alignment: int = 128) -> int:
     return int((val + alignment - 1) // alignment * alignment)
 
@@ -152,6 +154,9 @@ def calc_diff(x, y):
 @pytest.mark.parametrize("num_experts", [8, 16, 32, 64])
 @pytest.mark.parametrize("out_dtype", [torch.half, torch.bfloat16])
 def test_es_sm100_mxfp8_blockscaled_grouped_mm(num_experts, out_dtype):
+    random.seed(42)
+    torch.manual_seed(42)
+    torch.cuda.manual_seed_all(42)
     es_sm100_mxfp8_blockscaled_grouped_mm, es_sm100_mxfp8_blockscaled_grouped_quant = _ops()
     device = "cuda"
     alignment = 128

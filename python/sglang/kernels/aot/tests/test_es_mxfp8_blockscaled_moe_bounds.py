@@ -11,16 +11,21 @@ def _ops():
     sgl_kernel = pytest.importorskip(
         "sgl_kernel", reason="sgl_kernel extension is not built"
     )
-    return (
-        sgl_kernel.es_sm100_mxfp8_blockscaled_grouped_mm,
-        sgl_kernel.es_sm100_mxfp8_blockscaled_grouped_quant,
-    )
+    mm = getattr(sgl_kernel, "es_sm100_mxfp8_blockscaled_grouped_mm", None)
+    quant = getattr(sgl_kernel, "es_sm100_mxfp8_blockscaled_grouped_quant", None)
+    if mm is None or quant is None:
+        pytest.skip("sgl_kernel was built without the sm100 blockscaled MoE ops")
+    return mm, quant
 
 
 def is_sm100_supported(device=None) -> bool:
     if not torch.cuda.is_available():
         return False
-    return (torch.cuda.get_device_capability(device)[0] == 10) and (
+    try:
+        major = torch.cuda.get_device_capability(device)[0]
+    except Exception:
+        return False
+    return (major == 10) and (
         torch.version.cuda is not None and torch.version.cuda >= "12.8"
     )
 
