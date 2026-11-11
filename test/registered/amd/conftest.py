@@ -10,8 +10,19 @@ by the collected file's directory, so that declaration never reaches
 from sglang.multimodal_gen.test.server.conftest import perf_results  # noqa: F401
 
 import os
+import sys
 
 import pytest
+
+# sglang's dependency set does not yet publish wheels for Python 3.14, so
+# installing the package there fails before pytest can run. Surface that as a
+# clear collection-time skip instead of an opaque import/install error.
+if sys.version_info >= (3, 14):
+    pytest.skip(
+        "sglang dependencies are not available for Python 3.14+; "
+        "run this suite on a supported interpreter (e.g. 3.12)",
+        allow_module_level=True,
+    )
 
 # Backend switch matrix for AMD/ROCm tests. Each entry maps environment
 # variable names to the values that select that configuration. Keep this
