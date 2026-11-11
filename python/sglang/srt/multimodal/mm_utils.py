@@ -322,20 +322,17 @@ def process_anyres_image(image, processor, grid_pinpoints):
 def load_image_from_base64(image):
     try:
         return Image.open(BytesIO(pybase64.b64decode(image, validate=True)))
-    except Image.DecompressionBombError as e:
-        # Pillow raises this for images above its pixel limit; treat it as a
-        # client-side decode error instead of letting it escape as a 500.
-        # ValueError is part of CLIENT_MEDIA_EXCEPTIONS, so the multimodal
-        # processor classifies it as bad client input rather than a server fault.
-        # Keep the original exception chained so callers/tests can inspect the
-        # underlying Pillow error while still seeing a client-side ValueError.
-        # Note: Image.open is lazy, so the bomb check fires here at open time;
-        # the normal decode path is unaffected because only this exception is
-        # converted and all other errors propagate unchanged.
-        raise ValueError(f"Failed to load image: {e}") from e
-    except (Image.UnidentifiedImageError, SyntaxError, RuntimeError) as e:
-        # Other undecodable-image errors are also client input problems; keep
-        # them as ValueError so the processor maps them to a 400 response.
+    except (
+        Image.DecompressionBombError,
+        Image.UnidentifiedImageError,
+        SyntaxError,
+        RuntimeError,
+    ) as e:
+        # Pillow's bomb check raises DecompressionBombError (not an OSError),
+        # and other undecodable-image errors are also client input problems.
+        # Convert them all to ValueError (part of CLIENT_MEDIA_EXCEPTIONS) so
+        # the processor maps them to a 400 response instead of a 500, while
+        # chaining the original exception for callers/tests to inspect.
         raise ValueError(f"Failed to load image: {e}") from e
 
 
