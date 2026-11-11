@@ -96,12 +96,6 @@ class TestBadInputIsClientError(CustomTestCase):
         Image.new("RGB", (20, 20), (0, 255, 0)).save(buffer, format="PNG")
         _StubProcessor._load_single_item(buffer.getvalue(), Modality.IMAGE)
 
-    def test_normal_image_still_decodes(self):
-        buffer = io.BytesIO()
-        Image.new("RGB", (20, 20), (0, 255, 0)).save(buffer, format="PNG")
-        # Must not raise: the bomb-check conversion must not reject valid input.
-        _StubProcessor._load_single_item(buffer.getvalue(), Modality.IMAGE)
-
     def test_undecodable_audio_bytes(self):
         # soundfile raises LibsndfileError, a RuntimeError -- not a ValueError.
         self._assert_client_error(b"definitely not audio", Modality.AUDIO)
