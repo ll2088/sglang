@@ -320,7 +320,12 @@ def process_anyres_image(image, processor, grid_pinpoints):
 
 
 def load_image_from_base64(image):
-    return Image.open(BytesIO(pybase64.b64decode(image, validate=True)))
+    try:
+        return Image.open(BytesIO(pybase64.b64decode(image, validate=True)))
+    except Image.DecompressionBombError as e:
+        # Pillow raises this for images above its pixel limit; treat it as a
+        # client-side decode error instead of letting it escape as a 500.
+        raise ValueError(f"Failed to load image: {e}") from e
 
 
 def expand2square(pil_img, background_color):

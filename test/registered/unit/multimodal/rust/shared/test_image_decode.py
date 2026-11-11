@@ -5,6 +5,7 @@ Covers ``decode_rgb`` in ``rust/sglang-mm/src/common/mod.rs`` (via the
 ``Image.open(...).convert("RGB")``.
 """
 
+import base64
 import io
 import sys
 import unittest
@@ -82,6 +83,27 @@ class TestRustImageDecode(CustomTestCase):
         for name, data in cases.items():
             with self.subTest(fmt=name):
                 self.assert_matches_pil(data)
+
+    def test_pillow_decompression_bomb_maps_to_value_error(self):
+        """The Python decode entry point must convert Pillow's bomb check
+        exception into a ValueError so callers classify it as client error."""
+        from unittest.mock import patch
+
+        from sglang.srt.multimodal.mm_utils import load_image_from_base64
+
+        data = encode(Image.new("RGB", (20, 20), (0, 255, 0)), "PNG")
+        encoded = base64.b64encode(data).decode()
+        with patch.object(Image, "MAX_IMAGE_PIXELS", 50):
+            with self.assertRaisesRegex(ValueError, "Failed to load image") as ctx:
+                load_image_from_base64(encoded)
+            self.assertIsInstance(ctx.exception.__cause__, Image.DecompressionBombError)
+
+    def test_normal_image_decodes_through_python_entry(self):
+        from sglang.srt.multimodal.mm_utils import load_image_from_base64
+
+        data = encode(Image.new("RGB", (20, 20), (0, 255, 0)), "PNG")
+        image = load_image_from_base64(base64.b64encode(data).decode())
+        self.assertEqual(image.size, (20, 20))
 
     def test_unsupported_inputs_fail(self):
         gray16 = Image.fromarray(np.zeros((9, 9), dtype=np.uint16))

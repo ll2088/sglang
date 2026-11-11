@@ -77,6 +77,25 @@ class TestBadInputIsClientError(CustomTestCase):
                     _StubProcessor._load_single_item(media, Modality.IMAGE)
                 self.assertIsInstance(ctx.exception.__cause__.__cause__, OSError)
 
+    def test_decompression_bomb_image_is_client_error(self):
+        # Pillow raises DecompressionBombError (not an OSError) for images
+        # above its pixel limit; it must surface as a client-side ValueError.
+        buffer = io.BytesIO()
+        Image.new("RGB", (20, 20), (0, 255, 0)).save(buffer, format="PNG")
+        data = buffer.getvalue()
+        with patch.object(Image, "MAX_IMAGE_PIXELS", 50):
+            with self.assertRaisesRegex(
+                ValueError, "Failed to load image"
+            ) as ctx:
+                _StubProcessor._load_single_item(data, Modality.IMAGE)
+            self.assertIsInstance(ctx.exception.__cause__, Image.DecompressionBombError)
+
+    def test_normal_image_still_decodes(self):
+        buffer = io.BytesIO()
+        Image.new("RGB", (20, 20), (0, 255, 0)).save(buffer, format="PNG")
+        # Must not raise: the bomb-check conversion must not reject valid input.
+        _StubProcessor._load_single_item(buffer.getvalue(), Modality.IMAGE)
+
     def test_undecodable_audio_bytes(self):
         # soundfile raises LibsndfileError, a RuntimeError -- not a ValueError.
         self._assert_client_error(b"definitely not audio", Modality.AUDIO)
