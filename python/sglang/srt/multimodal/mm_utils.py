@@ -329,6 +329,9 @@ def load_image_from_base64(image):
         # processor classifies it as bad client input rather than a server fault.
         # Keep the original exception chained so callers/tests can inspect the
         # underlying Pillow error while still seeing a client-side ValueError.
+        # Note: Image.open is lazy, so the bomb check fires here at open time;
+        # the normal decode path is unaffected because only this exception is
+        # converted and all other errors propagate unchanged.
         raise ValueError(f"Failed to load image: {e}") from e
 
 
