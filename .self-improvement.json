@@ -1,18 +1,18 @@
 {
   "version": 2,
   "generatedBy": "autojump",
-  "setup": "PY=$(command -v python3.12 || command -v python3) && echo \"using $PY\" && \"$PY\" --version && \"$PY\" -m venv .venv && .venv/bin/python -m pip install -U pip setuptools wheel && PIP_DEFAULT_TIMEOUT=120 .venv/bin/python -m pip install --retries 5 -e python",
+  "setup": "pip install -e python",
   "dimensions": [
     {
       "key": "effect",
       "label": "效果",
-      "command": ".venv/bin/python -m pytest -q python/sglang/kernels/ops/attention/flash_attn/cute/tests/test_fwd_config.py test/srt/test_dsa_fused_mqa_topk_plan.py",
+      "command": "pytest -q",
       "timeout_minutes": 20
     },
     {
       "key": "performance",
       "label": "性能",
-      "command": ".venv/bin/python -m pytest -q benchmark --durations=10",
+      "command": "python -m pytest benchmark -q --durations=10",
       "timeout_minutes": 20,
       "runs": 3,
       "budget_ms": null
@@ -20,7 +20,7 @@
     {
       "key": "stability",
       "label": "稳定性",
-      "command": ".venv/bin/python -m pytest -q -p no:randomly",
+      "command": "pytest -q -p no:randomly",
       "timeout_minutes": 20,
       "runs": 3,
       "max_failure_rate": 0
@@ -28,28 +28,28 @@
     {
       "key": "usability",
       "label": "可用性",
-      "command": ".venv/bin/python -m pytest -q test",
+      "command": "pytest -q test",
       "timeout_minutes": 20
     }
   ],
   "effect": {
-    "command": ".venv/bin/python -m pytest -q python/sglang/kernels/ops/attention/flash_attn/cute/tests/test_fwd_config.py test/srt/test_dsa_fused_mqa_topk_plan.py",
+    "command": "pytest -q",
     "timeout_minutes": 20
   },
   "performance": {
-    "command": ".venv/bin/python -m pytest -q benchmark --durations=10",
+    "command": "python -m pytest benchmark -q --durations=10",
     "timeout_minutes": 20,
     "runs": 3,
     "budget_ms": null
   },
   "stability": {
-    "command": ".venv/bin/python -m pytest -q -p no:randomly",
+    "command": "pytest -q -p no:randomly",
     "timeout_minutes": 20,
     "runs": 3,
     "max_failure_rate": 0
   },
   "usability": {
-    "command": ".venv/bin/python -m pytest -q test",
+    "command": "pytest -q test",
     "timeout_minutes": 20
   }
 }
