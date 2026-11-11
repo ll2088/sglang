@@ -289,6 +289,32 @@ async fn send_grpc(mut client: GrpcClient, body: Value, base: Instant, output: &
     }
 }
 
+/// Append transport bytes, normalizing CRLF and CR line endings to LF, and
+/// invoke `on_line` for each complete line. `previous_was_cr` persists across
+/// calls so a CRLF pair split across two reads is one line ending.
+fn push_normalized_lines(
+    buffer: &mut BytesMut,
+    previous_was_cr: &mut bool,
+    chunk: &[u8],
+    mut on_line: impl FnMut(&[u8]),
+) {
+    for &byte in chunk {
+        if byte == b'\n' && *previous_was_cr {
+            *previous_was_cr = false;
+            continue;
+        }
+        *previous_was_cr = byte == b'\r';
+        let normalized = if *previous_was_cr { b'\n' } else { byte };
+        if normalized == b'\n' {
+            let len = buffer.len();
+            let line = buffer.split_to(len);
+            on_line(&line);
+        } else {
+            buffer.push(normalized);
+        }
+    }
+}
+
 /// Consume the response body line by line, feeding each line to the
 /// protocol's parser. aiohttp's `async for chunk in response.content` yields
 /// newline-delimited pieces, which is what the Python parsers assume, so the
@@ -302,21 +328,15 @@ async fn read_stream(
     let mut state = StreamState::new(api, output.output_len);
     let mut body = response.bytes_stream();
     let mut buffer = BytesMut::with_capacity(LINE_BUFFER_HINT);
-    // Where the newline search left off. Without it a long cumulative frame
-    // reassembled from many socket reads would be rescanned from the start on
-    // every read, which is quadratic in the frame size.
-    let mut scanned = 0usize;
+    // A CR at the end of one transport chunk may pair with an LF at the start
+    // of the next; keep that state across reads.
+    let mut previous_was_cr = false;
 
     while let Some(chunk) = body.next().await {
         let chunk = chunk.map_err(|error| format!("stream read failed: {error}"))?;
-        buffer.extend_from_slice(&chunk);
-        while let Some(offset) = buffer[scanned..].iter().position(|&byte| byte == b'\n') {
-            let end = scanned + offset;
-            let line = buffer.split_to(end + 1);
-            scanned = 0;
-            state.feed(&line[..end], start, output);
-        }
-        scanned = buffer.len();
+        push_normalized_lines(&mut buffer, &mut previous_was_cr, chunk.as_ref(), |line| {
+            state.feed(line, start, output);
+        });
     }
     if !buffer.is_empty() {
         state.feed(&buffer, start, output);
@@ -356,8 +376,16 @@ impl StreamState {
     }
 
     fn feed(&mut self, line: &[u8], start: Instant, output: &mut RequestOutput) {
-        let line = trim(line);
-        if line.is_empty() {
+        // Blank lines separate events; comments and non-data fields carry no
+        // payload. A bare JSON line is still accepted for the non-streaming
+        // single frame.
+        if line.is_empty()
+            || line.iter().all(|byte| byte.is_ascii_whitespace())
+            || line.starts_with(b":")
+            || line.starts_with(b"event:")
+            || line.starts_with(b"id:")
+            || line.starts_with(b"retry:")
+        {
             return;
         }
         let payload = line.strip_prefix(b"data: ").unwrap_or(line);
@@ -576,18 +604,6 @@ fn record_server_prompt_len(data: &Value, output: &mut RequestOutput) {
     if tokens > 0 {
         output.prompt_len = tokens as usize;
     }
-}
-
-fn trim(line: &[u8]) -> &[u8] {
-    let start = line
-        .iter()
-        .position(|byte| !byte.is_ascii_whitespace())
-        .unwrap_or(line.len());
-    let end = line
-        .iter()
-        .rposition(|byte| !byte.is_ascii_whitespace())
-        .map_or(start, |index| index + 1);
-    &line[start..end]
 }
 
 #[cfg(test)]
@@ -901,6 +917,52 @@ mod tests {
         );
         assert!(output.success, "{}", output.error);
         assert_eq!(output.generated_text, "xy");
+    }
+
+    /// CR, LF, and CRLF framing must survive any transport chunk split; the
+    /// CRLF pair is the one that can straddle two chunks.
+    #[test]
+    fn line_framing_normalizes_line_endings_across_chunks() {
+        let expected: Vec<String> = vec![
+            r#"data: {"text":" leading  trailing "}"#.into(),
+            ": ping".into(),
+            "data: [DONE]".into(),
+        ];
+        for line_ending in ["\n", "\r\n", "\r"] {
+            let stream = expected.join(line_ending);
+            for chunk_size in 1..=stream.len() {
+                let mut buffer = BytesMut::new();
+                let mut previous_was_cr = false;
+                let mut lines = Vec::new();
+                for chunk in stream.as_bytes().chunks(chunk_size) {
+                    push_normalized_lines(&mut buffer, &mut previous_was_cr, chunk, |line| {
+                        lines.push(String::from_utf8(line.to_vec()).unwrap());
+                    });
+                }
+                if !buffer.is_empty() {
+                    lines.push(String::from_utf8(buffer.to_vec()).unwrap());
+                }
+                assert_eq!(
+                    lines, expected,
+                    "line ending {line_ending:?}, chunk size {chunk_size}"
+                );
+            }
+        }
+    }
+
+    /// A comment before a payload must not hide the payload, and whitespace
+    /// inside a generated text is data, not framing.
+    #[test]
+    fn comments_do_not_hide_data_and_payloads_keep_whitespace() {
+        let output = feed_all(
+            Api::OpenaiCompletions,
+            &[
+                ": keep-alive",
+                r#"data: {"choices":[{"text":" leading  trailing "}]}"#,
+            ],
+        );
+        assert!(output.success, "{}", output.error);
+        assert_eq!(output.generated_text, " leading  trailing ");
     }
 
     #[test]
