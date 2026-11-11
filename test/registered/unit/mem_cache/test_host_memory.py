@@ -11,6 +11,8 @@ from unittest.mock import Mock, patch
 import torch
 
 from sglang.srt.mem_cache import host_memory
+from sglang.srt.mem_cache.hicache_storage import HiCacheStorageConfig
+from sglang.srt.mem_cache.storage.backend_factory import StorageBackendFactory
 from sglang.test.ci.ci_register import register_cpu_ci
 
 _cgroup_memory_headroom = host_memory._cgroup_memory_headroom
@@ -249,10 +251,28 @@ class TestHostMemory(unittest.TestCase):
         with self.assertRaises(ValueError):
             host_memory.parse_hugepage_size("4KB")
 
+    def _hugepage_pool_bytes(self, size: int) -> int:
+        """Return the host's free HugeTLB pool bytes for ``size``, or 0."""
+        try:
+            with open(f"/sys/kernel/mm/hugepages/hugepages-{size // 1024}kB/free_hugepages") as f:
+                return int(f.read().strip()) * size
+        except (FileNotFoundError, ValueError):
+            return 0
+
     def test_hugepage_shortfall_raises(self):
         # Requesting more HugeTLB pages than the host has must fail explicitly.
+        # Skip only when the host has no HugeTLB pool at all, so the assertion
+        # still runs on machines that can actually back the mapping.
+        if self._hugepage_pool_bytes(1 << 30) == 0:
+            self.skipTest("host has no 1 GiB HugeTLB pool")
         with self.assertRaisesRegex(RuntimeError, "HugeTLB"):
             host_memory.alloc_host_buffer(1 << 40, hugepage_size=1 << 30)
+
+    def test_hugepage_disabled_uses_ordinary_pages(self):
+        # Without the flag, allocation must succeed on ordinary pages.
+        buf = host_memory.alloc_host_buffer(mmap.PAGESIZE)
+        self.assertEqual(buf.nbytes, mmap.PAGESIZE)
+        self.assertEqual(buf.dtype, torch.int8)
 
     def test_madvise_dontfork_is_called(self):
         calls = []
@@ -266,6 +286,25 @@ class TestHostMemory(unittest.TestCase):
         with patch.object(host_memory.mmap, "mmap", RecordingMmap):
             host_memory.alloc_host_buffer(mmap.PAGESIZE)
         self.assertIn(mmap.MADV_DONTFORK, calls)
+
+    def test_storage_backend_factory_uses_host_pool(self):
+        # The factory path must still create and release a backend after the
+        # host pool allocation path was reworked.
+        config = HiCacheStorageConfig(
+            tp_rank=0,
+            tp_size=1,
+            pp_rank=0,
+            pp_size=1,
+            attn_cp_rank=0,
+            attn_cp_size=1,
+            is_mla_model=False,
+            enable_storage_metrics=False,
+            is_page_first_layout=False,
+            model_name="test",
+        )
+        backend = StorageBackendFactory.create_backend("file", config, None)
+        self.assertIsNotNone(backend)
+        backend.clear()
 
     def test_host_registration_ranges_align_to_pages(self):
         page = mmap.PAGESIZE
@@ -324,6 +363,41 @@ class TestHostMemory(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 host_memory.pin_tensor_chunked(buf, sizes, 4, page_size=page)
         self.assertEqual(cudart.cudaHostUnregister.call_count, 1)
+
+    def test_pin_unpin_chunked_reuses_buffer(self):
+        # After unpin, the same buffer can be pinned again with identical ranges.
+        page = mmap.PAGESIZE
+        block = 4 * page
+        sizes = [4 * block]
+        buf = host_memory.alloc_host_buffer(sum(sizes))
+        cudart = Mock()
+        cudart.cudaHostRegister.return_value = Mock(value=0)
+        cudart.cudaHostUnregister.return_value = Mock(value=0)
+        with patch.object(torch.cuda, "cudart", return_value=cudart):
+            first = host_memory.pin_tensor_chunked(buf, sizes, 4, page_size=page)
+            host_memory.unpin_tensor_chunked(buf, first)
+            second = host_memory.pin_tensor_chunked(buf, sizes, 4, page_size=page)
+            host_memory.unpin_tensor_chunked(buf, second)
+        self.assertEqual(first, second)
+        self.assertEqual(cudart.cudaHostRegister.call_count, 2 * len(first))
+        self.assertEqual(cudart.cudaHostUnregister.call_count, 2 * len(first))
+
+    def test_pin_chunked_does_not_pin_unlisted_region(self):
+        # Only the ranges returned by host_registration_ranges are registered.
+        page = mmap.PAGESIZE
+        block = 4 * page
+        sizes = [4 * block]
+        buf = host_memory.alloc_host_buffer(sum(sizes))
+        cudart = Mock()
+        cudart.cudaHostRegister.return_value = Mock(value=0)
+        cudart.cudaHostUnregister.return_value = Mock(value=0)
+        with patch.object(torch.cuda, "cudart", return_value=cudart):
+            ranges = host_memory.pin_tensor_chunked(buf, sizes, 4, page_size=page)
+            host_memory.unpin_tensor_chunked(buf, ranges)
+        base = buf.data_ptr()
+        registered = [c.args[0] for c in cudart.cudaHostRegister.call_args_list]
+        self.assertEqual(registered[0], base)
+        self.assertEqual(registered[-1] + (ranges[-1][1] - ranges[-1][0]), base + buf.nbytes)
 
 
 if __name__ == "__main__":
