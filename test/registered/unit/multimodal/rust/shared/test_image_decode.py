@@ -10,6 +10,7 @@ import io
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
@@ -87,8 +88,6 @@ class TestRustImageDecode(CustomTestCase):
     def test_pillow_decompression_bomb_maps_to_value_error(self):
         """The Python decode entry point must convert Pillow's bomb check
         exception into a ValueError so callers classify it as client error."""
-        from unittest.mock import patch
-
         from sglang.srt.multimodal.mm_utils import load_image_from_base64
 
         data = encode(Image.new("RGB", (20, 20), (0, 255, 0)), "PNG")
