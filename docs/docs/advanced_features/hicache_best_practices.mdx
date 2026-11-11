@@ -31,6 +31,13 @@ L1 and L2 are private to a single inference instance; only L3 can be shared. Hos
 
 By default the host KV pool uses ordinary pages. Setting `--hicache-hugepage-block-size 2MB` or `--hicache-hugepage-block-size 1GB` backs the pool with explicit HugeTLB pages, which reduces pinning time and TLB pressure for large pools. Each rank needs `ceil(resolved cache bytes / page size)` HugeTLB pages reserved on the host; on Kubernetes, request them as `hugepages-<size>`. If the pool or container hugetlb limit is too small, startup fails with an error naming the shortfall rather than silently falling back to 4 KiB pages. The host mapping is also marked `MADV_DONTFORK`, so `fork()` children do not inherit it.
 
+Implementation notes:
+
+- The host pool is a single `mmap` per rank, split into contiguous tensor views; the mapping is rounded up to the selected page size.
+- Pinning is chunked (at most 256 GiB per `cudaHostRegister`) and never bisects a KV block or a backing page; `pin`/`unpin` ranges are strictly paired.
+- HugeTLB pages are populated up front so a short pool or cgroup limit fails at startup instead of as `SIGBUS` while serving.
+- `MADV_DONTFORK` keeps pinned pages out of `fork()` children, preventing copy-on-write of pinned memory.
+
 Notes:
 
 - Besides configuring `--hicache-storage-backend` at startup, SGLang also supports **runtime attach/detach** of the HiCache storage backend (no restart required) via HTTP admin endpoints. See [Runtime Attach/Detach HiCache Storage Backend](./hicache_storage_runtime_attach_detach).

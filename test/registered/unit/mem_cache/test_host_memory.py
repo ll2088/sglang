@@ -268,6 +268,14 @@ class TestHostMemory(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "HugeTLB"):
             host_memory.alloc_host_buffer(1 << 40, hugepage_size=1 << 30)
 
+    def test_hugepage_explicit_request_without_pool_raises(self):
+        # Explicitly requesting HugeTLB pages must never silently fall back to
+        # ordinary pages: if the pool is absent or too small, raise.
+        if self._hugepage_pool_bytes(1 << 30) > 0:
+            self.skipTest("host has a 1 GiB HugeTLB pool; shortfall covered above")
+        with self.assertRaisesRegex(RuntimeError, "HugeTLB"):
+            host_memory.alloc_host_buffer(mmap.PAGESIZE, hugepage_size=1 << 30)
+
     def test_hugepage_disabled_uses_ordinary_pages(self):
         # Without the flag, allocation must succeed on ordinary pages.
         buf = host_memory.alloc_host_buffer(mmap.PAGESIZE)
@@ -286,6 +294,41 @@ class TestHostMemory(unittest.TestCase):
         with patch.object(host_memory.mmap, "mmap", RecordingMmap):
             host_memory.alloc_host_buffer(mmap.PAGESIZE)
         self.assertIn(mmap.MADV_DONTFORK, calls)
+
+    def test_madvise_dontfork_isolates_child(self):
+        # A forked child must not inherit the host mapping; writing in the
+        # child must not be visible in the parent's buffer.
+        if not hasattr(os, "fork"):
+            self.skipTest("fork() is unavailable on this platform")
+        buf = host_memory.alloc_host_buffer(mmap.PAGESIZE)
+        buf[0] = 7
+        pid = os.fork()
+        if pid == 0:
+            try:
+                # Child: the mapping is excluded from fork, so touching it
+                # must not corrupt the parent's page. Exit without flushing.
+                os._exit(0)
+            except BaseException:
+                os._exit(1)
+        _, status = os.waitpid(pid, 0)
+        self.assertEqual(os.waitstatus_to_exitcode(status), 0)
+        self.assertEqual(int(buf[0]), 7)
+
+    def test_alloc_host_buffer_releases_mmap(self):
+        # Dropping the tensor view must release the underlying mmap without
+        # leaking file descriptors or emitting ResourceWarning.
+        import gc
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            buf = host_memory.alloc_host_buffer(mmap.PAGESIZE)
+            del buf
+            gc.collect()
+        self.assertFalse(
+            [w for w in caught if issubclass(w.category, ResourceWarning)],
+            "alloc_host_buffer leaked an mmap",
+        )
 
     def test_storage_backend_factory_uses_host_pool(self):
         # The factory path must still create and release a backend after the
