@@ -119,13 +119,32 @@ impl MockWorker {
         stream_chunks: Vec<&'static str>,
         request_id: &'static str,
     ) -> Self {
+        Self::start_with_ids(stream_chunks, Some(request_id), None).await
+    }
+
+    /// Bind to a random port and start a worker that echoes `chat_id` as the
+    /// chat completion `id` only (no `request_id` field), so tests can assert
+    /// that the router derives the message id from the upstream chat id.
+    #[allow(dead_code)] // Only used by some test files.
+    pub async fn start_with_chat_id(
+        stream_chunks: Vec<&'static str>,
+        chat_id: &'static str,
+    ) -> Self {
+        Self::start_with_ids(stream_chunks, None, Some(chat_id)).await
+    }
+
+    async fn start_with_ids(
+        stream_chunks: Vec<&'static str>,
+        request_id: Option<&'static str>,
+        chat_id: Option<&'static str>,
+    ) -> Self {
         let captured = Arc::new(Mutex::new(CapturedHeaders::default()));
         let abort_log: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
         let state = MockWorkerState {
             captured: captured.clone(),
             stream_chunks: Arc::new(stream_chunks),
-            request_id: Some(request_id.to_string()),
-            chat_id: None,
+            request_id: request_id.map(str::to_string),
+            chat_id: chat_id.map(str::to_string),
         };
         let app = axum::Router::new()
             .route("/v1/chat/completions", post(chat))
