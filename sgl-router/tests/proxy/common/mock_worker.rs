@@ -31,6 +31,9 @@ pub struct CapturedHeaders {
 pub struct MockWorkerState {
     pub captured: Arc<Mutex<CapturedHeaders>>,
     pub stream_chunks: Arc<Vec<&'static str>>,
+    /// When set, the mock echoes this id as the chat completion `id` and
+    /// as the `request_id` field, letting tests assert id propagation.
+    pub request_id: Option<String>,
 }
 
 /// A running mock SGLang worker. Shuts down on Drop via the oneshot sender.
@@ -67,10 +70,57 @@ impl MockWorker {
         let state = MockWorkerState {
             captured: captured.clone(),
             stream_chunks: Arc::new(stream_chunks),
+            request_id: None,
         };
         // /server_info advertises served_model_name="tiny" so the
         // worker-manager introspect step resolves model_ids for the
         // "tiny" model the tests register a tokenizer + policy under.
+        let app = axum::Router::new()
+            .route("/v1/chat/completions", post(chat))
+            .route("/v1/completions", post(chat))
+            .route("/generate", post(generate))
+            .route("/v1/embeddings", post(embeddings))
+            .route("/v1/classify", post(classify))
+            .route("/v1/rerank", post(rerank))
+            .route("/server_info", get(serve_tiny_server_info))
+            .route("/abort_request", abort_request_route(abort_log.clone()))
+            .with_state(state);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}");
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = rx.await;
+                })
+                .await
+                .unwrap();
+        });
+        Self {
+            url,
+            captured,
+            abort_log,
+            _shutdown: tx,
+        }
+    }
+
+    /// Bind to a random port and start a worker that echoes `request_id`
+    /// in every chat completion response (streamed and non-streamed), so
+    /// tests can assert that the router carries it into the message id.
+    #[allow(dead_code)] // Only used by some test files.
+    pub async fn start_with_request_id(
+        stream_chunks: Vec<&'static str>,
+        request_id: &'static str,
+    ) -> Self {
+        let captured = Arc::new(Mutex::new(CapturedHeaders::default()));
+        let abort_log: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let state = MockWorkerState {
+            captured: captured.clone(),
+            stream_chunks: Arc::new(stream_chunks),
+            request_id: Some(request_id.to_string()),
+        };
         let app = axum::Router::new()
             .route("/v1/chat/completions", post(chat))
             .route("/v1/completions", post(chat))
@@ -463,7 +513,15 @@ fn stream_response(s: &MockWorkerState, request: &Value) -> Option<Response<Body
     let chunks: Vec<_> = s
         .stream_chunks
         .iter()
-        .map(|c| Ok::<_, std::io::Error>(Bytes::from(*c)))
+        .map(|c| {
+            let mut chunk = c.to_string();
+            if let Some(rid) = &s.request_id {
+                // Echo the request id in every streamed chunk's `id` field so
+                // the router can adopt it before `message_start`.
+                chunk = chunk.replace("\"id\":\"chatcmpl-test\"", &format!("\"id\":\"{rid}\""));
+            }
+            Ok::<_, std::io::Error>(Bytes::from(chunk))
+        })
         .collect();
     let body = Body::from_stream(futures::stream::iter(chunks));
     let mut r = Response::new(body);
@@ -481,8 +539,12 @@ async fn chat(State(s): State<MockWorkerState>, headers: HeaderMap, body: Bytes)
     if let Some(r) = stream_response(&s, &v) {
         return r;
     }
-    let resp = serde_json::json!({
-        "id": "chatcmpl-test",
+    let id = s
+        .request_id
+        .clone()
+        .unwrap_or_else(|| "chatcmpl-test".to_string());
+    let mut resp = serde_json::json!({
+        "id": id,
         "object": "chat.completion",
         "model": v["model"].as_str().unwrap_or("unknown"),
         "choices": [{
@@ -491,6 +553,9 @@ async fn chat(State(s): State<MockWorkerState>, headers: HeaderMap, body: Bytes)
             "finish_reason": "stop"
         }]
     });
+    if let Some(rid) = &s.request_id {
+        resp["request_id"] = serde_json::Value::String(rid.clone());
+    }
     Json(resp).into_response()
 }
 

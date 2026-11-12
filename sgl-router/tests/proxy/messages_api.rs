@@ -21,6 +21,23 @@ use tower::ServiceExt;
 use crate::common::mock_worker::MockWorker;
 use crate::common::streaming::collect_body;
 
+/// Matches `msg_<request id>_<16 hex chars>`.
+fn is_message_id_with_request(id: &str, request_id: &str) -> bool {
+    let prefix = format!("msg_{request_id}_");
+    let Some(suffix) = id.strip_prefix(&prefix) else {
+        return false;
+    };
+    suffix.len() == 16 && suffix.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Matches `msg_<32 hex chars>` (random fallback).
+fn is_random_message_id(id: &str) -> bool {
+    let Some(suffix) = id.strip_prefix("msg_") else {
+        return false;
+    };
+    suffix.len() == 32 && suffix.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 const MODEL: &str = "tiny";
 
 fn config() -> Config {
@@ -135,6 +152,93 @@ async fn buffered_message() {
     );
     assert_eq!(sent["max_tokens"], 512);
     assert!(sent.get("system").is_none());
+}
+
+#[tokio::test]
+async fn buffered_message_id_carries_the_request_id() {
+    let mock = MockWorker::start_with_request_id(vec![], "42").await;
+    let (status, _, body) = post(
+        build_ctx(mock.url.clone()),
+        "/v1/messages",
+        json!({"model": MODEL, "max_tokens": 16,
+               "messages": [{"role": "user", "content": "x"}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let m: Value = serde_json::from_slice(&body).unwrap();
+    let id = m["id"].as_str().unwrap();
+    assert!(is_message_id_with_request(id, "42"), "{id}");
+}
+
+#[tokio::test]
+async fn buffered_message_id_falls_back_to_random() {
+    let mock = MockWorker::start(vec![]).await;
+    let (status, _, body) = post(
+        build_ctx(mock.url.clone()),
+        "/v1/messages",
+        json!({"model": MODEL, "max_tokens": 16,
+               "messages": [{"role": "user", "content": "x"}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let m: Value = serde_json::from_slice(&body).unwrap();
+    let id = m["id"].as_str().unwrap();
+    assert!(is_random_message_id(id), "{id}");
+}
+
+#[tokio::test]
+async fn streaming_message_id_carries_the_request_id() {
+    let mock = MockWorker::start_with_request_id(
+        vec![
+            "data: {\"id\":\"chatcmpl-test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"chatcmpl-test\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"chatcmpl-test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ],
+        "77",
+    )
+    .await;
+    let (status, _, body) = post(
+        build_ctx(mock.url.clone()),
+        "/v1/messages",
+        json!({"model": MODEL, "max_tokens": 16, "stream": true,
+               "messages": [{"role": "user", "content": "x"}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let events = sse_events(&body);
+    let start = events
+        .iter()
+        .find(|(e, _)| e == "message_start")
+        .expect("message_start");
+    let id = start.1["message"]["id"].as_str().unwrap();
+    assert!(is_message_id_with_request(id, "77"), "{id}");
+}
+
+#[tokio::test]
+async fn streaming_message_id_falls_back_to_random() {
+    let mock = MockWorker::start(vec![
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    ])
+    .await;
+    let (status, _, body) = post(
+        build_ctx(mock.url.clone()),
+        "/v1/messages",
+        json!({"model": MODEL, "max_tokens": 16, "stream": true,
+               "messages": [{"role": "user", "content": "x"}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let events = sse_events(&body);
+    let start = events
+        .iter()
+        .find(|(e, _)| e == "message_start")
+        .expect("message_start");
+    let id = start.1["message"]["id"].as_str().unwrap();
+    assert!(is_random_message_id(id), "{id}");
 }
 
 #[tokio::test]
