@@ -30,6 +30,16 @@ fn is_message_id_with_request(id: &str, request_id: &str) -> bool {
     suffix.len() == 16 && suffix.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// The `message_start` payload's message id, for streamed responses.
+fn streamed_message_id(body: &[u8]) -> String {
+    let events = sse_events(body);
+    let start = events
+        .iter()
+        .find(|(e, _)| e == "message_start")
+        .expect("message_start");
+    start.1["message"]["id"].as_str().unwrap().to_owned()
+}
+
 /// Matches `msg_<32 hex chars>` (random fallback).
 fn is_random_message_id(id: &str) -> bool {
     let Some(suffix) = id.strip_prefix("msg_") else {
@@ -206,13 +216,8 @@ async fn streaming_message_id_carries_the_request_id() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let events = sse_events(&body);
-    let start = events
-        .iter()
-        .find(|(e, _)| e == "message_start")
-        .expect("message_start");
-    let id = start.1["message"]["id"].as_str().unwrap();
-    assert!(is_message_id_with_request(id, "77"), "{id}");
+    let id = streamed_message_id(&body);
+    assert!(is_message_id_with_request(&id, "77"), "{id}");
 }
 
 #[tokio::test]
@@ -232,13 +237,8 @@ async fn streaming_message_id_falls_back_to_random() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let events = sse_events(&body);
-    let start = events
-        .iter()
-        .find(|(e, _)| e == "message_start")
-        .expect("message_start");
-    let id = start.1["message"]["id"].as_str().unwrap();
-    assert!(is_random_message_id(id), "{id}");
+    let id = streamed_message_id(&body);
+    assert!(is_random_message_id(&id), "{id}");
 }
 
 #[tokio::test]

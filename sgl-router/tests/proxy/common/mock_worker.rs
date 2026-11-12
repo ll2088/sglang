@@ -504,6 +504,16 @@ fn capture_request(s: &MockWorkerState, headers: &HeaderMap, body: &Bytes) -> Va
     serde_json::from_slice(body).unwrap_or(Value::Null)
 }
 
+/// Rewrite a canned SSE chunk so its `id` field carries the mock's
+/// request id, letting the router adopt it before `message_start`.
+#[allow(dead_code)] // Used by `MockWorker::start`, only some test files need it.
+fn echo_request_id(chunk: &str, request_id: Option<&String>) -> String {
+    match request_id {
+        Some(rid) => chunk.replace("\"id\":\"chatcmpl-test\"", &format!("\"id\":\"{rid}\"")),
+        None => chunk.to_string(),
+    }
+}
+
 /// `Some` SSE response of `stream_chunks` when the request asked to stream.
 #[allow(dead_code)] // Used by `MockWorker::start`, only some test files need it.
 fn stream_response(s: &MockWorkerState, request: &Value) -> Option<Response<Body>> {
@@ -514,12 +524,7 @@ fn stream_response(s: &MockWorkerState, request: &Value) -> Option<Response<Body
         .stream_chunks
         .iter()
         .map(|c| {
-            let mut chunk = c.to_string();
-            if let Some(rid) = &s.request_id {
-                // Echo the request id in every streamed chunk's `id` field so
-                // the router can adopt it before `message_start`.
-                chunk = chunk.replace("\"id\":\"chatcmpl-test\"", &format!("\"id\":\"{rid}\""));
-            }
+            let chunk = echo_request_id(c, s.request_id.as_ref());
             Ok::<_, std::io::Error>(Bytes::from(chunk))
         })
         .collect();
