@@ -514,6 +514,16 @@ fn echo_request_id(chunk: &str, request_id: Option<&String>) -> String {
     }
 }
 
+/// Rewrite a canned SSE chunk so its `id` field carries the mock's
+/// request id, letting the router adopt it before `message_start`.
+#[allow(dead_code)] // Used by `MockWorker::start`, only some test files need it.
+fn echo_request_id_in_chunk(chunk: &str, request_id: Option<&String>) -> String {
+    match request_id {
+        Some(rid) => chunk.replace("\"id\":\"chatcmpl-test\"", &format!("\"id\":\"{rid}\"")),
+        None => chunk.to_string(),
+    }
+}
+
 /// `Some` SSE response of `stream_chunks` when the request asked to stream.
 #[allow(dead_code)] // Used by `MockWorker::start`, only some test files need it.
 fn stream_response(s: &MockWorkerState, request: &Value) -> Option<Response<Body>> {
