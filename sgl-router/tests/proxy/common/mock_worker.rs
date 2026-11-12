@@ -34,6 +34,10 @@ pub struct MockWorkerState {
     /// When set, the mock echoes this id as the chat completion `id` and
     /// as the `request_id` field, letting tests assert id propagation.
     pub request_id: Option<String>,
+    /// When set, the mock echoes this id as the chat completion `id` only
+    /// (not as a `request_id` field), letting tests assert that the router
+    /// derives the message id from the upstream chat id.
+    pub chat_id: Option<String>,
 }
 
 /// A running mock SGLang worker. Shuts down on Drop via the oneshot sender.
@@ -71,6 +75,7 @@ impl MockWorker {
             captured: captured.clone(),
             stream_chunks: Arc::new(stream_chunks),
             request_id: None,
+            chat_id: None,
         };
         // /server_info advertises served_model_name="tiny" so the
         // worker-manager introspect step resolves model_ids for the
@@ -120,6 +125,7 @@ impl MockWorker {
             captured: captured.clone(),
             stream_chunks: Arc::new(stream_chunks),
             request_id: Some(request_id.to_string()),
+            chat_id: None,
         };
         let app = axum::Router::new()
             .route("/v1/chat/completions", post(chat))
@@ -514,6 +520,15 @@ fn echo_request_id(chunk: &str, request_id: Option<&String>) -> String {
     }
 }
 
+/// Rewrite a canned SSE chunk so its `id` field carries the mock's chat id.
+#[allow(dead_code)] // Used by `MockWorker::start`, only some test files need it.
+fn echo_chat_id(chunk: &str, chat_id: Option<&String>) -> String {
+    match chat_id {
+        Some(cid) => chunk.replace("\"id\":\"chatcmpl-test\"", &format!("\"id\":\"{cid}\"")),
+        None => chunk.to_string(),
+    }
+}
+
 /// `Some` SSE response of `stream_chunks` when the request asked to stream.
 #[allow(dead_code)] // Used by `MockWorker::start`, only some test files need it.
 fn stream_response(s: &MockWorkerState, request: &Value) -> Option<Response<Body>> {
@@ -525,6 +540,7 @@ fn stream_response(s: &MockWorkerState, request: &Value) -> Option<Response<Body
         .iter()
         .map(|c| {
             let chunk = echo_request_id(c, s.request_id.as_ref());
+            let chunk = echo_chat_id(&chunk, s.chat_id.as_ref());
             Ok::<_, std::io::Error>(Bytes::from(chunk))
         })
         .collect();
@@ -547,6 +563,7 @@ async fn chat(State(s): State<MockWorkerState>, headers: HeaderMap, body: Bytes)
     let id = s
         .request_id
         .clone()
+        .or_else(|| s.chat_id.clone())
         .unwrap_or_else(|| "chatcmpl-test".to_string());
     let mut resp = serde_json::json!({
         "id": id,

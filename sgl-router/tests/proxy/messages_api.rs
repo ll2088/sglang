@@ -30,6 +30,16 @@ fn is_message_id_with_request(id: &str, request_id: &str) -> bool {
     suffix.len() == 16 && suffix.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Matches `msg_<request id>_<16 hex chars>` where the request id is the
+/// upstream chat completion id (e.g. `chatcmpl-42`).
+fn is_message_id_with_chat_id(id: &str, chat_id: &str) -> bool {
+    let prefix = format!("msg_{chat_id}_");
+    let Some(suffix) = id.strip_prefix(&prefix) else {
+        return false;
+    };
+    suffix.len() == 16 && suffix.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// The `message_start` payload's message id, for streamed responses.
 fn streamed_message_id(body: &[u8]) -> String {
     let events = sse_events(body);
@@ -181,6 +191,22 @@ async fn buffered_message_id_carries_the_request_id() {
 }
 
 #[tokio::test]
+async fn buffered_message_id_carries_the_chat_id() {
+    let mock = MockWorker::start_with_chat_id(vec![], "chatcmpl-42").await;
+    let (status, _, body) = post(
+        build_ctx(mock.url.clone()),
+        "/v1/messages",
+        json!({"model": MODEL, "max_tokens": 16,
+               "messages": [{"role": "user", "content": "x"}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let m: Value = serde_json::from_slice(&body).unwrap();
+    let id = m["id"].as_str().unwrap();
+    assert!(is_message_id_with_chat_id(id, "chatcmpl-42"), "{id}");
+}
+
+#[tokio::test]
 async fn buffered_message_id_falls_back_to_random() {
     let mock = MockWorker::start(vec![]).await;
     let (status, _, body) = post(
@@ -218,6 +244,30 @@ async fn streaming_message_id_carries_the_request_id() {
     assert_eq!(status, StatusCode::OK);
     let id = streamed_message_id(&body);
     assert!(is_message_id_with_request(&id, "77"), "{id}");
+}
+
+#[tokio::test]
+async fn streaming_message_id_carries_the_chat_id() {
+    let mock = MockWorker::start_with_chat_id(
+        vec![
+            "data: {\"id\":\"chatcmpl-test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"chatcmpl-test\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"chatcmpl-test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ],
+        "chatcmpl-77",
+    )
+    .await;
+    let (status, _, body) = post(
+        build_ctx(mock.url.clone()),
+        "/v1/messages",
+        json!({"model": MODEL, "max_tokens": 16, "stream": true,
+               "messages": [{"role": "user", "content": "x"}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let id = streamed_message_id(&body);
+    assert!(is_message_id_with_chat_id(&id, "chatcmpl-77"), "{id}");
 }
 
 #[tokio::test]
