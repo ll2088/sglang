@@ -7,9 +7,7 @@ and that sglang.check_env can run without raising under the new version.
 
 import importlib.metadata
 
-import pytest
-
-blobfile = pytest.importorskip("blobfile")
+import blobfile
 
 
 def test_blobfile_importable():
