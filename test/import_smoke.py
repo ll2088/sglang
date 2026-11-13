@@ -1,22 +1,20 @@
-"""Self-contained bootstrap + smoke checks for the ``sglang`` import chain.
+"""Self-contained smoke checks for the ``sglang`` top-level import chain.
 
-This module only depends on the standard library.  It is imported by file
-path from ``test/import_smoke_test.py`` and ``test/run_suite.py`` so the two
-smoke entry points share one implementation and cannot drift apart.
+This module only depends on the standard library.  It bootstraps ``python/``
+onto ``sys.path`` and installs lightweight stubs for genuinely missing heavy
+third-party dependencies (e.g. ``torch``) so that the top-level import chain
+can be exercised even when the full ``sglang`` runtime dependency tree was
+never installed (``pip install -e python`` can fail during CI environment
+preparation and mask real import regressions).
 
-It exists so the import-time / import-error / import-compat dimensions can be
-observed even when the heavy ``sglang`` runtime dependency tree (torch,
-py-spy, pybase64, pydantic, pyzmq, quack-kernels, regex, ...) cannot be
-installed during CI environment preparation.  ``python/`` is injected onto
-``sys.path`` and lightweight stubs are installed for any genuinely missing
-heavy dependency, so the top-level import chain is exercised directly from
-source.  A real installation is never shadowed.
+Entry points:
 
-Entry points (no pytest required):
+* ``python test/import_smoke.py --bare``       -- import ``sglang`` only
+* ``python test/import_smoke.py --selfcheck``  -- run every smoke check
+* ``python test/import_smoke.py --negative``   -- verify a broken import fails
 
-    python test/import_smoke.py --bare
-    python test/import_smoke.py --selfcheck
-    python test/import_smoke.py --negative
+``test/import_smoke_test.py`` and ``test/run_suite.py`` import the helpers
+below by file path so the two pytest entry points share one implementation.
 """
 
 from __future__ import annotations
@@ -26,6 +24,7 @@ import importlib.util
 import os
 import sys
 import types
+
 
 # ---------------------------------------------------------------------------
 # sys.path bootstrap
@@ -40,8 +39,8 @@ def _ensure_source_on_path() -> None:
     """Put ``python/`` on ``sys.path`` so ``import sglang`` works from source.
 
     Idempotent: repeated calls do not duplicate the entry.  A real installed
-    distribution is never shadowed -- the source tree is only prepended when
-    it is not already present.
+    distribution is never shadowed because the source directory is only
+    appended when it is not already present.
     """
     python_dir = os.path.join(_repo_root(), "python")
     if python_dir not in sys.path:
@@ -52,160 +51,110 @@ def _ensure_source_on_path() -> None:
 # Lightweight dependency stubs
 # ---------------------------------------------------------------------------
 
-_STUBBED_MODULES = (
-    "torch",
-    "torch.mps",
-    "torch.cuda",
-    "torch.backends",
-    "torch.backends.mps",
-    "triton",
-    "triton.language",
-    "triton.runtime",
-    "triton.runtime.jit",
-    "triton.compiler",
-    "triton.backends",
-    "triton.backends.compiler",
-    "triton.testing",
-    "triton.tools",
-    "triton.tools.tensor_descriptor",
-)
+_STUBBED_MODULES: set[str] = set()
 
 
 def _stub_is_installed(name: str) -> bool:
-    """Return True when ``name`` is currently provided by our stub."""
-    mod = sys.modules.get(name)
-    return mod is not None and getattr(mod, "__import_smoke_stub__", False)
+    """Return True when ``name`` is currently provided by a lightweight stub."""
+    return name in _STUBBED_MODULES
 
 
-def _make_stub(name: str) -> types.ModuleType:
+def _make_stub_module(name: str) -> types.ModuleType:
     mod = types.ModuleType(name)
-    mod.__import_smoke_stub__ = True  # type: ignore[attr-defined]
     mod.__path__ = []  # type: ignore[attr-defined]
     mod.__package__ = name
-    mod.__file__ = __file__
-    mod.__spec__ = importlib.machinery.ModuleSpec(name, None, is_package=True)
     return mod
 
 
-def _install_lightweight_dependency_stubs() -> None:
-    """Install minimal stubs for genuinely missing heavy dependencies.
+def _install_torch_stub() -> None:
+    """Install a minimal ``torch`` stub for the bare-environment smoke path.
 
-    Only modules that are *not* importable are stubbed, so a real installation
-    is never shadowed.  Idempotent.
+    Only the attributes touched by ``sglang``'s import-time code paths are
+    provided.  This stub is never installed when a real ``torch`` is
+    importable, so a real installation is never shadowed.
     """
-    # torch
-    if importlib.util.find_spec("torch") is None and not _stub_is_installed("torch"):
-        torch = _make_stub("torch")
-        torch.__version__ = "0.0.0-import-smoke-stub"
+    torch = _make_stub_module("torch")
+    torch.__version__ = "0.0.0+import-smoke-stub"
 
-        class _Device:
-            def __init__(self, spec=None, type=None):  # noqa: A002
-                self.type = type or (str(spec).split(":", 1)[0] if spec else "cpu")
+    class _Device:
+        def __init__(self, spec: object = "cpu") -> None:
+            self.type = "cpu"
+            self.index = None
+            self._spec = spec
 
-            def __str__(self):
-                return self.type
+        def __repr__(self) -> str:  # pragma: no cover - debug helper
+            return f"device(type='cpu')"
 
-        def _device(spec=None, type=None):  # noqa: A002
-            return _Device(spec, type)
+    def _device(spec: object = "cpu") -> _Device:
+        return _Device(spec)
 
-        torch.device = _device
-        torch.Tensor = type("Tensor", (), {})
-        torch.dtype = type("dtype", (), {})
-        torch.float16 = torch.dtype()
-        torch.bfloat16 = torch.dtype()
-        torch.float32 = torch.dtype()
+    torch.device = _device  # type: ignore[attr-defined]
 
-        mps = _make_stub("torch.mps")
-        mps.is_available = lambda: False
-        mps.current_allocated_memory = lambda: 0
-        mps.driver_allocated_memory = lambda: 0
-        mps.recommended_max_memory = lambda: 0
-        torch.mps = mps
+    class _Tensor:
+        pass
 
-        cuda = _make_stub("torch.cuda")
-        cuda.is_available = lambda: False
-        cuda.device_count = lambda: 0
-        torch.cuda = cuda
+    torch.Tensor = _Tensor  # type: ignore[attr-defined]
 
-        backends = _make_stub("torch.backends")
-        backends_mps = _make_stub("torch.backends.mps")
-        backends_mps.is_available = lambda: False
-        backends.mps = backends_mps
-        torch.backends = backends
+    class _NoGrad:
+        def __enter__(self):
+            return self
 
-        sys.modules["torch"] = torch
-        sys.modules["torch.mps"] = mps
-        sys.modules["torch.cuda"] = cuda
-        sys.modules["torch.backends"] = backends
-        sys.modules["torch.backends.mps"] = backends_mps
+        def __exit__(self, *args):
+            return False
 
-    # triton
-    if importlib.util.find_spec("triton") is None and not _stub_is_installed(
-        "triton"
-    ):
-        triton = _make_stub("triton")
-        triton.__version__ = "0.0.0-import-smoke-stub"
-        triton.cdiv = lambda a, b: -(a // -b)
-        triton.next_power_of_2 = lambda n: 1 << (n - 1).bit_length() if n > 0 else 1
+        def __call__(self, fn):
+            return fn
 
-        class _Config:
-            def __init__(self, kwargs=None, num_warps=4, num_stages=2, **extra):
-                self.kwargs = kwargs or {}
-                self.num_warps = num_warps
-                self.num_stages = num_stages
+    torch.no_grad = _NoGrad()  # type: ignore[attr-defined]
 
-        triton.Config = _Config
+    cuda = _make_stub_module("torch.cuda")
+    cuda.is_available = lambda: False  # type: ignore[attr-defined]
+    cuda.device_count = lambda: 0  # type: ignore[attr-defined]
+    cuda.current_device = lambda: 0  # type: ignore[attr-defined]
+    torch.cuda = cuda  # type: ignore[attr-defined]
 
-        tl = _make_stub("triton.language")
+    mps = _make_stub_module("torch.mps")
+    mps.is_available = lambda: False  # type: ignore[attr-defined]
+    mps.recommended_max_memory = lambda: 0  # type: ignore[attr-defined]
+    mps.current_allocated_memory = lambda: 0  # type: ignore[attr-defined]
+    mps.driver_allocated_memory = lambda: 0  # type: ignore[attr-defined]
+    torch.mps = mps  # type: ignore[attr-defined]
 
-        class _constexpr:
-            def __init__(self, value=None):
-                self.value = value
+    backends = _make_stub_module("torch.backends")
+    backends_mps = _make_stub_module("torch.backends.mps")
+    backends_mps.is_available = lambda: False  # type: ignore[attr-defined]
+    backends.mps = backends_mps  # type: ignore[attr-defined]
+    torch.backends = backends  # type: ignore[attr-defined]
 
-        tl.constexpr = _constexpr
-        triton.language = tl
+    sys.modules["torch"] = torch
+    sys.modules["torch.cuda"] = cuda
+    sys.modules["torch.mps"] = mps
+    sys.modules["torch.backends"] = backends
+    sys.modules["torch.backends.mps"] = backends_mps
+    _STUBBED_MODULES.add("torch")
 
-        runtime = _make_stub("triton.runtime")
-        jit_mod = _make_stub("triton.runtime.jit")
-        jit_mod.JITFunction = type("JITFunction", (), {})
-        jit_mod.KernelInterface = type("KernelInterface", (), {})
-        runtime.jit = jit_mod
-        triton.runtime = runtime
 
-        compiler_root = _make_stub("triton.compiler")
-        compiler_root.CompiledKernel = type("CompiledKernel", (), {})
-        triton.compiler = compiler_root
+def _install_lightweight_dependency_stubs() -> None:
+    """Install lightweight stubs for genuinely missing heavy dependencies.
 
-        backends = _make_stub("triton.backends")
-        backends_compiler = _make_stub("triton.backends.compiler")
-        backends_compiler.GPUTarget = type("GPUTarget", (), {})
-        backends.compiler = backends_compiler
-        triton.backends = backends
-
-        testing = _make_stub("triton.testing")
-        triton.testing = testing
-
-        tools = _make_stub("triton.tools")
-        tools.tensor_descriptor = _make_stub("triton.tools.tensor_descriptor")
-        triton.tools = tools
-
-        for name, mod in (
-            ("triton", triton),
-            ("triton.language", tl),
-            ("triton.runtime", runtime),
-            ("triton.runtime.jit", jit_mod),
-            ("triton.compiler", compiler_root),
-            ("triton.backends", backends),
-            ("triton.backends.compiler", backends_compiler),
-            ("triton.testing", testing),
-            ("triton.tools", tools),
-            ("triton.tools.tensor_descriptor", tools.tensor_descriptor),
-        ):
-            sys.modules[name] = mod
+    Idempotent and conservative: a dependency that is already importable (or
+    already present in ``sys.modules``) is never shadowed.  Only the standard
+    library is used.
+    """
+    if "torch" in sys.modules:
+        return
+    try:
+        if importlib.util.find_spec("torch") is not None:
+            return
+    except (ImportError, ValueError):
+        # A broken parent package can make find_spec raise; fall through and
+        # install the stub so the smoke path still runs.
+        pass
+    _install_torch_stub()
 
 
 # ---------------------------------------------------------------------------
-# Smoke checks (no pytest required)
+# Smoke checks
 # ---------------------------------------------------------------------------
 
 _SMOKE_MODULES = (
@@ -239,7 +188,7 @@ def _run_selfcheck() -> int:
     _ensure_source_on_path()
     _install_lightweight_dependency_stubs()
 
-    failures = []
+    failures: list[str] = []
 
     try:
         sglang = importlib.import_module("sglang")
@@ -275,7 +224,11 @@ def _run_selfcheck() -> int:
 
 
 def _run_negative_check() -> int:
-    """Break ``sglang/__init__.py`` in a subprocess and confirm it is caught."""
+    """Verify a deliberately broken ``sglang`` import is detected as a failure.
+
+    Runs in a subprocess so the current interpreter's ``sys.modules`` is not
+    polluted.  Returns 0 when the breakage is correctly detected, 1 otherwise.
+    """
     import subprocess
 
     repo_root = _repo_root()
