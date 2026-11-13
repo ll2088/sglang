@@ -527,6 +527,30 @@ def test_import_smoke():
     assert isinstance(sglang.__version__, str)
 
 
+def test_import_smoke_negative():
+    """Negative smoke test: a broken top-level import must be detected.
+
+    Guards the import-error dimension: the smoke tests must fail (not skip)
+    when ``python/sglang/__init__.py`` is broken.  The check runs in a
+    subprocess so the deliberately broken import never pollutes this
+    interpreter's ``sys.modules``.
+    """
+    import importlib
+    import os
+    import sys
+
+    _smoke_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "import_smoke_test.py"
+    )
+    _spec = importlib.util.spec_from_file_location("import_smoke_test", _smoke_path)
+    assert _spec is not None and _spec.loader is not None
+    _smoke = importlib.util.module_from_spec(_spec)
+    sys.modules.setdefault("import_smoke_test", _smoke)
+    _spec.loader.exec_module(_smoke)
+
+    assert _smoke._run_negative_check() == 0
+
+
 def _parse_timeout_override(value: str) -> tuple[str, float]:
     path, sep, seconds = value.rpartition("=")
     try:

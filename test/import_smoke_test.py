@@ -271,6 +271,56 @@ def _run_bare_smoke() -> int:
     return 0
 
 
+def _run_negative_check() -> int:
+    """Negative self-check: a broken ``sglang`` import must be reported.
+
+    Used by CI to confirm the smoke tests actually fail (rather than silently
+    skip) when the top-level import chain is broken.  The check is performed
+    in a subprocess so the current interpreter's ``sys.modules`` is not
+    polluted by the deliberately broken import.
+
+    Returns 0 when the broken import is correctly detected as a failure, and
+    1 when the smoke test would have passed despite the breakage.
+    """
+    import subprocess
+    import tempfile
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    python_dir = os.path.join(repo_root, "python")
+    init_path = os.path.join(python_dir, "sglang", "__init__.py")
+    if not os.path.isfile(init_path):
+        print("import_smoke_negative: SKIP (sglang/__init__.py not found)")
+        return 0
+
+    with open(init_path, encoding="utf-8") as f:
+        original = f.read()
+
+    broken = "raise ImportError('import_smoke_negative_check')\n" + original
+    try:
+        with open(init_path, "w", encoding="utf-8") as f:
+            f.write(broken)
+        proc = subprocess.run(
+            [sys.executable, os.path.abspath(__file__), "--bare"],
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+        )
+    finally:
+        with open(init_path, "w", encoding="utf-8") as f:
+            f.write(original)
+
+    if proc.returncode == 0:
+        print(
+            "import_smoke_negative: FAIL (broken import was not detected)\n"
+            + proc.stdout
+            + proc.stderr
+        )
+        return 1
+
+    print("import_smoke_negative: OK (broken import detected)")
+    return 0
+
+
 @pytest.mark.import_smoke
 def test_lightweight_dependency_stubs_effective():
     """Self-check: the bare-environment bootstrap must actually take effect.
@@ -343,6 +393,8 @@ def test_import_smoke_bare_entrypoint():
 if __name__ == "__main__":
     if "--bare" in sys.argv[1:]:
         raise SystemExit(_run_bare_smoke())
+    if "--negative" in sys.argv[1:]:
+        raise SystemExit(_run_negative_check())
     _ensure_source_on_path()
     _install_lightweight_dependency_stubs()
     raise SystemExit(
