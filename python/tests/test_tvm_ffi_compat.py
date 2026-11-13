@@ -29,6 +29,26 @@ def test_tvm_ffi_version_is_pinned():
     )
 
 
+def test_tvm_ffi_pin_matches_pyproject():
+    """The pin in python/pyproject.toml must match EXPECTED_TVM_FFI_VERSION.
+
+    This keeps the test honest even when apache-tvm-ffi is not installed in
+    the current environment (e.g. a CPU-only CI box that skips the heavy
+    dependency install).
+    """
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    if not pyproject.is_file():
+        pytest.skip(f"pyproject.toml not found at {pyproject}")
+    text = pyproject.read_text(encoding="utf-8")
+    expected = f'apache-tvm-ffi=={EXPECTED_TVM_FFI_VERSION}'
+    assert expected in text, (
+        f"python/pyproject.toml does not pin {expected!r}; "
+        "update EXPECTED_TVM_FFI_VERSION together with the dependency bump"
+    )
+
+
 def test_tvm_ffi_importable():
     """The tvm_ffi package itself must import without errors."""
     try:
