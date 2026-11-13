@@ -527,26 +527,15 @@ def test_import_smoke():
     exercises the top-level import chain directly.  The heavy runtime
     dependencies are stubbed by test/import_smoke.py's bootstrap; a real
     installation is never shadowed.
+
+    The import runs in a subprocess so that a partially-initialised
+    ``sglang`` package (or a stub installed by an earlier test) can never
+    mask a real import regression, and so the check does not depend on the
+    heavy runtime dependency tree being installed in this interpreter.
     """
-    import importlib
-
     _smoke = _load_import_smoke_module()
-    _smoke._ensure_source_on_path()
-    _smoke._install_lightweight_dependency_stubs()
 
-    sglang = importlib.import_module("sglang")
-    assert sglang.__version__
-    assert isinstance(sglang.__version__, str)
-
-    for _module_name in (
-        "sglang._platform_stubs",
-        "sglang.version",
-        "sglang.utils",
-    ):
-        importlib.import_module(_module_name)
-
-    for _name in sglang.__all__:
-        assert hasattr(sglang, _name), f"missing public symbol: {_name}"
+    assert _smoke._run_bare_smoke() == 0
 
 
 def test_import_smoke_negative():

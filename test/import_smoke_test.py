@@ -18,6 +18,10 @@ import sys
 
 import pytest
 
+# The smoke tests must stay runnable in a bare environment where the heavy
+# sglang runtime dependency tree was never installed.  ``pytest`` itself is
+# the only third-party import at module scope; everything else is stdlib.
+
 # Reuse the self-contained bootstrap helpers from test/import_smoke.py so the
 # two smoke entry points cannot drift apart.  Imported by file path so this
 # module does not depend on ``test`` being an importable package (it has no
@@ -88,6 +92,16 @@ def test_import_smoke():
 
     assert sglang.__version__
     assert isinstance(sglang.__version__, str)
+
+
+@pytest.mark.import_smoke
+def test_import_smoke_bare_entrypoint_isolated():
+    """Smoke test: the bare entry point must pass in a fresh subprocess.
+
+    Guards against the smoke test passing only because an earlier test in
+    the same interpreter already imported ``sglang`` (or installed stubs).
+    """
+    assert _run_bare_smoke() == 0
 
 
 @pytest.mark.import_smoke
@@ -184,6 +198,12 @@ def test_import_smoke_without_installed_distribution():
 def test_import_smoke_bare_entrypoint():
     """Smoke test: the ``--bare`` entry point must succeed without pytest."""
     assert _run_bare_smoke() == 0
+
+
+@pytest.mark.import_smoke
+def test_import_smoke_selfcheck():
+    """Smoke test: the bootstrap self-check must pass."""
+    assert _run_selfcheck() == 0
 
 
 @pytest.mark.import_smoke

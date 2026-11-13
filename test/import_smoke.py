@@ -107,45 +107,73 @@ def _import_sglang():
 
 
 def _run_bare_smoke() -> int:
-    """Import ``sglang`` and assert the public API resolves."""
-    try:
-        sglang = _import_sglang()
-        assert sglang.__version__
-        assert isinstance(sglang.__version__, str)
-        for name in sglang.__all__:
-            assert hasattr(sglang, name), f"missing public symbol: {name}"
-        for module_name in (
-            "sglang._platform_stubs",
-            "sglang.version",
-            "sglang.utils",
-        ):
-            importlib.import_module(module_name)
-    except Exception:
-        import traceback
+    """Import ``sglang`` and assert the public API resolves.
 
-        traceback.print_exc()
+    Runs in a subprocess so that a partially-initialised ``sglang`` package
+    (or a stub installed by an earlier bootstrap) can never mask a real
+    import regression in this interpreter.
+    """
+    import subprocess
+
+    code = (
+        "import importlib, sys;"
+        "sys.path.insert(0, %r);"
+        "import import_smoke as _s;"
+        "_s._ensure_source_on_path();"
+        "_s._install_lightweight_dependency_stubs();"
+        "sglang = importlib.import_module('sglang');"
+        "assert sglang.__version__;"
+        "assert isinstance(sglang.__version__, str);"
+        "[getattr(sglang, n) for n in sglang.__all__];"
+        "[importlib.import_module(m) for m in "
+        "('sglang._platform_stubs', 'sglang.version', 'sglang.utils')]"
+    ) % (os.path.dirname(os.path.abspath(__file__)),)
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [os.path.dirname(os.path.abspath(__file__)), env.get("PYTHONPATH", "")]
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout or "")
+        sys.stderr.write(proc.stderr or "")
         return 1
     print("import_smoke: ok")
     return 0
 
 
 def _run_selfcheck() -> int:
-    """Verify the bootstrap actually took effect in this interpreter."""
+    """Verify the bootstrap actually took effect in this interpreter.
+
+    The check is deliberately tolerant of a real installation: when a heavy
+    dependency is genuinely importable, the stub is intentionally not used
+    and that is a pass, not a failure.  Only the case where the dependency is
+    missing *and* no stub was installed is a bootstrap failure.
+    """
     _ensure_source_on_path()
     _install_lightweight_dependency_stubs()
 
-    if importlib.util.find_spec("torch") is not None and not _stub_is_installed(
-        "torch"
-    ):
-        print("import_smoke selfcheck: real torch installed; stub not used")
-        return 0
-
-    if not _stub_is_installed("torch"):
+    for name in _HEAVY_DEPENDENCY_STUBS:
+        if _stub_is_installed(name):
+            continue
+        try:
+            spec = importlib.util.find_spec(name)
+        except (ImportError, ValueError):
+            spec = None
+        if spec is not None:
+            # Real installation present; the stub is intentionally skipped.
+            continue
         print(
-            "import_smoke selfcheck: lightweight torch stub was not installed",
+            f"import_smoke selfcheck: {name} is missing and was not stubbed",
             file=sys.stderr,
         )
         return 1
+
     print("import_smoke selfcheck: ok")
     return 0
 
@@ -156,6 +184,11 @@ def _run_negative_check() -> int:
     The check runs in a subprocess so the deliberately broken import never
     pollutes this interpreter's ``sys.modules``.  It returns 0 when the
     negative case is correctly detected (i.e. the subprocess fails).
+
+    The broken package is placed on ``PYTHONPATH`` *ahead* of the source
+    tree so it shadows the real ``sglang`` package regardless of whether the
+    distribution is installed; the subprocess is also run with ``-S``-free
+    defaults so the original error text is preserved.
     """
     import subprocess
     import tempfile
@@ -167,6 +200,8 @@ def _run_negative_check() -> int:
             f.write("raise ImportError('deliberately broken sglang import')\n")
 
         env = dict(os.environ)
+        # Prepend the broken package so it shadows both the source tree and
+        # any installed distribution.
         env["PYTHONPATH"] = tmpdir + os.pathsep + env.get("PYTHONPATH", "")
         proc = subprocess.run(
             [sys.executable, "-c", "import sglang"],
