@@ -504,14 +504,21 @@ def test_import_smoke():
     is imported below; a real installation is never shadowed.
     """
     import importlib
+    import os
+    import sys
 
-    from test.import_smoke_test import (  # noqa: F401 - bootstrap side effects
-        _ensure_source_on_path,
-        _install_lightweight_dependency_stubs,
-    )
+    # Import the smoke-test helpers by file path so this test does not depend
+    # on ``test`` being an importable package (it has no __init__.py) nor on
+    # the repository root being on sys.path.
+    _smoke_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "import_smoke_test.py")
+    _spec = importlib.util.spec_from_file_location("import_smoke_test", _smoke_path)
+    assert _spec is not None and _spec.loader is not None
+    _smoke = importlib.util.module_from_spec(_spec)
+    sys.modules.setdefault("import_smoke_test", _smoke)
+    _spec.loader.exec_module(_smoke)
 
-    _ensure_source_on_path()
-    _install_lightweight_dependency_stubs()
+    _smoke._ensure_source_on_path()
+    _smoke._install_lightweight_dependency_stubs()
 
     sglang = importlib.import_module("sglang")
     assert sglang.__version__

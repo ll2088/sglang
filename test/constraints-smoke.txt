@@ -1,0 +1,20 @@
+# Constraints for the lightweight import-smoke environment.
+#
+# The import smoke tests only need the standard library and pytest; they
+# install lightweight stubs for the heavy sglang runtime dependencies
+# themselves (see test/import_smoke_test.py).  Installing the full sglang
+# dependency tree can fail during resolution on newer Python versions
+# (py-spy / pybase64 / pydantic / pyzmq / quack-kernels ...), which aborts
+# CI before any test runs.
+#
+# Use this file to keep the smoke environment minimal, e.g.:
+#
+#     pip install -c test/constraints-smoke.txt pytest
+#     python -m pytest -q test/import_smoke_test.py -k import_smoke
+#
+# or, without pytest at all:
+#
+#     python test/import_smoke_test.py --bare
+#
+# It intentionally pins nothing: it exists so that a caller can pass
+# ``-c`` and, if desired, add exclusions here without touching .github/.

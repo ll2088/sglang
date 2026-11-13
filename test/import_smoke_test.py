@@ -28,12 +28,18 @@ def _ensure_source_on_path() -> None:
     resolving the heavy runtime dependency chain).  Adding the source
     directory to ``sys.path`` lets us exercise the real import chain without
     requiring a successful ``pip install``.
+
+    ``test/`` is also added so that ``import test.import_smoke_test`` works
+    from ``test/run_suite.py`` even when the repository root is not on
+    ``sys.path`` (e.g. pytest invoked with a different rootdir).
     """
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     python_dir = os.path.join(repo_root, "python")
     if os.path.isdir(os.path.join(python_dir, "sglang")):
         if python_dir not in sys.path:
             sys.path.insert(0, python_dir)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
 
 
 def _install_lightweight_dependency_stubs() -> None:
