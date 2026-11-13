@@ -28,6 +28,12 @@ def _import_or_skip(module_name: str):
     ``ModuleNotFoundError`` is only treated as an environment problem when the
     missing module is *not* part of ``sglang`` itself; a missing ``sglang.*``
     submodule is a real regression and must fail the test.
+
+    ``ImportError`` raised while importing a third-party dependency of
+    ``sglang`` (e.g. a broken/partial install) is likewise reported as a skip
+    so that a broken CI environment does not masquerade as a regression in the
+    import chain under test.  Errors raised from ``sglang``'s own modules are
+    re-raised so that a real regression still fails the test.
     """
     try:
         return importlib.import_module(module_name)
@@ -35,6 +41,16 @@ def _import_or_skip(module_name: str):
         missing = getattr(exc, "name", None) or ""
         if missing == "sglang" or missing.startswith("sglang."):
             raise
+        pytest.skip(f"environment not ready: {exc!r}")
+    except ImportError as exc:
+        # Distinguish a failure originating inside sglang from one caused by a
+        # missing/broken third-party dependency: only the latter is skipped.
+        tb = exc.__traceback__
+        while tb is not None:
+            frame_file = tb.tb_frame.f_code.co_filename
+            if "sglang" in frame_file.replace("\\", "/"):
+                raise
+            tb = tb.tb_next
         pytest.skip(f"environment not ready: {exc!r}")
 
 
