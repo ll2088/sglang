@@ -54,7 +54,9 @@ def _install_lightweight_dependency_stubs() -> None:
 
     The stub is installed at module import time (see the call at the bottom
     of this file) so that ``pytest -k import_smoke`` also works in a bare
-    environment, not just the ``--bare`` entry point.
+    environment, not just the ``--bare`` entry point.  The helper is
+    idempotent: repeated calls (including from ``_import_or_skip``) never
+    replace an already-installed stub or a real installation.
     """
     for name in ("torch",):
         # Never shadow a real installation: if the module is already imported
@@ -88,6 +90,20 @@ def _install_lightweight_dependency_stubs() -> None:
 
         stub.__getattr__ = _stub_getattr  # type: ignore[attr-defined]
         sys.modules[name] = stub
+
+
+def _stub_is_installed(name: str) -> bool:
+    """Return True when ``name`` is a stub installed by this module.
+
+    Used by the self-check test to confirm the bare-environment bootstrap
+    actually took effect, without depending on the real dependency being
+    absent (a fully provisioned environment legitimately has the real
+    module and the self-check then skips).
+    """
+    module = sys.modules.get(name)
+    if module is None:
+        return False
+    return getattr(module, "__version__", None) == "0.0.0+stub"
 
 
 # Install the source path and lightweight stubs at module import time so that
@@ -229,6 +245,30 @@ def _run_bare_smoke() -> int:
 
     print(f"import_smoke: OK (sglang.__version__={version})")
     return 0
+
+
+@pytest.mark.import_smoke
+def test_lightweight_dependency_stubs_effective():
+    """Self-check: the bare-environment bootstrap must actually take effect.
+
+    Guards against a regression where the stub installation silently stops
+    working (e.g. the helper is renamed or its guard conditions change),
+    which would make the bare CI entry point fail with an opaque import
+    error instead of a clear signal.  When the real dependency is present
+    the stub is intentionally not installed and the check is skipped.
+    """
+    _ensure_source_on_path()
+    _install_lightweight_dependency_stubs()
+
+    if importlib.util.find_spec("torch") is not None and not _stub_is_installed(
+        "torch"
+    ):
+        pytest.skip("real torch is installed; stub intentionally not used")
+
+    assert _stub_is_installed("torch"), (
+        "lightweight torch stub was not installed; the bare-environment "
+        "bootstrap is broken"
+    )
 
 
 @pytest.mark.import_smoke
