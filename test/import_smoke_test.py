@@ -43,14 +43,17 @@ def _install_lightweight_dependency_stubs() -> None:
     real regression in the import chain under test.  ``sglang/__init__.py``
     pulls in ``torch`` (via ``hf_transformers_patches`` and ``lang.api``);
     when torch is absent we register a permissive stub module so the import
-    chain can still be exercised.  Real installations are never shadowed:
-    stubs are only created for modules that are genuinely missing.
+    chain can still be exercised.
+
+    Real installations are never shadowed: a stub is only created when the
+    module is neither already imported nor resolvable via
+    ``importlib.util.find_spec``.  This keeps the smoke tests honest in a
+    fully provisioned CI environment where the real torch is present, and
+    avoids masking a genuine import regression behind a permissive stub.
     """
     for name in ("torch",):
         # Never shadow a real installation: if the module is already imported
-        # or resolvable on sys.path, leave it alone.  This keeps the smoke
-        # tests honest in a fully provisioned CI environment where the real
-        # torch is present.
+        # or resolvable on sys.path, leave it alone.
         if name in sys.modules:
             continue
         try:
@@ -103,7 +106,9 @@ def _import_or_skip(module_name: str):
     """
     _ensure_source_on_path()
     # Only install stubs for genuinely missing dependencies; a real install is
-    # never shadowed (see _install_lightweight_dependency_stubs).
+    # never shadowed (see _install_lightweight_dependency_stubs).  The helper
+    # itself re-checks sys.modules / find_spec, so calling it here is safe and
+    # idempotent.
     _install_lightweight_dependency_stubs()
     try:
         return importlib.import_module(module_name)
