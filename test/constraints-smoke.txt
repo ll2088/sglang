@@ -59,6 +59,19 @@ pytest>=7.4,<9
 # must reference it.  The smoke checks themselves never need the heavy tree
 # (see test/import_smoke.py), so ``--no-deps`` is the recommended form.
 #
+# The environment-preparation step MUST reference this file, e.g.:
+#
+#     pip install -c test/constraints-smoke.txt --no-deps -e python
+#
+# A bare ``pip install -e python`` ignores these pins and re-introduces the
+# cp314/cp312-abi3 resolution failures this file exists to prevent.
+#
+# Pins below are chosen so that every entry has a wheel for CPython
+# 3.10-3.13 (the interpreters used by CI).  ``--only-binary=:all:`` is
+# intentionally NOT set here so that a source-only fallback is still
+# possible, but the version bounds keep pip away from the cp314-only
+# releases seen in the failing logs.
+#
 py-spy>=0.4,<0.5
 pybase64>=1.4,<1.5
 pydantic>=2.9,<2.12
@@ -66,6 +79,16 @@ python-multipart>=0.0.9,<0.1
 pyzmq>=25.1.2,<27
 quack-kernels==0.6.5
 regex>=2024.5,<2025
+#
+# Explicit interpreter guard: the smoke environment is only supported on
+# CPython 3.10-3.13.  On other interpreters the heavy tree is not needed
+# (the smoke checks stub it), so callers should use ``--no-deps`` there.
+#
+#     python_version >= "3.10" and python_version < "3.14"
+#
+# (kept as a comment because pip constraint files do not support
+# environment markers on their own; the version bounds above are what
+# actually keep pip on compatible wheels).
 #
 # It intentionally pins nothing else: it exists so that a caller can pass
 # ``-c`` and, if desired, add exclusions here without touching .github/.
