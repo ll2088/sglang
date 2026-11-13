@@ -9,6 +9,8 @@ import importlib.metadata
 
 import pytest
 
+blobfile = pytest.importorskip("blobfile")
+
 
 def test_blobfile_importable():
     import blobfile  # noqa: F401
