@@ -25,7 +25,7 @@ runtime_base = [
   "anthropic>=0.20.0",
   "apache-tvm-ffi",
   "av",
-  "blobfile==3.0.0",
+  "blobfile==3.3.0",
   "build",
   "datasets",
   "easydict",
