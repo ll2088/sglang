@@ -41,6 +41,14 @@ _run_negative_check = _smoke._run_negative_check
 # ``sglang``.  This keeps the smoke tests runnable in a bare environment where
 # the full sglang dependency tree was never installed, so a failed
 # environment-preparation step cannot mask a real import regression.
+_ensure_source_on_path()
+_install_lightweight_dependency_stubs()
+
+# Bootstrap the source tree and lightweight dependency stubs as early as
+# possible -- before any test module (including test/run_suite.py) imports
+# ``sglang``.  This keeps the smoke tests runnable in a bare environment where
+# the full sglang dependency tree was never installed, so a failed
+# environment-preparation step cannot mask a real import regression.
 #
 # The helpers are defined below; the call is deferred to the bottom of the
 # module so that every helper is defined first.  ``test/run_suite.py`` imports

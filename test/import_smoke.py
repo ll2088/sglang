@@ -1,131 +1,222 @@
-"""Self-contained smoke checks for the ``sglang`` top-level import chain.
+"""Self-contained bootstrap + smoke checks for the ``sglang`` import chain.
 
-This module only depends on the standard library (and pytest, when collected
-by pytest).  It bootstraps ``python/`` onto ``sys.path`` and installs
-lightweight stubs for genuinely missing heavy third-party dependencies, so the
-import chain under test can be exercised even when the ``sglang`` distribution
-and its runtime dependency tree were never installed.
+This module only depends on the standard library.  It is imported by file
+path from ``test/import_smoke_test.py`` and ``test/run_suite.py`` so the two
+smoke entry points share one implementation and cannot drift apart.
 
-Entry points:
+It exists so the import-time / import-error / import-compat dimensions can be
+observed even when the heavy ``sglang`` runtime dependency tree (torch,
+py-spy, pybase64, pydantic, pyzmq, quack-kernels, regex, ...) cannot be
+installed during CI environment preparation.  ``python/`` is injected onto
+``sys.path`` and lightweight stubs are installed for any genuinely missing
+heavy dependency, so the top-level import chain is exercised directly from
+source.  A real installation is never shadowed.
 
-* ``python test/import_smoke.py --bare``       -- single-line OK/FAIL signal
-* ``python test/import_smoke.py --selfcheck``  -- every check, stdlib only
-* ``python test/import_smoke.py --negative``   -- broken import must be caught
-* ``python -m pytest -q test/import_smoke.py -k import_smoke``
+Entry points (no pytest required):
 
-Real installations are never shadowed: a stub is only created when the module
-is neither already imported nor resolvable via ``importlib.util.find_spec``.
+    python test/import_smoke.py --bare
+    python test/import_smoke.py --selfcheck
+    python test/import_smoke.py --negative
 """
 
 from __future__ import annotations
 
 import importlib
-import importlib.metadata
 import importlib.util
 import os
-import subprocess
 import sys
 import types
 
+# ---------------------------------------------------------------------------
+# sys.path bootstrap
+# ---------------------------------------------------------------------------
 
-# Heavy third-party modules that ``sglang/__init__.py`` (transitively) needs
-# but that the smoke tests must not require to be installed.
-_HEAVY_DEPENDENCY_STUBS = (
-    "torch",
-    "transformers",
-    "flashinfer",
-    "numpy",
-    "requests",
-    "pydantic",
-    "pybase64",
-    "IPython",
-    "tqdm",
-)
+
+def _repo_root() -> str:
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _ensure_source_on_path() -> None:
-    """Make ``python/sglang`` importable from the source tree.
+    """Put ``python/`` on ``sys.path`` so ``import sglang`` works from source.
 
-    The smoke tests must be runnable even when the ``sglang`` distribution is
-    not installed (e.g. the CI environment-preparation step failed while
-    resolving the heavy runtime dependency chain).  Adding the source
-    directory to ``sys.path`` lets us exercise the real import chain without
-    requiring a successful ``pip install``.
-
-    ``test/`` is also added so that ``import test.import_smoke`` works from
-    ``test/run_suite.py`` even when the repository root is not on ``sys.path``
-    (e.g. pytest invoked with a different rootdir).
+    Idempotent: repeated calls do not duplicate the entry.  A real installed
+    distribution is never shadowed -- the source tree is only prepended when
+    it is not already present.
     """
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    python_dir = os.path.join(repo_root, "python")
-    if os.path.isdir(os.path.join(python_dir, "sglang")):
-        if python_dir not in sys.path:
-            sys.path.insert(0, python_dir)
-    if repo_root not in sys.path:
-        sys.path.insert(0, repo_root)
+    python_dir = os.path.join(_repo_root(), "python")
+    if python_dir not in sys.path:
+        sys.path.insert(0, python_dir)
 
 
-def _install_lightweight_dependency_stubs() -> None:
-    """Install minimal stubs for heavy third-party deps of ``sglang``.
+# ---------------------------------------------------------------------------
+# Lightweight dependency stubs
+# ---------------------------------------------------------------------------
 
-    The smoke tests must run in a bare environment (only the standard library
-    and pytest) so that a broken CI dependency-resolution step cannot mask a
-    real regression in the import chain under test.  ``sglang/__init__.py``
-    pulls in ``torch`` (via ``hf_transformers_patches`` and ``lang.api``) and
-    a handful of other heavy packages; when any of them is absent we register
-    a permissive stub module so the import chain can still be exercised.
-
-    Real installations are never shadowed: a stub is only created when the
-    module is neither already imported nor resolvable via
-    ``importlib.util.find_spec``.  The helper is idempotent.
-    """
-    for name in _HEAVY_DEPENDENCY_STUBS:
-        if name in sys.modules:
-            continue
-        try:
-            spec = importlib.util.find_spec(name)
-        except (ImportError, ValueError):
-            spec = None
-        if spec is not None:
-            continue
-
-        stub = types.ModuleType(name)
-        stub.__path__ = []  # type: ignore[attr-defined]
-        stub.__version__ = "0.0.0+stub"  # type: ignore[attr-defined]
-
-        class _StubAny:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def __getattr__(self, item):
-                return _StubAny()
-
-            def __call__(self, *args, **kwargs):
-                return _StubAny()
-
-        def _stub_getattr(item):
-            if item.startswith("__") and item.endswith("__"):
-                raise AttributeError(item)
-            return _StubAny()
-
-        stub.__getattr__ = _stub_getattr  # type: ignore[attr-defined]
-        sys.modules[name] = stub
+_STUBBED_MODULES = (
+    "torch",
+    "torch.mps",
+    "torch.cuda",
+    "torch.backends",
+    "torch.backends.mps",
+    "triton",
+    "triton.language",
+    "triton.runtime",
+    "triton.runtime.jit",
+    "triton.compiler",
+    "triton.backends",
+    "triton.backends.compiler",
+    "triton.testing",
+    "triton.tools",
+    "triton.tools.tensor_descriptor",
+)
 
 
 def _stub_is_installed(name: str) -> bool:
-    """Return True when ``name`` is a stub installed by this module."""
-    module = sys.modules.get(name)
-    if module is None:
-        return False
-    return getattr(module, "__version__", None) == "0.0.0+stub"
+    """Return True when ``name`` is currently provided by our stub."""
+    mod = sys.modules.get(name)
+    return mod is not None and getattr(mod, "__import_smoke_stub__", False)
+
+
+def _make_stub(name: str) -> types.ModuleType:
+    mod = types.ModuleType(name)
+    mod.__import_smoke_stub__ = True  # type: ignore[attr-defined]
+    mod.__path__ = []  # type: ignore[attr-defined]
+    mod.__package__ = name
+    mod.__file__ = __file__
+    mod.__spec__ = importlib.machinery.ModuleSpec(name, None, is_package=True)
+    return mod
+
+
+def _install_lightweight_dependency_stubs() -> None:
+    """Install minimal stubs for genuinely missing heavy dependencies.
+
+    Only modules that are *not* importable are stubbed, so a real installation
+    is never shadowed.  Idempotent.
+    """
+    # torch
+    if importlib.util.find_spec("torch") is None and not _stub_is_installed("torch"):
+        torch = _make_stub("torch")
+        torch.__version__ = "0.0.0-import-smoke-stub"
+
+        class _Device:
+            def __init__(self, spec=None, type=None):  # noqa: A002
+                self.type = type or (str(spec).split(":", 1)[0] if spec else "cpu")
+
+            def __str__(self):
+                return self.type
+
+        def _device(spec=None, type=None):  # noqa: A002
+            return _Device(spec, type)
+
+        torch.device = _device
+        torch.Tensor = type("Tensor", (), {})
+        torch.dtype = type("dtype", (), {})
+        torch.float16 = torch.dtype()
+        torch.bfloat16 = torch.dtype()
+        torch.float32 = torch.dtype()
+
+        mps = _make_stub("torch.mps")
+        mps.is_available = lambda: False
+        mps.current_allocated_memory = lambda: 0
+        mps.driver_allocated_memory = lambda: 0
+        mps.recommended_max_memory = lambda: 0
+        torch.mps = mps
+
+        cuda = _make_stub("torch.cuda")
+        cuda.is_available = lambda: False
+        cuda.device_count = lambda: 0
+        torch.cuda = cuda
+
+        backends = _make_stub("torch.backends")
+        backends_mps = _make_stub("torch.backends.mps")
+        backends_mps.is_available = lambda: False
+        backends.mps = backends_mps
+        torch.backends = backends
+
+        sys.modules["torch"] = torch
+        sys.modules["torch.mps"] = mps
+        sys.modules["torch.cuda"] = cuda
+        sys.modules["torch.backends"] = backends
+        sys.modules["torch.backends.mps"] = backends_mps
+
+    # triton
+    if importlib.util.find_spec("triton") is None and not _stub_is_installed(
+        "triton"
+    ):
+        triton = _make_stub("triton")
+        triton.__version__ = "0.0.0-import-smoke-stub"
+        triton.cdiv = lambda a, b: -(a // -b)
+        triton.next_power_of_2 = lambda n: 1 << (n - 1).bit_length() if n > 0 else 1
+
+        class _Config:
+            def __init__(self, kwargs=None, num_warps=4, num_stages=2, **extra):
+                self.kwargs = kwargs or {}
+                self.num_warps = num_warps
+                self.num_stages = num_stages
+
+        triton.Config = _Config
+
+        tl = _make_stub("triton.language")
+
+        class _constexpr:
+            def __init__(self, value=None):
+                self.value = value
+
+        tl.constexpr = _constexpr
+        triton.language = tl
+
+        runtime = _make_stub("triton.runtime")
+        jit_mod = _make_stub("triton.runtime.jit")
+        jit_mod.JITFunction = type("JITFunction", (), {})
+        jit_mod.KernelInterface = type("KernelInterface", (), {})
+        runtime.jit = jit_mod
+        triton.runtime = runtime
+
+        compiler_root = _make_stub("triton.compiler")
+        compiler_root.CompiledKernel = type("CompiledKernel", (), {})
+        triton.compiler = compiler_root
+
+        backends = _make_stub("triton.backends")
+        backends_compiler = _make_stub("triton.backends.compiler")
+        backends_compiler.GPUTarget = type("GPUTarget", (), {})
+        backends.compiler = backends_compiler
+        triton.backends = backends
+
+        testing = _make_stub("triton.testing")
+        triton.testing = testing
+
+        tools = _make_stub("triton.tools")
+        tools.tensor_descriptor = _make_stub("triton.tools.tensor_descriptor")
+        triton.tools = tools
+
+        for name, mod in (
+            ("triton", triton),
+            ("triton.language", tl),
+            ("triton.runtime", runtime),
+            ("triton.runtime.jit", jit_mod),
+            ("triton.compiler", compiler_root),
+            ("triton.backends", backends),
+            ("triton.backends.compiler", backends_compiler),
+            ("triton.testing", testing),
+            ("triton.tools", tools),
+            ("triton.tools.tensor_descriptor", tools.tensor_descriptor),
+        ):
+            sys.modules[name] = mod
+
+
+# ---------------------------------------------------------------------------
+# Smoke checks (no pytest required)
+# ---------------------------------------------------------------------------
+
+_SMOKE_MODULES = (
+    "sglang._platform_stubs",
+    "sglang.version",
+    "sglang.utils",
+)
 
 
 def _run_bare_smoke() -> int:
-    """Run the minimal smoke check without pytest.
-
-    Returns a process exit code (0 on success, 1 on failure) and prints a
-    single-line, greppable result so the CI log carries an explicit signal.
-    """
+    """Import ``sglang`` and check ``__version__``; return a process exit code."""
     _ensure_source_on_path()
     _install_lightweight_dependency_stubs()
     try:
@@ -144,15 +235,7 @@ def _run_bare_smoke() -> int:
 
 
 def _run_selfcheck() -> int:
-    """Run every smoke check without pytest and without third-party deps.
-
-    Exercises the same import chain as the pytest tests (top-level ``sglang``,
-    ``_platform_stubs``, ``version``, ``utils``) using only the standard
-    library, and prints one greppable line per check so a failure is
-    attributable without a test runner.
-
-    Returns 0 when every check passes, 1 otherwise.
-    """
+    """Run every smoke check without pytest; return a process exit code."""
     _ensure_source_on_path()
     _install_lightweight_dependency_stubs()
 
@@ -170,7 +253,7 @@ def _run_selfcheck() -> int:
     else:
         print(f"import_smoke: OK (sglang.__version__={version})")
 
-    for module_name in ("sglang._platform_stubs", "sglang.version", "sglang.utils"):
+    for module_name in _SMOKE_MODULES:
         try:
             importlib.import_module(module_name)
         except Exception as exc:  # noqa: BLE001 - report any import failure
@@ -192,20 +275,11 @@ def _run_selfcheck() -> int:
 
 
 def _run_negative_check() -> int:
-    """Negative self-check: a broken ``sglang`` import must be reported.
+    """Break ``sglang/__init__.py`` in a subprocess and confirm it is caught."""
+    import subprocess
 
-    The check is performed in a subprocess so the current interpreter's
-    ``sys.modules`` is not polluted by the deliberately broken import.  The
-    subprocess runs the ``--bare`` entry point, which bootstraps the source
-    tree and lightweight stubs itself, so this check does not depend on the
-    sglang distribution (or its heavy runtime dependencies) being installed.
-
-    Returns 0 when the broken import is correctly detected as a failure, and
-    1 when the smoke test would have passed despite the breakage.
-    """
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    python_dir = os.path.join(repo_root, "python")
-    init_path = os.path.join(python_dir, "sglang", "__init__.py")
+    repo_root = _repo_root()
+    init_path = os.path.join(repo_root, "python", "sglang", "__init__.py")
     if not os.path.isfile(init_path):
         print("import_smoke_negative: SKIP (sglang/__init__.py not found)")
         return 0
@@ -237,13 +311,6 @@ def _run_negative_check() -> int:
 
     print("import_smoke_negative: OK (broken import detected)")
     return 0
-
-
-# Bootstrap at import time so that any module importing this file (e.g.
-# test/run_suite.py) gets a working ``sglang`` import chain even when the
-# sglang distribution and its heavy runtime dependencies were never installed.
-_ensure_source_on_path()
-_install_lightweight_dependency_stubs()
 
 
 if __name__ == "__main__":

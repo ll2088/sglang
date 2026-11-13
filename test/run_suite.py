@@ -552,6 +552,11 @@ def test_import_smoke():
     ):
         importlib.import_module(_module_name)
 
+    # The public API names declared in __all__ must resolve without pulling in
+    # the heavy runtime dependencies (they are LazyImport wrappers).
+    for _name in sglang.__all__:
+        assert hasattr(sglang, _name), f"missing public symbol: {_name}"
+
 
 def test_import_smoke_negative():
     """Negative smoke test: a broken top-level import must be detected.
