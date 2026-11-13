@@ -502,9 +502,10 @@ def _load_import_smoke_module():
     being on sys.path.  The module bootstraps ``python/`` onto sys.path and
     installs lightweight stubs for genuinely missing heavy dependencies, so
     the smoke tests run even when ``pip install -e python`` failed during CI
-    environment preparation.
+    environment preparation.  Only the standard library is required here;
+    pytest is needed only to collect the test functions themselves.
     """
-    import importlib
+    import importlib.util
     import os
     import sys
 

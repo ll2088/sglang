@@ -111,10 +111,14 @@ def _run_bare_smoke() -> int:
 
     Runs in a subprocess so that a partially-initialised ``sglang`` package
     (or a stub installed by an earlier bootstrap) can never mask a real
-    import regression in this interpreter.
+    import regression in this interpreter.  The subprocess only needs the
+    standard library: the source tree and lightweight stubs are bootstrapped
+    by ``test/import_smoke.py`` itself, so no third-party package (not even
+    pytest) is required.
     """
     import subprocess
 
+    smoke_dir = os.path.dirname(os.path.abspath(__file__))
     code = (
         "import importlib, sys;"
         "sys.path.insert(0, %r);"
@@ -127,11 +131,11 @@ def _run_bare_smoke() -> int:
         "[getattr(sglang, n) for n in sglang.__all__];"
         "[importlib.import_module(m) for m in "
         "('sglang._platform_stubs', 'sglang.version', 'sglang.utils')]"
-    ) % (os.path.dirname(os.path.abspath(__file__)),)
+    ) % (smoke_dir,)
 
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
-        [os.path.dirname(os.path.abspath(__file__)), env.get("PYTHONPATH", "")]
+        [smoke_dir, env.get("PYTHONPATH", "")]
     )
     proc = subprocess.run(
         [sys.executable, "-c", code],

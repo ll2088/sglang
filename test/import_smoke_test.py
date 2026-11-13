@@ -18,6 +18,12 @@ import sys
 
 import pytest
 
+# NOTE: this module must stay importable with only the standard library and
+# pytest.  It must never import torch/transformers/flashinfer/etc. at module
+# scope; the heavy runtime dependency tree is stubbed by test/import_smoke.py
+# so the smoke tests run even when ``pip install -e python`` failed during CI
+# environment preparation.
+
 # The smoke tests must stay runnable in a bare environment where the heavy
 # sglang runtime dependency tree was never installed.  ``pytest`` itself is
 # the only third-party import at module scope; everything else is stdlib.
