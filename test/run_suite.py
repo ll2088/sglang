@@ -522,6 +522,10 @@ def test_import_smoke():
     _smoke._ensure_source_on_path()
     _smoke._install_lightweight_dependency_stubs()
 
+    # Import sglang only after the source path and lightweight stubs are in
+    # place, so this test does not depend on ``pip install -e python`` having
+    # succeeded (the heavy dependency tree can fail to resolve during CI
+    # environment preparation and mask real import regressions).
     sglang = importlib.import_module("sglang")
     assert sglang.__version__
     assert isinstance(sglang.__version__, str)
@@ -558,6 +562,9 @@ def test_import_smoke_negative():
     sys.modules.setdefault("import_smoke_test", _smoke)
     _spec.loader.exec_module(_smoke)
 
+    # The negative check runs in a subprocess with the source tree on
+    # sys.path and lightweight stubs installed, so it does not require the
+    # sglang distribution (or its heavy runtime dependencies) to be installed.
     assert _smoke._run_negative_check() == 0
 
 

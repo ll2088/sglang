@@ -19,6 +19,17 @@ import types
 
 import pytest
 
+# Bootstrap the source tree and lightweight dependency stubs as early as
+# possible -- before any test module (including test/run_suite.py) imports
+# ``sglang``.  This keeps the smoke tests runnable in a bare environment where
+# the full sglang dependency tree was never installed, so a failed
+# environment-preparation step cannot mask a real import regression.
+#
+# The helpers are defined below; the call is deferred to the bottom of the
+# module so that every helper is defined first.  ``test/run_suite.py`` imports
+# this module by file path before importing ``sglang``, which triggers the
+# bootstrap at import time.
+
 
 def _ensure_source_on_path() -> None:
     """Make ``python/sglang`` importable from the source tree.
@@ -323,11 +334,16 @@ def _run_negative_check() -> int:
     in a subprocess so the current interpreter's ``sys.modules`` is not
     polluted by the deliberately broken import.
 
+    The subprocess runs the ``--bare`` entry point, which bootstraps the
+    source tree and lightweight stubs itself, so this check does not depend
+    on the sglang distribution (or its heavy runtime dependencies) being
+    installed.  A broken ``__init__.py`` therefore fails the bare smoke run
+    even in a bare environment.
+
     Returns 0 when the broken import is correctly detected as a failure, and
     1 when the smoke test would have passed despite the breakage.
     """
     import subprocess
-    import tempfile
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     python_dir = os.path.join(repo_root, "python")
@@ -423,6 +439,15 @@ def test_import_smoke_bare_entrypoint():
     bootstrap is caught by the normal pytest run as well.
     """
     assert _run_bare_smoke() == 0
+
+
+# Bootstrap the source tree and lightweight dependency stubs at module import
+# time so that any test module importing this file (e.g. test/run_suite.py's
+# test_import_smoke) gets a working ``sglang`` import chain even when the
+# sglang distribution and its heavy runtime dependencies were never installed.
+# Both helpers are idempotent and never shadow a real installation.
+_ensure_source_on_path()
+_install_lightweight_dependency_stubs()
 
 
 # When this file is executed directly (``python test/import_smoke_test.py``)
