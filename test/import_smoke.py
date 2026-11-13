@@ -15,6 +15,7 @@ import importlib.metadata
 import importlib.util
 import os
 import sys
+import types
 
 import pytest
 
@@ -44,14 +45,7 @@ _HEAVY_DEPENDENCY_STUBS = (
 
 
 def _install_lightweight_dependency_stubs() -> None:
-    """Install minimal stubs for heavy third-party deps of ``sglang``.
-
-    A stub is only created when the module is neither already imported nor
-    resolvable via ``importlib.util.find_spec``, so a real installation is
-    never shadowed.
-    """
-    import types
-
+    """Install minimal stubs for genuinely missing heavy dependencies."""
     for name in _HEAVY_DEPENDENCY_STUBS:
         if name in sys.modules:
             continue
@@ -61,9 +55,20 @@ def _install_lightweight_dependency_stubs() -> None:
             spec = None
         if spec is not None:
             continue
+
         stub = types.ModuleType(name)
         stub.__path__ = []  # type: ignore[attr-defined]
         stub.__version__ = "0.0.0+stub"  # type: ignore[attr-defined]
+
+        class _StubAny:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __getattr__(self, item):
+                return _StubAny()
+
+            def __call__(self, *args, **kwargs):
+                return _StubAny()
 
         def _stub_getattr(item):
             if item.startswith("__") and item.endswith("__"):
@@ -74,30 +79,12 @@ def _install_lightweight_dependency_stubs() -> None:
         sys.modules[name] = stub
 
 
-class _StubAny:
-    """Permissive stand-in for any attribute of a stubbed dependency."""
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def __getattr__(self, item):
-        return _StubAny()
-
-    def __call__(self, *args, **kwargs):
-        return _StubAny()
-
-
 _ensure_source_on_path()
 _install_lightweight_dependency_stubs()
 
 
 def _import_or_skip(module_name: str):
-    """Import ``module_name``, skipping if the environment is not ready.
-
-    A missing third-party dependency is an environment problem, not a
-    regression in the import chain under test.  A missing ``sglang.*``
-    submodule is a real regression and must fail the test.
-    """
+    """Import ``module_name``, skipping if the environment is not ready."""
     _ensure_source_on_path()
     _install_lightweight_dependency_stubs()
     try:
@@ -197,11 +184,7 @@ def _run_bare_smoke() -> int:
 
 
 def _run_negative_check() -> int:
-    """Negative self-check: a broken ``sglang`` import must be reported.
-
-    The check runs in a subprocess so the current interpreter's ``sys.modules``
-    is not polluted by the deliberately broken import.
-    """
+    """Negative self-check: a broken ``sglang`` import must be reported."""
     import subprocess
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

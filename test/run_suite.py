@@ -494,31 +494,43 @@ def run_a_suite(args):
 # dedicated smoke module) still exercises the top-level import chain.
 
 
-def test_import_smoke():
-    """Smoke test: ``import sglang`` must succeed and expose ``__version__``.
+def _load_import_smoke_module():
+    """Load the standalone import-smoke helpers by file path.
 
-    Kept here (in addition to test/import_smoke_test.py) so that the
-    acceptance command ``pytest -q test/run_suite.py -k import_smoke``
-    exercises the top-level import chain directly.  The heavy runtime
-    dependencies are stubbed by test/import_smoke_test.py's bootstrap, which
-    is imported below; a real installation is never shadowed.
+    Imported by file path so this test does not depend on ``test`` being an
+    importable package (it has no __init__.py) nor on the repository root
+    being on sys.path.  The module bootstraps ``python/`` onto sys.path and
+    installs lightweight stubs for genuinely missing heavy dependencies, so
+    the smoke tests run even when ``pip install -e python`` failed during CI
+    environment preparation.
     """
     import importlib
     import os
     import sys
 
-    # Import the smoke-test helpers by file path so this test does not depend
-    # on ``test`` being an importable package (it has no __init__.py) nor on
-    # the repository root being on sys.path.
     _smoke_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "import_smoke_test.py"
+        os.path.dirname(os.path.abspath(__file__)), "import_smoke.py"
     )
-    _spec = importlib.util.spec_from_file_location("import_smoke_test", _smoke_path)
+    _spec = importlib.util.spec_from_file_location("import_smoke", _smoke_path)
     assert _spec is not None and _spec.loader is not None
     _smoke = importlib.util.module_from_spec(_spec)
-    sys.modules.setdefault("import_smoke_test", _smoke)
+    sys.modules.setdefault("import_smoke", _smoke)
     _spec.loader.exec_module(_smoke)
+    return _smoke
 
+
+def test_import_smoke():
+    """Smoke test: ``import sglang`` must succeed and expose ``__version__``.
+
+    Kept here (in addition to test/import_smoke.py) so that the acceptance
+    command ``pytest -q test/run_suite.py -k import_smoke`` exercises the
+    top-level import chain directly.  The heavy runtime dependencies are
+    stubbed by test/import_smoke.py's bootstrap; a real installation is never
+    shadowed.
+    """
+    import importlib
+
+    _smoke = _load_import_smoke_module()
     _smoke._ensure_source_on_path()
     _smoke._install_lightweight_dependency_stubs()
 
@@ -549,18 +561,7 @@ def test_import_smoke_negative():
     subprocess so the deliberately broken import never pollutes this
     interpreter's ``sys.modules``.
     """
-    import importlib
-    import os
-    import sys
-
-    _smoke_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "import_smoke_test.py"
-    )
-    _spec = importlib.util.spec_from_file_location("import_smoke_test", _smoke_path)
-    assert _spec is not None and _spec.loader is not None
-    _smoke = importlib.util.module_from_spec(_spec)
-    sys.modules.setdefault("import_smoke_test", _smoke)
-    _spec.loader.exec_module(_smoke)
+    _smoke = _load_import_smoke_module()
 
     # The negative check runs in a subprocess with the source tree on
     # sys.path and lightweight stubs installed, so it does not require the
