@@ -526,6 +526,16 @@ def test_import_smoke():
     assert sglang.__version__
     assert isinstance(sglang.__version__, str)
 
+    # Cover the remaining top-level import paths required by the smoke suite
+    # so that ``pytest -q test/run_suite.py -k import_smoke`` exercises them
+    # even when the dedicated smoke module is not collected.
+    for _module_name in (
+        "sglang._platform_stubs",
+        "sglang.version",
+        "sglang.utils",
+    ):
+        importlib.import_module(_module_name)
+
 
 def test_import_smoke_negative():
     """Negative smoke test: a broken top-level import must be detected.

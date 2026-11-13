@@ -271,6 +271,50 @@ def _run_bare_smoke() -> int:
     return 0
 
 
+def _run_selfcheck() -> int:
+    """Run every smoke check without pytest and without third-party deps.
+
+    This is the entry point CI should use when the full ``sglang`` dependency
+    tree cannot be installed during environment preparation.  It exercises the
+    same import chain as the pytest tests (top-level ``sglang``,
+    ``_platform_stubs``, ``version``, ``utils``) using only the standard
+    library, and prints one greppable line per check so a failure is
+    attributable without a test runner.
+
+    Returns 0 when every check passes, 1 otherwise.
+    """
+    _ensure_source_on_path()
+    _install_lightweight_dependency_stubs()
+
+    failures = []
+
+    try:
+        sglang = importlib.import_module("sglang")
+    except Exception as exc:  # noqa: BLE001 - report any import failure
+        print(f"import_smoke: FAIL (sglang: {type(exc).__name__}: {exc})")
+        return 1
+
+    version = getattr(sglang, "__version__", None)
+    if not version or not isinstance(version, str):
+        failures.append(f"sglang.__version__ invalid: {version!r}")
+    else:
+        print(f"import_smoke: OK (sglang.__version__={version})")
+
+    for module_name in ("sglang._platform_stubs", "sglang.version", "sglang.utils"):
+        try:
+            importlib.import_module(module_name)
+        except Exception as exc:  # noqa: BLE001 - report any import failure
+            failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
+        else:
+            print(f"import_smoke: OK ({module_name})")
+
+    if failures:
+        for failure in failures:
+            print(f"import_smoke: FAIL ({failure})")
+        return 1
+    return 0
+
+
 def _run_negative_check() -> int:
     """Negative self-check: a broken ``sglang`` import must be reported.
 
@@ -393,6 +437,8 @@ def test_import_smoke_bare_entrypoint():
 if __name__ == "__main__":
     if "--bare" in sys.argv[1:]:
         raise SystemExit(_run_bare_smoke())
+    if "--selfcheck" in sys.argv[1:]:
+        raise SystemExit(_run_selfcheck())
     if "--negative" in sys.argv[1:]:
         raise SystemExit(_run_negative_check())
     _ensure_source_on_path()
