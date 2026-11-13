@@ -1,17 +1,13 @@
 """Pytest bootstrap for the lightweight import smoke tests.
 
-This conftest runs before any test module is collected.  It makes the source
-tree importable (``python/`` on ``sys.path``) and installs minimal stubs for
-heavy third-party dependencies that ``sglang/__init__.py`` transitively needs,
-so the import smoke tests can run in a bare environment where the ``sglang``
-distribution and its runtime dependency tree were never installed.
+Runs before any test module is collected.  Makes the source tree importable
+(``python/`` on ``sys.path``) and installs minimal stubs for heavy third-party
+dependencies that ``sglang/__init__.py`` transitively needs, so the import
+smoke tests can run in a bare environment where the ``sglang`` distribution
+and its runtime dependency tree were never installed.
 
 Real installations are never shadowed: a stub is only created when the module
 is neither already imported nor resolvable via ``importlib.util.find_spec``.
-
-The bootstrap helpers live in ``test/import_smoke.py`` so that the pytest
-entry point, the ``--bare`` CLI entry point, and ``test/run_suite.py`` all
-share a single implementation and cannot drift apart.
 """
 
 import importlib.util

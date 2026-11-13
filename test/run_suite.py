@@ -552,6 +552,64 @@ def test_import_smoke_negative():
     assert _smoke._run_negative_check() == 0
 
 
+def _load_import_smoke_module():
+    """Load the standalone import-smoke helpers by file path.
+
+    Imported by file path so this test does not depend on ``test`` being an
+    importable package (it has no __init__.py) nor on the repository root
+    being on sys.path.  The module bootstraps ``python/`` onto sys.path and
+    installs lightweight stubs for genuinely missing heavy dependencies, so
+    the smoke tests run even when ``pip install -e python`` failed during CI
+    environment preparation.  Only the standard library is required here;
+    pytest is needed only to collect the test functions themselves.
+    """
+    import importlib.util
+    import os
+    import sys
+
+    _smoke_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "import_smoke.py"
+    )
+    _spec = importlib.util.spec_from_file_location("import_smoke", _smoke_path)
+    assert _spec is not None and _spec.loader is not None
+    _smoke = importlib.util.module_from_spec(_spec)
+    sys.modules.setdefault("import_smoke", _smoke)
+    _spec.loader.exec_module(_smoke)
+    return _smoke
+
+
+def test_import_smoke():
+    """Smoke test: ``import sglang`` must succeed and expose ``__version__``.
+
+    Kept here (in addition to test/import_smoke_test.py) so that the
+    acceptance command ``pytest -q test/run_suite.py -k import_smoke``
+    exercises the top-level import chain directly.  The heavy runtime
+    dependencies are stubbed by test/import_smoke.py's bootstrap; a real
+    installation is never shadowed.
+
+    The import runs in a subprocess so that a partially-initialised
+    ``sglang`` package (or a stub installed by an earlier test) can never
+    mask a real import regression, and so the check does not depend on the
+    heavy runtime dependency tree being installed in this interpreter.
+    """
+    _smoke = _load_import_smoke_module()
+
+    assert _smoke._run_bare_smoke() == 0
+
+
+def test_import_smoke_negative():
+    """Negative smoke test: a broken top-level import must be detected.
+
+    Guards the import-error dimension: the smoke tests must fail (not skip)
+    when ``python/sglang/__init__.py`` is broken.  The check runs in a
+    subprocess so the deliberately broken import never pollutes this
+    interpreter's ``sys.modules``.
+    """
+    _smoke = _load_import_smoke_module()
+
+    assert _smoke._run_negative_check() == 0
+
+
 def _parse_timeout_override(value: str) -> tuple[str, float]:
     path, sep, seconds = value.rpartition("=")
     try:

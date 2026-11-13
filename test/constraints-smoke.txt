@@ -23,24 +23,5 @@
 #
 #     pip install --no-build-isolation --no-deps -e python
 #
-# CI environment preparation for the import-smoke dimensions MUST NOT run a
-# full ``pip install -e python``: resolving the heavy runtime dependency tree
-# (py-spy / pybase64 / pydantic / pyzmq / quack-kernels / regex ...) can fail
-# before any test runs, which makes the smoke tests unobservable.  Use one of
-# the two commands above instead -- the smoke tests bootstrap ``python/`` onto
-# sys.path and stub genuinely missing heavy dependencies themselves, so they
-# never need the full dependency tree.
-#
-# The smoke tests never require the distribution to be installed: they inject
-# ``python/`` onto sys.path and stub genuinely missing heavy dependencies.
-#
-# It intentionally pins nothing: it exists so that a caller can pass
-# ``-c`` and, if desired, add exclusions here without touching .github/.
-#
-# The smoke tests are also runnable with no third-party package at all:
-#
-#     python test/import_smoke.py --bare
-#
-# which is the recommended fallback when the environment-preparation step
-# (``pip install -e python``) fails while resolving the heavy runtime
-# dependency tree.
+# It intentionally pins nothing: it exists so that a caller can pass ``-c``
+# and, if desired, add exclusions here without touching .github/.
