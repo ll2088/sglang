@@ -15,6 +15,15 @@
 # or, without pytest at all:
 #
 #     python test/import_smoke_test.py --bare
+#     python test/import_smoke_test.py --selfcheck
+#
+# If the sglang distribution itself must be installed for other steps, use
+# ``--no-deps`` so the heavy runtime dependency tree is not resolved here:
+#
+#     pip install --no-build-isolation --no-deps -e python
+#
+# The smoke tests never require the distribution to be installed: they inject
+# ``python/`` onto sys.path and stub genuinely missing heavy dependencies.
 #
 # It intentionally pins nothing: it exists so that a caller can pass
 # ``-c`` and, if desired, add exclusions here without touching .github/.

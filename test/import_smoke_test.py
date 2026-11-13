@@ -153,6 +153,12 @@ def _import_or_skip(module_name: str):
     """Import ``module_name``, skipping (with the original error) if the
     environment is not ready.
 
+    The smoke tests must not require the ``sglang`` distribution to be
+    installed: ``python/`` is injected onto ``sys.path`` by
+    ``_ensure_source_on_path`` so the source tree is imported directly.  This
+    keeps the smoke path free of the heavy runtime dependency resolution that
+    ``pip install -e python`` performs during CI environment preparation.
+
     A missing third-party dependency (e.g. torch not installed yet) is an
     environment problem, not a regression in the import chain under test.
     Skipping keeps the failure signal attributable: a real import error in
@@ -224,7 +230,15 @@ def test_import_version():
 
 @pytest.mark.import_smoke
 def test_import_version_matches_metadata():
-    """Smoke test: sglang.__version__ must match installed package metadata."""
+    """Smoke test: sglang.__version__ must match installed package metadata.
+
+    The smoke tests are intentionally runnable without the ``sglang``
+    distribution installed (see ``_ensure_source_on_path``), so this check
+    skips when the distribution metadata is absent instead of failing.  It
+    never triggers a dependency resolution: ``importlib.metadata`` only reads
+    already-installed metadata and does not import the package's runtime
+    dependencies.
+    """
     sglang = _import_or_skip("sglang")
 
     try:
@@ -286,6 +300,13 @@ def _run_selfcheck() -> int:
     """Run every smoke check without pytest and without third-party deps.
 
     This is the entry point CI should use when the full ``sglang`` dependency
+    tree cannot be installed during environment preparation.  It never
+    requires the ``sglang`` distribution to be installed: ``python/`` is
+    injected onto ``sys.path`` and lightweight stubs cover any genuinely
+    missing heavy dependency, so the import chain under test is exercised
+    directly from source.
+
+    This is the entry point CI should use when the full ``sglang`` dependency
     tree cannot be installed during environment preparation.  It exercises the
     same import chain as the pytest tests (top-level ``sglang``,
     ``_platform_stubs``, ``version``, ``utils``) using only the standard
@@ -318,6 +339,14 @@ def _run_selfcheck() -> int:
             failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
         else:
             print(f"import_smoke: OK ({module_name})")
+
+    # The public API names declared in __all__ must resolve without pulling in
+    # the heavy runtime dependencies (they are LazyImport wrappers).
+    for name in getattr(sglang, "__all__", ()):
+        if not hasattr(sglang, name):
+            failures.append(f"sglang.__all__ missing symbol: {name}")
+    if not failures:
+        print("import_smoke: OK (sglang.__all__)")
 
     if failures:
         for failure in failures:
