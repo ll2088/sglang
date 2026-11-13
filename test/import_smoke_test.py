@@ -19,6 +19,17 @@ import types
 import pytest
 
 
+# When this file is executed directly (``python test/import_smoke_test.py``)
+# rather than collected by pytest, it bootstraps a minimal environment and
+# then re-invokes pytest on itself.  This lets CI run the smoke tests without
+# first installing the full ``sglang`` dependency chain (which can fail during
+# environment preparation and mask real import regressions).
+if __name__ == "__main__":
+    _ensure_source_on_path()
+    _install_lightweight_dependency_stubs()
+    raise SystemExit(pytest.main(["-q", os.path.abspath(__file__), "-k", "import_smoke"]))
+
+
 def _ensure_source_on_path() -> None:
     """Make ``python/sglang`` importable from the source tree.
 
