@@ -19,7 +19,10 @@ def test_tvm_ffi_version_is_pinned():
         installed = importlib.metadata.version("apache-tvm-ffi")
     except importlib.metadata.PackageNotFoundError:
         pytest.skip("apache-tvm-ffi is not installed in this environment")
-    assert installed == EXPECTED_TVM_FFI_VERSION, (
+    # Normalize local/dev suffixes (e.g. "0.1.16.post1") before comparing so
+    # the check reflects the pinned release line rather than an exact build.
+    normalized = installed.split("+", 1)[0]
+    assert normalized == EXPECTED_TVM_FFI_VERSION, (
         f"expected apache-tvm-ffi=={EXPECTED_TVM_FFI_VERSION}, got {installed}"
     )
 
@@ -52,7 +55,8 @@ def test_tvm_ffi_public_api_surface():
 
     version = getattr(tvm_ffi, "__version__", None)
     if version is not None:
-        assert version == EXPECTED_TVM_FFI_VERSION, (
+        normalized = str(version).split("+", 1)[0]
+        assert normalized == EXPECTED_TVM_FFI_VERSION, (
             f"tvm_ffi.__version__={version!r} does not match the pinned "
             f"apache-tvm-ffi=={EXPECTED_TVM_FFI_VERSION}"
         )
