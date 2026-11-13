@@ -475,7 +475,13 @@ def run_a_suite(args):
 
 # The import smoke tests live in test/import_smoke_test.py so that pytest can
 # collect them directly, without going through this module's argparse entry
-# point or the registered-test sanity checks.
+# point or the registered-test sanity checks. Run them with:
+#
+#     python -m pytest -q test/import_smoke_test.py -k import_smoke
+#
+# They are intentionally not registered in the CI suite tables above: they
+# depend only on the standard library and pytest, and must stay runnable in a
+# bare environment where the heavy sglang runtime dependencies are absent.
 
 
 def _parse_timeout_override(value: str) -> tuple[str, float]:

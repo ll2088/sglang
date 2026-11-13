@@ -24,10 +24,17 @@ def _import_or_skip(module_name: str):
     environment problem, not a regression in the import chain under test.
     Skipping keeps the failure signal attributable: a real import error in
     ``sglang`` itself still raises and fails the test.
+
+    ``ModuleNotFoundError`` is only treated as an environment problem when the
+    missing module is *not* part of ``sglang`` itself; a missing ``sglang.*``
+    submodule is a real regression and must fail the test.
     """
     try:
         return importlib.import_module(module_name)
     except ModuleNotFoundError as exc:
+        missing = getattr(exc, "name", None) or ""
+        if missing == "sglang" or missing.startswith("sglang."):
+            raise
         pytest.skip(f"environment not ready: {exc!r}")
 
 
