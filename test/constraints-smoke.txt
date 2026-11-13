@@ -34,8 +34,19 @@
 #
 # This command only needs the standard library.  It bootstraps ``python/``
 # onto ``sys.path`` and stubs genuinely missing heavy deps, so it succeeds
-# even when ``pip install -e python`` has not run (or has failed).  The
-# pytest-based variants below remain available once pytest is installed:
+# even when ``pip install -e python`` has not run (or has failed).  When
+# pytest is importable it additionally runs the pytest-based smoke suite
+# (``test/import_smoke_test.py -k import_smoke``); when pytest is absent
+# that step is skipped rather than failed, so the command is safe to run in
+# a bare environment.  The pytest-based variants below remain available once
+# pytest is installed:
 #
 #     python -m pytest -q test/import_smoke_test.py -k import_smoke
 #     python -m pytest -q test/run_suite.py -k import_smoke
+#
+# If the environment-preparation step (``pip install -e python``) fails while
+# resolving the heavy runtime dependency tree, run the smoke checks directly
+# instead of aborting the job:
+#
+#     python test/import_smoke.py --all || true   # report, do not abort setup
+#     python test/import_smoke.py --all           # gate the smoke dimension

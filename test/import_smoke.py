@@ -183,6 +183,13 @@ def _run_all() -> int:
     This is the entry point CI can call *before* installing the heavy sglang
     runtime dependency tree: it only needs the standard library, bootstraps
     ``python/`` onto ``sys.path`` and stubs genuinely missing heavy deps.
+
+    It also runs the pytest-based checks when pytest is importable, so a
+    single ``python test/import_smoke.py --all`` invocation covers the
+    import-time / import-error / import-compat dimensions in both bare and
+    fully provisioned environments.  When pytest is unavailable the
+    pytest-based checks are skipped (they are a superset of the bare checks
+    above), never failed.
     """
     _ensure_source_on_path()
     _install_lightweight_dependency_stubs()
@@ -198,11 +205,57 @@ def _run_all() -> int:
     if _run_negative_check() != 0:
         failures.append("negative")
 
+    if _run_pytest_smoke() != 0:
+        failures.append("pytest")
+
     if failures:
         sys.stderr.write("import smoke failures: %s\n" % ", ".join(failures))
         return 1
     print("import_smoke_ok")
     return 0
+
+
+def _run_pytest_smoke() -> int:
+    """Run the pytest-based smoke tests in a subprocess.
+
+    Returns 0 when pytest is not installed (the bare checks above already
+    cover the same import chain) or when the pytest run passes.  Returns
+    non-zero only when pytest is available and the smoke tests fail, so a
+    real import regression is never masked by a missing test runner.
+    """
+    try:
+        importlib.util.find_spec("pytest")
+    except (ImportError, ValueError):
+        return 0
+    if importlib.util.find_spec("pytest") is None:
+        return 0
+
+    test_file = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "import_smoke_test.py"
+    )
+    if not os.path.exists(test_file):
+        return 0
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:randomly",
+            test_file,
+            "-k",
+            "import_smoke",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=_REPO_ROOT,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+    return proc.returncode
 
 
 def _main(argv: list[str]) -> int:
@@ -212,11 +265,13 @@ def _main(argv: list[str]) -> int:
         return _run_selfcheck()
     if "--negative" in argv:
         return _run_negative_check()
+    if "--pytest" in argv:
+        return _run_pytest_smoke()
     if "--all" in argv:
         return _run_all()
     sys.stderr.write(
         "usage: python test/import_smoke.py "
-        "[--bare|--selfcheck|--negative|--all]\n"
+        "[--bare|--selfcheck|--negative|--pytest|--all]\n"
     )
     return 2
 

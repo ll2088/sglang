@@ -6,7 +6,6 @@ import os
 import sys
 from typing import Dict, List, Optional
 
-import pytest
 import tabulate
 
 from sglang.test.ci.ci_register import (
@@ -16,6 +15,14 @@ from sglang.test.ci.ci_register import (
     collect_tests,
 )
 from sglang.test.ci.ci_utils import run_unittest_files
+
+# pytest is only needed to collect the import-smoke tests below; the suite
+# runner itself must stay importable in a bare environment where the heavy
+# sglang runtime dependency tree (and pytest) are not installed.
+try:
+    import pytest
+except ImportError:  # pragma: no cover - bare environment
+    pytest = None
 
 HW_MAPPING = {
     "cpu": HWBackend.CPU,
@@ -576,6 +583,18 @@ def test_import_smoke_negative():
     _smoke = _load_import_smoke_module()
 
     assert _smoke._run_negative_check() == 0
+
+
+def test_import_smoke_pytest_entrypoint():
+    """The pytest-based smoke suite must pass when pytest is available.
+
+    Delegates to ``test/import_smoke.py --pytest`` so the same checks can be
+    driven from a bare environment (``python test/import_smoke.py --all``)
+    and from pytest without duplicating the assertions.
+    """
+    _smoke = _load_import_smoke_module()
+
+    assert _smoke._run_pytest_smoke() == 0
 
 
 def _parse_timeout_override(value: str) -> tuple[str, float]:
