@@ -14,6 +14,7 @@ import importlib
 import importlib.metadata
 import os
 import sys
+import types
 
 import pytest
 
@@ -32,6 +33,49 @@ def _ensure_source_on_path() -> None:
     if os.path.isdir(os.path.join(python_dir, "sglang")):
         if python_dir not in sys.path:
             sys.path.insert(0, python_dir)
+
+
+def _install_lightweight_dependency_stubs() -> None:
+    """Install minimal stubs for heavy third-party deps of ``sglang``.
+
+    The smoke tests must run in a bare environment (only the standard library
+    and pytest) so that a broken CI dependency-resolution step cannot mask a
+    real regression in the import chain under test.  ``sglang/__init__.py``
+    pulls in ``torch`` (via ``hf_transformers_patches`` and ``lang.api``);
+    when torch is absent we register a permissive stub module so the import
+    chain can still be exercised.  Real installations are never shadowed:
+    stubs are only created for modules that are genuinely missing.
+    """
+    for name in ("torch",):
+        if name in sys.modules:
+            continue
+        try:
+            importlib.util.find_spec(name)
+        except (ImportError, ValueError):
+            pass
+        else:
+            continue
+        stub = types.ModuleType(name)
+        stub.__path__ = []  # type: ignore[attr-defined]
+        stub.__version__ = "0.0.0+stub"  # type: ignore[attr-defined]
+
+        class _StubAny:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __getattr__(self, item):
+                return _StubAny()
+
+            def __call__(self, *args, **kwargs):
+                return _StubAny()
+
+        def _stub_getattr(item):
+            if item.startswith("__") and item.endswith("__"):
+                raise AttributeError(item)
+            return _StubAny()
+
+        stub.__getattr__ = _stub_getattr  # type: ignore[attr-defined]
+        sys.modules[name] = stub
 
 
 def _import_or_skip(module_name: str):
@@ -54,6 +98,7 @@ def _import_or_skip(module_name: str):
     re-raised so that a real regression still fails the test.
     """
     _ensure_source_on_path()
+    _install_lightweight_dependency_stubs()
     try:
         return importlib.import_module(module_name)
     except ModuleNotFoundError as exc:
