@@ -6,6 +6,7 @@ import os
 import sys
 from typing import Dict, List, Optional
 
+import pytest
 import tabulate
 
 from sglang.test.ci.ci_register import (
@@ -470,6 +471,41 @@ def run_a_suite(args):
         fork_worker_batch_size=args.fork_worker_batch_size,
         timeout_overrides=dict(args.timeout_override),
     )
+
+
+@pytest.mark.import_smoke
+def test_import_smoke():
+    """Smoke test: importing sglang must succeed and expose __version__."""
+    import sglang
+
+    assert sglang.__version__
+    assert isinstance(sglang.__version__, str)
+
+
+@pytest.mark.import_smoke
+def test_import_platform_stubs():
+    """Smoke test: the platform stubs module must import without raising."""
+    import sglang._platform_stubs as stubs
+
+    assert hasattr(stubs, "install_platform_stubs")
+
+
+@pytest.mark.import_smoke
+def test_import_version():
+    """Smoke test: version attributes must be readable and consistent."""
+    from sglang import version
+
+    assert version.__version__
+    assert isinstance(version.__version__, str)
+    assert version.__version_tuple__
+
+
+@pytest.mark.import_smoke
+def test_import_utils():
+    """Smoke test: sglang.utils must be importable from the package."""
+    from sglang import utils
+
+    assert hasattr(utils, "LazyImport")
 
 
 def _parse_timeout_override(value: str) -> tuple[str, float]:
