@@ -2,10 +2,10 @@
 #
 # The import smoke tests only need the standard library and pytest; they
 # install lightweight stubs for the heavy sglang runtime dependencies
-# themselves (see test/import_smoke_test.py).  Installing the full sglang
-# dependency tree can fail during resolution on newer Python versions
-# (py-spy / pybase64 / pydantic / pyzmq / quack-kernels ...), which aborts
-# CI before any test runs.
+# themselves (see test/import_smoke.py and test/conftest.py).  Installing the
+# full sglang dependency tree can fail during resolution on newer Python
+# versions (py-spy / pybase64 / pydantic / pyzmq / quack-kernels ...), which
+# aborts CI before any test runs.
 #
 # Use this file to keep the smoke environment minimal, e.g.:
 #
@@ -14,8 +14,9 @@
 #
 # or, without pytest at all:
 #
-#     python test/import_smoke_test.py --bare
-#     python test/import_smoke_test.py --selfcheck
+#     python test/import_smoke.py --bare
+#     python test/import_smoke.py --selfcheck
+#     python test/import_smoke.py --negative
 #
 # If the sglang distribution itself must be installed for other steps, use
 # ``--no-deps`` so the heavy runtime dependency tree is not resolved here:

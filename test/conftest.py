@@ -57,6 +57,7 @@ def _install_lightweight_dependency_stubs() -> None:
         stub = types.ModuleType(name)
         stub.__path__ = []  # type: ignore[attr-defined]
         stub.__version__ = "0.0.0+stub"  # type: ignore[attr-defined]
+        stub.__sglang_smoke_stub__ = True  # type: ignore[attr-defined]
 
         class _StubAny:
             def __init__(self, *args, **kwargs):

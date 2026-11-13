@@ -41,18 +41,8 @@ _run_negative_check = _smoke._run_negative_check
 # ``sglang``.  This keeps the smoke tests runnable in a bare environment where
 # the full sglang dependency tree was never installed, so a failed
 # environment-preparation step cannot mask a real import regression.
-#
-# The helpers are imported from test/import_smoke.py at the top of this
-# module, so the two smoke entry points share one implementation and cannot
-# drift apart.  Both helpers are idempotent and never shadow a real
-# installation.
-
-
-# The bootstrap helpers (_ensure_source_on_path,
-# _install_lightweight_dependency_stubs, _stub_is_installed, _run_bare_smoke,
-# _run_selfcheck, _run_negative_check) are imported from test/import_smoke.py
-# at the top of this module, so the two smoke entry points share one
-# implementation and cannot drift apart.
+_ensure_source_on_path()
+_install_lightweight_dependency_stubs()
 
 
 def _import_or_skip(module_name: str):
@@ -61,9 +51,7 @@ def _import_or_skip(module_name: str):
 
     The smoke tests must not require the ``sglang`` distribution to be
     installed: ``python/`` is injected onto ``sys.path`` by
-    ``_ensure_source_on_path`` so the source tree is imported directly.  This
-    keeps the smoke path free of the heavy runtime dependency resolution that
-    ``pip install -e python`` performs during CI environment preparation.
+    ``_ensure_source_on_path`` so the source tree is imported directly.
 
     A missing third-party dependency (e.g. torch not installed yet) is an
     environment problem, not a regression in the import chain under test.
@@ -73,18 +61,8 @@ def _import_or_skip(module_name: str):
     ``ModuleNotFoundError`` is only treated as an environment problem when the
     missing module is *not* part of ``sglang`` itself; a missing ``sglang.*``
     submodule is a real regression and must fail the test.
-
-    ``ImportError`` raised while importing a third-party dependency of
-    ``sglang`` (e.g. a broken/partial install) is likewise reported as a skip
-    so that a broken CI environment does not masquerade as a regression in the
-    import chain under test.  Errors raised from ``sglang``'s own modules are
-    re-raised so that a real regression still fails the test.
     """
     _ensure_source_on_path()
-    # Only install stubs for genuinely missing dependencies; a real install is
-    # never shadowed (see _install_lightweight_dependency_stubs).  The helper
-    # itself re-checks sys.modules / find_spec, so calling it here is safe and
-    # idempotent.
     _install_lightweight_dependency_stubs()
     try:
         return importlib.import_module(module_name)
@@ -94,8 +72,6 @@ def _import_or_skip(module_name: str):
             raise
         pytest.skip(f"environment not ready: {exc!r}")
     except ImportError as exc:
-        # Distinguish a failure originating inside sglang from one caused by a
-        # missing/broken third-party dependency: only the latter is skipped.
         tb = exc.__traceback__
         while tb is not None:
             frame_file = tb.tb_frame.f_code.co_filename
@@ -140,10 +116,7 @@ def test_import_version_matches_metadata():
 
     The smoke tests are intentionally runnable without the ``sglang``
     distribution installed (see ``_ensure_source_on_path``), so this check
-    skips when the distribution metadata is absent instead of failing.  It
-    never triggers a dependency resolution: ``importlib.metadata`` only reads
-    already-installed metadata and does not import the package's runtime
-    dependencies.
+    skips when the distribution metadata is absent instead of failing.
     """
     sglang = _import_or_skip("sglang")
 
@@ -173,21 +146,9 @@ def test_import_public_api_symbols():
         assert hasattr(sglang, name), f"missing public symbol: {name}"
 
 
-# The bare / selfcheck / negative entry points are defined in
-# test/import_smoke.py and imported above, so the two smoke entry points share
-# one implementation and cannot drift apart.
-
-
 @pytest.mark.import_smoke
 def test_lightweight_dependency_stubs_effective():
-    """Self-check: the bare-environment bootstrap must actually take effect.
-
-    Guards against a regression where the stub installation silently stops
-    working (e.g. the helper is renamed or its guard conditions change),
-    which would make the bare CI entry point fail with an opaque import
-    error instead of a clear signal.  When the real dependency is present
-    the stub is intentionally not installed and the check is skipped.
-    """
+    """Self-check: the bare-environment bootstrap must actually take effect."""
     _ensure_source_on_path()
     _install_lightweight_dependency_stubs()
 
@@ -204,15 +165,7 @@ def test_lightweight_dependency_stubs_effective():
 
 @pytest.mark.import_smoke
 def test_import_smoke_without_installed_distribution():
-    """Smoke test: the import chain must work without ``pip install sglang``.
-
-    Guards the CI contract that the smoke tests are self-contained: they add
-    ``python/`` to ``sys.path`` and stub heavy dependencies, so they must not
-    depend on the ``sglang`` distribution (or its runtime dependency tree)
-    being installed.  A regression here would re-introduce the environment
-    preparation failure that blocked the import-time/import-error/
-    import-compat/tests dimensions.
-    """
+    """Smoke test: the import chain must work without ``pip install sglang``."""
     _ensure_source_on_path()
     _install_lightweight_dependency_stubs()
 
@@ -229,33 +182,16 @@ def test_import_smoke_without_installed_distribution():
 
 @pytest.mark.import_smoke
 def test_import_smoke_bare_entrypoint():
-    """Smoke test: the ``--bare`` entry point must succeed without pytest.
-
-    This exercises the same code path CI uses when it cannot install the full
-    ``sglang`` dependency tree, so a regression in the bare-environment
-    bootstrap is caught by the normal pytest run as well.
-    """
+    """Smoke test: the ``--bare`` entry point must succeed without pytest."""
     assert _run_bare_smoke() == 0
 
 
-# Bootstrap the source tree and lightweight dependency stubs at module import
-# time so that any test module importing this file (e.g. test/run_suite.py's
-# test_import_smoke) gets a working ``sglang`` import chain even when the
-# sglang distribution and its heavy runtime dependencies were never installed.
-# Both helpers are idempotent and never shadow a real installation.
-_ensure_source_on_path()
-_install_lightweight_dependency_stubs()
+@pytest.mark.import_smoke
+def test_import_smoke_negative():
+    """Negative smoke test: a broken top-level import must be detected."""
+    assert _run_negative_check() == 0
 
 
-# When this file is executed directly (``python test/import_smoke_test.py``)
-# rather than collected by pytest, it bootstraps a minimal environment and
-# then re-invokes pytest on itself.  This lets CI run the smoke tests without
-# first installing the full ``sglang`` dependency chain (which can fail during
-# environment preparation and mask real import regressions).  The entry point
-# lives at the end of the module so that every helper it calls is defined.
-#
-# ``--bare`` skips pytest entirely and runs the checks with the standard
-# library only, for environments where pytest itself is not installed.
 if __name__ == "__main__":
     if "--bare" in sys.argv[1:]:
         raise SystemExit(_run_bare_smoke())
