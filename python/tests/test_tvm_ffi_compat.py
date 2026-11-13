@@ -71,6 +71,8 @@ def test_tvm_ffi_public_api_surface():
         tvm_ffi = importlib.import_module("tvm_ffi")
     except ImportError:
         pytest.skip("tvm_ffi is not installed in this environment")
+    except Exception as exc:  # pragma: no cover - defensive
+        pytest.fail(f"tvm_ffi failed to import: {exc!r}")
 
     for attr in ("__version__",):
         assert hasattr(tvm_ffi, attr), f"tvm_ffi is missing expected attribute {attr!r}"
