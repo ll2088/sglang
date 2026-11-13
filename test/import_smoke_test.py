@@ -19,17 +19,6 @@ import types
 import pytest
 
 
-# When this file is executed directly (``python test/import_smoke_test.py``)
-# rather than collected by pytest, it bootstraps a minimal environment and
-# then re-invokes pytest on itself.  This lets CI run the smoke tests without
-# first installing the full ``sglang`` dependency chain (which can fail during
-# environment preparation and mask real import regressions).
-if __name__ == "__main__":
-    _ensure_source_on_path()
-    _install_lightweight_dependency_stubs()
-    raise SystemExit(pytest.main(["-q", os.path.abspath(__file__), "-k", "import_smoke"]))
-
-
 def _ensure_source_on_path() -> None:
     """Make ``python/sglang`` importable from the source tree.
 
@@ -58,13 +47,17 @@ def _install_lightweight_dependency_stubs() -> None:
     stubs are only created for modules that are genuinely missing.
     """
     for name in ("torch",):
+        # Never shadow a real installation: if the module is already imported
+        # or resolvable on sys.path, leave it alone.  This keeps the smoke
+        # tests honest in a fully provisioned CI environment where the real
+        # torch is present.
         if name in sys.modules:
             continue
         try:
-            importlib.util.find_spec(name)
+            spec = importlib.util.find_spec(name)
         except (ImportError, ValueError):
-            pass
-        else:
+            spec = None
+        if spec is not None:
             continue
         stub = types.ModuleType(name)
         stub.__path__ = []  # type: ignore[attr-defined]
@@ -109,6 +102,8 @@ def _import_or_skip(module_name: str):
     re-raised so that a real regression still fails the test.
     """
     _ensure_source_on_path()
+    # Only install stubs for genuinely missing dependencies; a real install is
+    # never shadowed (see _install_lightweight_dependency_stubs).
     _install_lightweight_dependency_stubs()
     try:
         return importlib.import_module(module_name)
@@ -187,3 +182,17 @@ def test_import_public_api_symbols():
     assert sglang.__all__
     for name in sglang.__all__:
         assert hasattr(sglang, name), f"missing public symbol: {name}"
+
+
+# When this file is executed directly (``python test/import_smoke_test.py``)
+# rather than collected by pytest, it bootstraps a minimal environment and
+# then re-invokes pytest on itself.  This lets CI run the smoke tests without
+# first installing the full ``sglang`` dependency chain (which can fail during
+# environment preparation and mask real import regressions).  The entry point
+# lives at the end of the module so that every helper it calls is defined.
+if __name__ == "__main__":
+    _ensure_source_on_path()
+    _install_lightweight_dependency_stubs()
+    raise SystemExit(
+        pytest.main(["-q", os.path.abspath(__file__), "-k", "import_smoke"])
+    )
