@@ -488,6 +488,7 @@ def test_import_platform_stubs():
     import sglang._platform_stubs as stubs
 
     assert hasattr(stubs, "install_platform_stubs")
+    assert callable(stubs.install_platform_stubs)
 
 
 @pytest.mark.import_smoke
@@ -498,6 +499,22 @@ def test_import_version():
     assert version.__version__
     assert isinstance(version.__version__, str)
     assert version.__version_tuple__
+    assert isinstance(version.__version_tuple__, tuple)
+
+
+@pytest.mark.import_smoke
+def test_import_version_matches_metadata():
+    """Smoke test: sglang.__version__ must match installed package metadata."""
+    import importlib.metadata
+
+    import sglang
+
+    try:
+        dist_version = importlib.metadata.version("sglang")
+    except importlib.metadata.PackageNotFoundError:
+        pytest.skip("sglang distribution metadata not installed")
+
+    assert sglang.__version__ == dist_version
 
 
 @pytest.mark.import_smoke
