@@ -17,13 +17,14 @@
 #     python test/import_smoke.py --bare
 #     python test/import_smoke.py --selfcheck
 #     python test/import_smoke.py --negative
+#     python test/import_smoke.py --all
 #
 # If the sglang distribution itself must be installed for other steps, use
 # ``--no-deps`` so the heavy runtime dependency tree is not resolved here:
 #
 #     pip install -c test/constraints-smoke.txt --no-build-isolation --no-deps -e python
 #
-# The ``-c test/constraints-smoke.txt`` is what makes the pins above take
+# The ``-c test/constraints-smoke.txt`` is what makes the pins below take
 # effect; omitting it re-introduces the free resolution that fails CI.
 #
 # Never run a bare ``pip install -e python`` as part of the smoke job: that
