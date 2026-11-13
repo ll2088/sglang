@@ -30,6 +30,8 @@ def test_tvm_ffi_importable():
         importlib.import_module("tvm_ffi")
     except ImportError:
         pytest.skip("tvm_ffi is not installed in this environment")
+    except Exception as exc:  # pragma: no cover - defensive
+        pytest.fail(f"tvm_ffi failed to import: {exc!r}")
 
 
 @pytest.mark.parametrize(
