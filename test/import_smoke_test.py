@@ -16,6 +16,9 @@ import sys
 
 import pytest
 
+# The smoke helpers live in test/import_smoke.py and are loaded by file path
+# so this module does not depend on ``test`` being an importable package.
+
 _smoke_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "import_smoke.py")
 _smoke_spec = importlib.util.spec_from_file_location("import_smoke", _smoke_path)
 assert _smoke_spec is not None and _smoke_spec.loader is not None

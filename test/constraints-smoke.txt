@@ -21,7 +21,10 @@
 # If the sglang distribution itself must be installed for other steps, use
 # ``--no-deps`` so the heavy runtime dependency tree is not resolved here:
 #
-#     pip install --no-build-isolation --no-deps -e python
+#     pip install -c test/constraints-smoke.txt --no-build-isolation --no-deps -e python
+#
+# The ``-c test/constraints-smoke.txt`` is what makes the pins above take
+# effect; omitting it re-introduces the free resolution that fails CI.
 #
 # Never run a bare ``pip install -e python`` as part of the smoke job: that
 # resolves the full runtime dependency tree (py-spy / pybase64 / pydantic /
@@ -40,6 +43,29 @@
 # cp314/cp312 mix seen in CI logs).
 #
 pytest>=7.4,<9
+#
+# The heavy sglang runtime dependency tree is pinned below to versions that
+# ship wheels for the Python interpreters used by CI (3.10-3.13).  Without
+# these pins pip resolves to cp314/cp312-abi3 wheels that do not match the
+# target interpreter, which aborts the environment-preparation step before
+# any smoke check runs (see the CI logs: pybase64-1.5.2-cp314,
+# regex-2026.11.9-cp314, pyzmq-27.3.0-cp312-abi3).
+#
+# These pins are only consulted when the caller passes ``-c`` explicitly:
+#
+#     pip install -c test/constraints-smoke.txt --no-deps -e python
+#
+# Creating this file alone does NOT constrain anything; the setup command
+# must reference it.  The smoke checks themselves never need the heavy tree
+# (see test/import_smoke.py), so ``--no-deps`` is the recommended form.
+#
+py-spy>=0.4,<0.5
+pybase64>=1.4,<1.5
+pydantic>=2.9,<2.12
+python-multipart>=0.0.9,<0.1
+pyzmq>=25.1.2,<27
+quack-kernels==0.6.5
+regex>=2024.5,<2025
 #
 # It intentionally pins nothing else: it exists so that a caller can pass
 # ``-c`` and, if desired, add exclusions here without touching .github/.
