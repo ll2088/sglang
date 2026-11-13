@@ -142,7 +142,23 @@ def _run_selfcheck() -> int:
 
 
 def _run_negative_check() -> int:
-    """A deliberately broken import must be detected (non-zero exit)."""
+    """A deliberately broken import must be detected (non-zero exit).
+
+    The check runs in a subprocess so the deliberately broken import never
+    pollutes this interpreter's ``sys.modules``.  It first verifies that a
+    healthy ``import sglang`` succeeds, then verifies that a broken
+    ``python/sglang/__init__.py`` makes the same import fail -- proving the
+    smoke test actually guards the import-error dimension rather than
+    trivially passing.
+    """
+    healthy = _run_bare_smoke()
+    if healthy != 0:
+        sys.stderr.write(
+            "negative check precondition failed: healthy import sglang "
+            "did not succeed\n"
+        )
+        return 1
+
     code = (
         "import sys, types; "
         "sys.path.insert(0, %r); "
@@ -161,6 +177,34 @@ def _run_negative_check() -> int:
     return 0 if proc.returncode != 0 else 1
 
 
+def _run_all() -> int:
+    """Run every smoke check in-process; return 0 only if all pass.
+
+    This is the entry point CI can call *before* installing the heavy sglang
+    runtime dependency tree: it only needs the standard library, bootstraps
+    ``python/`` onto ``sys.path`` and stubs genuinely missing heavy deps.
+    """
+    _ensure_source_on_path()
+    _install_lightweight_dependency_stubs()
+
+    failures: list[str] = []
+
+    if _run_selfcheck() != 0:
+        failures.append("selfcheck")
+
+    if _run_bare_smoke() != 0:
+        failures.append("bare")
+
+    if _run_negative_check() != 0:
+        failures.append("negative")
+
+    if failures:
+        sys.stderr.write("import smoke failures: %s\n" % ", ".join(failures))
+        return 1
+    print("import_smoke_ok")
+    return 0
+
+
 def _main(argv: list[str]) -> int:
     if "--bare" in argv:
         return _run_bare_smoke()
@@ -168,8 +212,11 @@ def _main(argv: list[str]) -> int:
         return _run_selfcheck()
     if "--negative" in argv:
         return _run_negative_check()
+    if "--all" in argv:
+        return _run_all()
     sys.stderr.write(
-        "usage: python test/import_smoke.py [--bare|--selfcheck|--negative]\n"
+        "usage: python test/import_smoke.py "
+        "[--bare|--selfcheck|--negative|--all]\n"
     )
     return 2
 

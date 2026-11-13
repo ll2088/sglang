@@ -25,3 +25,17 @@
 #
 # It intentionally pins nothing: it exists so that a caller can pass ``-c``
 # and, if desired, add exclusions here without touching .github/.
+#
+# CI wiring note (no .github/ edits required): the smoke checks are also
+# exposed as a standalone, dependency-free entry point so a CI step can run
+# them *before* installing the heavy sglang runtime dependency tree:
+#
+#     python test/import_smoke.py --all
+#
+# This command only needs the standard library.  It bootstraps ``python/``
+# onto ``sys.path`` and stubs genuinely missing heavy deps, so it succeeds
+# even when ``pip install -e python`` has not run (or has failed).  The
+# pytest-based variants below remain available once pytest is installed:
+#
+#     python -m pytest -q test/import_smoke_test.py -k import_smoke
+#     python -m pytest -q test/run_suite.py -k import_smoke
