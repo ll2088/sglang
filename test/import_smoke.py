@@ -2,22 +2,24 @@
 
 This module only depends on the standard library.  It bootstraps ``python/``
 onto ``sys.path`` and installs lightweight stubs for genuinely missing heavy
-third-party dependencies (e.g. torch) so that the top-level import chain can
-be exercised even when the ``sglang`` distribution and its runtime dependency
-tree were never installed.
+third-party dependencies (torch, transformers, ...) so that the top-level
+import chain can be exercised in a bare environment where the ``sglang``
+distribution and its runtime dependency tree were never installed.
 
-Entry points (all runnable without pytest):
+Entry points (all runnable without pytest and without any third-party
+package installed):
 
     python test/import_smoke.py --bare
     python test/import_smoke.py --selfcheck
     python test/import_smoke.py --negative
 
-A real installation is never shadowed: a stub is only created when the module
-is neither already imported nor resolvable via ``importlib.util.find_spec``.
+Exit code 0 means success; any non-zero exit code means the import chain is
+broken and the traceback is printed to stderr.
 """
 
 from __future__ import annotations
 
+import argparse
 import importlib
 import importlib.util
 import os
@@ -28,7 +30,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PYTHON_DIR = os.path.join(_REPO_ROOT, "python")
 
 # Heavy third-party modules that ``sglang/__init__.py`` (transitively) needs
-# but that the smoke checks must not require to be installed.
+# but that the smoke tests must not require to be installed.
 _HEAVY_DEPENDENCY_STUBS = (
     "torch",
     "transformers",
@@ -39,15 +41,6 @@ _HEAVY_DEPENDENCY_STUBS = (
     "pybase64",
     "IPython",
     "tqdm",
-)
-
-# Modules whose import must succeed for the top-level import chain to be
-# considered healthy.
-_SMOKE_MODULES = (
-    "sglang",
-    "sglang._platform_stubs",
-    "sglang.version",
-    "sglang.utils",
 )
 
 
@@ -61,17 +54,16 @@ def _ensure_source_on_path() -> None:
 
 
 def _stub_is_installed(name: str) -> bool:
-    """Return True when ``name`` is currently backed by a lightweight stub."""
-    module = sys.modules.get(name)
-    if module is None:
-        return False
-    return getattr(module, "__sglang_smoke_stub__", False) is True
+    mod = sys.modules.get(name)
+    return bool(getattr(mod, "__sglang_smoke_stub__", False))
 
 
 def _install_lightweight_dependency_stubs() -> None:
     """Install minimal stubs for genuinely missing heavy dependencies.
 
-    Idempotent and never shadows a real installation.
+    A stub is only created when the module is neither already imported nor
+    resolvable via ``importlib.util.find_spec``; real installations are never
+    shadowed.
     """
     for name in _HEAVY_DEPENDENCY_STUBS:
         if name in sys.modules:
@@ -107,112 +99,117 @@ def _install_lightweight_dependency_stubs() -> None:
         sys.modules[name] = stub
 
 
-def _run_bare_smoke() -> int:
-    """Run the smoke checks with the standard library only.
-
-    Returns 0 on success, 1 on failure.  Never raises for an import error so
-    that the caller can report a clean exit code.
-    """
+def _import_sglang():
+    """Import ``sglang`` after bootstrapping the source tree and stubs."""
     _ensure_source_on_path()
     _install_lightweight_dependency_stubs()
+    return importlib.import_module("sglang")
 
-    for module_name in _SMOKE_MODULES:
-        try:
+
+def _run_bare_smoke() -> int:
+    """Import ``sglang`` and assert the public API resolves."""
+    try:
+        sglang = _import_sglang()
+        assert sglang.__version__
+        assert isinstance(sglang.__version__, str)
+        for name in sglang.__all__:
+            assert hasattr(sglang, name), f"missing public symbol: {name}"
+        for module_name in (
+            "sglang._platform_stubs",
+            "sglang.version",
+            "sglang.utils",
+        ):
             importlib.import_module(module_name)
-        except Exception as exc:  # noqa: BLE001 - report and fail cleanly
-            print(f"import_smoke: FAILED to import {module_name}: {exc!r}")
-            return 1
+    except Exception:
+        import traceback
 
-    sglang = sys.modules["sglang"]
-    version = getattr(sglang, "__version__", None)
-    if not version or not isinstance(version, str):
-        print("import_smoke: FAILED: sglang.__version__ is missing or not a str")
+        traceback.print_exc()
         return 1
-
-    for name in getattr(sglang, "__all__", []):
-        if not hasattr(sglang, name):
-            print(f"import_smoke: FAILED: missing public symbol: {name}")
-            return 1
-
-    print(f"import_smoke: OK (sglang.__version__={version})")
+    print("import_smoke: ok")
     return 0
 
 
 def _run_selfcheck() -> int:
-    """Verify the bare-environment bootstrap actually takes effect."""
+    """Verify the bootstrap actually took effect in this interpreter."""
     _ensure_source_on_path()
     _install_lightweight_dependency_stubs()
 
     if importlib.util.find_spec("torch") is not None and not _stub_is_installed(
         "torch"
     ):
-        print("import_smoke: selfcheck skipped (real torch installed)")
+        print("import_smoke selfcheck: real torch installed; stub not used")
         return 0
 
     if not _stub_is_installed("torch"):
-        print("import_smoke: selfcheck FAILED: torch stub not installed")
+        print(
+            "import_smoke selfcheck: lightweight torch stub was not installed",
+            file=sys.stderr,
+        )
         return 1
-
-    print("import_smoke: selfcheck OK")
+    print("import_smoke selfcheck: ok")
     return 0
 
 
 def _run_negative_check() -> int:
-    """Verify a broken top-level import is detected.
+    """Run a subprocess that deliberately breaks ``sglang`` and must fail.
 
-    Runs in a subprocess so the deliberately broken import never pollutes this
-    interpreter's ``sys.modules``.  Returns 0 when the negative case is
-    correctly detected (i.e. the subprocess fails as expected), 1 otherwise.
+    The check runs in a subprocess so the deliberately broken import never
+    pollutes this interpreter's ``sys.modules``.  It returns 0 when the
+    negative case is correctly detected (i.e. the subprocess fails).
     """
     import subprocess
     import tempfile
 
-    script = (
-        "import importlib, os, sys\n"
-        "sys.path.insert(0, os.path.join(os.getcwd(), 'python'))\n"
-        "import sglang\n"
-        "raise SystemExit(0)\n"
-    )
-
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Build a shadow package that raises on import, placed ahead of the
-        # real source tree on sys.path.
-        shadow = os.path.join(tmpdir, "sglang")
-        os.makedirs(shadow, exist_ok=True)
-        with open(os.path.join(shadow, "__init__.py"), "w", encoding="utf-8") as f:
+        broken_pkg = os.path.join(tmpdir, "sglang")
+        os.makedirs(broken_pkg, exist_ok=True)
+        with open(os.path.join(broken_pkg, "__init__.py"), "w") as f:
             f.write("raise ImportError('deliberately broken sglang import')\n")
 
         env = dict(os.environ)
         env["PYTHONPATH"] = tmpdir + os.pathsep + env.get("PYTHONPATH", "")
         proc = subprocess.run(
-            [sys.executable, "-c", script],
-            cwd=_REPO_ROOT,
+            [sys.executable, "-c", "import sglang"],
             env=env,
             capture_output=True,
             text=True,
         )
 
     if proc.returncode == 0:
-        print("import_smoke: negative check FAILED: broken import was not detected")
-        return 1
-
-    combined = (proc.stdout or "") + (proc.stderr or "")
-    if "deliberately broken sglang import" not in combined:
         print(
-            "import_smoke: negative check FAILED: error message not surfaced\n"
-            + combined
+            "import_smoke negative: broken sglang import unexpectedly succeeded",
+            file=sys.stderr,
         )
         return 1
-
-    print("import_smoke: negative check OK")
+    if "deliberately broken sglang import" not in (proc.stderr or ""):
+        print(
+            "import_smoke negative: failure did not surface the original error",
+            file=sys.stderr,
+        )
+        print(proc.stderr, file=sys.stderr)
+        return 1
+    print("import_smoke negative: ok")
     return 0
 
 
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--bare", action="store_true", help="run the bare smoke")
+    parser.add_argument(
+        "--selfcheck", action="store_true", help="verify the bootstrap"
+    )
+    parser.add_argument(
+        "--negative", action="store_true", help="verify a broken import fails"
+    )
+    args = parser.parse_args(argv)
+
+    if args.selfcheck:
+        return _run_selfcheck()
+    if args.negative:
+        return _run_negative_check()
+    # Default (and --bare) run the bare smoke.
+    return _run_bare_smoke()
+
+
 if __name__ == "__main__":
-    if "--bare" in sys.argv[1:]:
-        raise SystemExit(_run_bare_smoke())
-    if "--selfcheck" in sys.argv[1:]:
-        raise SystemExit(_run_selfcheck())
-    if "--negative" in sys.argv[1:]:
-        raise SystemExit(_run_negative_check())
-    raise SystemExit(_run_bare_smoke())
+    raise SystemExit(main())

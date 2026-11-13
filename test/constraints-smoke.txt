@@ -28,3 +28,11 @@
 #
 # It intentionally pins nothing: it exists so that a caller can pass
 # ``-c`` and, if desired, add exclusions here without touching .github/.
+#
+# The smoke tests are also runnable with no third-party package at all:
+#
+#     python test/import_smoke.py --bare
+#
+# which is the recommended fallback when the environment-preparation step
+# (``pip install -e python``) fails while resolving the heavy runtime
+# dependency tree.
