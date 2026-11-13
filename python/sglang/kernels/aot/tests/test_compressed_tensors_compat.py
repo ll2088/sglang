@@ -10,6 +10,8 @@ import importlib
 
 import pytest
 
+pytest.importorskip("torch")
+
 
 def test_quantization_module_imports_and_exports():
     module = importlib.import_module("sgl_kernel.quantization")
@@ -25,6 +27,7 @@ def test_quantization_module_imports_and_exports():
 
 
 def test_scalar_type_gguf_mapping_is_stable():
+    pytest.importorskip("torch")
     from sgl_kernel.scalar_type import NanRepr, ScalarType, scalar_types
 
     # GGUF / GPTQ style integer types used by the quantization loaders.
@@ -44,6 +47,7 @@ def test_scalar_type_gguf_mapping_is_stable():
 
 
 def test_load_utils_importable():
+    pytest.importorskip("torch")
     module = importlib.import_module("sgl_kernel.load_utils")
     assert callable(module._get_compute_capability)
     assert callable(module._filter_compiled_extensions)
@@ -51,6 +55,7 @@ def test_load_utils_importable():
 
 
 def test_moe_and_gemm_modules_importable():
+    pytest.importorskip("torch")
     moe = importlib.import_module("sgl_kernel.moe")
     gemm = importlib.import_module("sgl_kernel.gemm")
     assert callable(moe.moe_align_block_size)
@@ -61,7 +66,7 @@ def test_moe_and_gemm_modules_importable():
 
 
 def test_gemm_quant_dispatch_requires_cuda():
-    import torch
+    torch = pytest.importorskip("torch")
 
     if not torch.cuda.is_available():
         pytest.skip("CUDA is required for the quantized GEMM kernels")
