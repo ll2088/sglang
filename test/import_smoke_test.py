@@ -15,9 +15,26 @@ import importlib.metadata
 import importlib.util
 import os
 import sys
-import types
 
 import pytest
+
+# Reuse the self-contained bootstrap helpers from test/import_smoke.py so the
+# two smoke entry points cannot drift apart.  Imported by file path so this
+# module does not depend on ``test`` being an importable package (it has no
+# __init__.py) nor on the repository root being on sys.path.
+_smoke_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "import_smoke.py")
+_smoke_spec = importlib.util.spec_from_file_location("import_smoke", _smoke_path)
+assert _smoke_spec is not None and _smoke_spec.loader is not None
+_smoke = importlib.util.module_from_spec(_smoke_spec)
+sys.modules.setdefault("import_smoke", _smoke)
+_smoke_spec.loader.exec_module(_smoke)
+
+_ensure_source_on_path = _smoke._ensure_source_on_path
+_install_lightweight_dependency_stubs = _smoke._install_lightweight_dependency_stubs
+_stub_is_installed = _smoke._stub_is_installed
+_run_bare_smoke = _smoke._run_bare_smoke
+_run_selfcheck = _smoke._run_selfcheck
+_run_negative_check = _smoke._run_negative_check
 
 # Bootstrap the source tree and lightweight dependency stubs as early as
 # possible -- before any test module (including test/run_suite.py) imports
@@ -31,122 +48,11 @@ import pytest
 # bootstrap at import time.
 
 
-def _ensure_source_on_path() -> None:
-    """Make ``python/sglang`` importable from the source tree.
-
-    The smoke tests must be runnable even when the ``sglang`` distribution is
-    not installed (e.g. the CI environment-preparation step failed while
-    resolving the heavy runtime dependency chain).  Adding the source
-    directory to ``sys.path`` lets us exercise the real import chain without
-    requiring a successful ``pip install``.
-
-    ``test/`` is also added so that ``import test.import_smoke_test`` works
-    from ``test/run_suite.py`` even when the repository root is not on
-    ``sys.path`` (e.g. pytest invoked with a different rootdir).
-    """
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    python_dir = os.path.join(repo_root, "python")
-    if os.path.isdir(os.path.join(python_dir, "sglang")):
-        if python_dir not in sys.path:
-            sys.path.insert(0, python_dir)
-    if repo_root not in sys.path:
-        sys.path.insert(0, repo_root)
-
-
-# Heavy third-party modules that ``sglang/__init__.py`` (transitively) needs
-# but that the smoke tests must not require to be installed.  A permissive
-# stub is registered for each one that is genuinely missing, so the import
-# chain under test can be exercised in a bare environment (standard library +
-# pytest only) without triggering a full ``pip install sglang``.
-_HEAVY_DEPENDENCY_STUBS = (
-    "torch",
-    "transformers",
-    "flashinfer",
-    "numpy",
-    "requests",
-    "pydantic",
-    "pybase64",
-    "IPython",
-    "tqdm",
-)
-
-
-def _install_lightweight_dependency_stubs() -> None:
-    """Install minimal stubs for heavy third-party deps of ``sglang``.
-
-    The smoke tests must run in a bare environment (only the standard library
-    and pytest) so that a broken CI dependency-resolution step cannot mask a
-    real regression in the import chain under test.  ``sglang/__init__.py``
-    pulls in ``torch`` (via ``hf_transformers_patches`` and ``lang.api``) and
-    a handful of other heavy packages; when any of them is absent we register
-    a permissive stub module so the import chain can still be exercised.
-
-    Real installations are never shadowed: a stub is only created when the
-    module is neither already imported nor resolvable via
-    ``importlib.util.find_spec``.  This keeps the smoke tests honest in a
-    fully provisioned CI environment where the real dependencies are present,
-    and avoids masking a genuine import regression behind a permissive stub.
-
-    The stubs are installed at module import time (see the call at the bottom
-    of this file) so that ``pytest -k import_smoke`` also works in a bare
-    environment, not just the ``--bare`` entry point.  The helper is
-    idempotent: repeated calls (including from ``_import_or_skip``) never
-    replace an already-installed stub or a real installation.
-    """
-    for name in _HEAVY_DEPENDENCY_STUBS:
-        # Never shadow a real installation: if the module is already imported
-        # or resolvable on sys.path, leave it alone.
-        if name in sys.modules:
-            continue
-        try:
-            spec = importlib.util.find_spec(name)
-        except (ImportError, ValueError):
-            spec = None
-        if spec is not None:
-            continue
-        stub = types.ModuleType(name)
-        stub.__path__ = []  # type: ignore[attr-defined]
-        stub.__version__ = "0.0.0+stub"  # type: ignore[attr-defined]
-
-        class _StubAny:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def __getattr__(self, item):
-                return _StubAny()
-
-            def __call__(self, *args, **kwargs):
-                return _StubAny()
-
-        def _stub_getattr(item):
-            if item.startswith("__") and item.endswith("__"):
-                raise AttributeError(item)
-            return _StubAny()
-
-        stub.__getattr__ = _stub_getattr  # type: ignore[attr-defined]
-        sys.modules[name] = stub
-
-
-def _stub_is_installed(name: str) -> bool:
-    """Return True when ``name`` is a stub installed by this module.
-
-    Used by the self-check test to confirm the bare-environment bootstrap
-    actually took effect, without depending on the real dependency being
-    absent (a fully provisioned environment legitimately has the real
-    module and the self-check then skips).
-    """
-    module = sys.modules.get(name)
-    if module is None:
-        return False
-    return getattr(module, "__version__", None) == "0.0.0+stub"
-
-
-# Install the source path and lightweight stubs at module import time so that
-# ``pytest -k import_smoke`` works in a bare environment (no sglang runtime
-# deps installed).  Both helpers are idempotent and never shadow a real
-# installation, so this is safe in a fully provisioned CI environment too.
-_ensure_source_on_path()
-_install_lightweight_dependency_stubs()
+# The bootstrap helpers (_ensure_source_on_path,
+# _install_lightweight_dependency_stubs, _stub_is_installed, _run_bare_smoke,
+# _run_selfcheck, _run_negative_check) are imported from test/import_smoke.py
+# at the top of this module, so the two smoke entry points share one
+# implementation and cannot drift apart.
 
 
 def _import_or_skip(module_name: str):
