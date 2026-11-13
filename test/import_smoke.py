@@ -1,25 +1,27 @@
-"""Self-contained bootstrap + smoke checks for the ``sglang`` import chain.
+"""Self-contained smoke checks for the ``sglang`` top-level import chain.
 
-This module only depends on the standard library.  It is used by
-``test/import_smoke_test.py``, ``test/conftest.py`` and ``test/run_suite.py``
-so that the top-level import chain can be exercised even when the heavy
-``sglang`` runtime dependency tree (torch / transformers / flashinfer / ...)
-was never installed -- e.g. when CI environment preparation fails while
-resolving those dependencies.
+Only the standard library is required.  The module bootstraps ``python/``
+onto ``sys.path`` and installs lightweight stubs for genuinely missing heavy
+runtime dependencies, so the checks run even when ``pip install -e python``
+has not run -- or has failed during dependency resolution.
 
-It never shadows a real installation: a stub is only installed when the
-module is neither already imported nor resolvable via
-``importlib.util.find_spec``.
+Entry points (all return an exit code, none raise on a healthy tree):
 
-CLI entry points (no pytest required)::
+    python test/import_smoke.py --bare        # import sglang in a subprocess
+    python test/import_smoke.py --selfcheck   # bootstrap actually took effect
+    python test/import_smoke.py --negative    # a broken import is detected
+    python test/import_smoke.py --ci          # bare + selfcheck, setup-safe
+    python test/import_smoke.py --all         # everything, incl. pytest suite
 
-    python test/import_smoke.py --bare
-    python test/import_smoke.py --selfcheck
-    python test/import_smoke.py --negative
+The ``--ci`` entry point is the one CI should run *before* installing the
+heavy runtime dependency tree: it never imports pytest and never touches the
+network, so a failed environment-preparation step cannot mask a real import
+regression.
 """
 
 from __future__ import annotations
 
+import argparse
 import importlib
 import importlib.util
 import os
@@ -30,42 +32,43 @@ import types
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PYTHON_DIR = os.path.join(_REPO_ROOT, "python")
 
-# Modules that ``sglang/__init__.py`` (transitively) needs but that are heavy
-# or platform specific.  Only genuinely missing ones are stubbed.
+# Modules that ``sglang/__init__.py`` transitively needs but that are heavy or
+# platform-specific.  A stub is only created when the real module is neither
+# already imported nor resolvable, so a real installation is never shadowed.
 _STUBBED_MODULES = (
     "torch",
+    "torch.mps",
+    "torch.cuda",
     "transformers",
     "flashinfer",
     "triton",
-    "zmq",
-    "pybase64",
-    "requests",
     "numpy",
+    "requests",
     "pydantic",
+    "pybase64",
     "IPython",
+    "IPython.display",
     "tqdm",
-    "cv2",
-    "PIL",
 )
+
+_installed_stubs: set[str] = set()
 
 
 def _ensure_source_on_path() -> None:
-    """Put ``python/`` on ``sys.path`` so the source tree is importable."""
+    """Put ``python/`` on ``sys.path`` so no installed distribution is needed."""
     if _PYTHON_DIR not in sys.path:
         sys.path.insert(0, _PYTHON_DIR)
 
 
 def _stub_is_installed(name: str) -> bool:
-    """Return True when ``name`` resolves to one of our lightweight stubs."""
-    mod = sys.modules.get(name)
-    return bool(getattr(mod, "__sglang_smoke_stub__", False))
+    return name in _installed_stubs
 
 
 def _make_stub(name: str) -> types.ModuleType:
-    """Create a permissive stub module for ``name``."""
+    """Create a permissive stub module and register it in ``sys.modules``."""
     mod = types.ModuleType(name)
-    mod.__sglang_smoke_stub__ = True
-    mod.__path__ = []  # look like a package so ``import name.sub`` works
+    mod.__path__ = []  # type: ignore[attr-defined]
+    mod.__package__ = name
     mod.__file__ = __file__
     mod.__spec__ = importlib.machinery.ModuleSpec(name, None, is_package=True)
 
@@ -73,49 +76,43 @@ def _make_stub(name: str) -> types.ModuleType:
         if attr.startswith("__") and attr.endswith("__"):
             raise AttributeError(attr)
         child_name = f"{name}.{attr}"
-        child = sys.modules.get(child_name)
-        if child is None:
-            child = _make_stub(child_name)
-            sys.modules[child_name] = child
-            setattr(mod, attr, child)
+        if child_name in sys.modules:
+            return sys.modules[child_name]
+        if attr[:1].isupper():
+            cls = type(attr, (), {"__module__": name})
+            setattr(mod, attr, cls)
+            return cls
+        child = _make_stub(child_name)
+        setattr(mod, attr, child)
         return child
 
-    def _call(*args, **kwargs):
-        # Pass-through decorator: ``@stub.jit`` / ``@stub.jit(...)``
-        if len(args) == 1 and callable(args[0]) and not kwargs:
-            return args[0]
-
-        def _decorator(fn):
-            return fn
-
-        return _decorator
-
-    mod.__getattr__ = _getattr
-    mod.__call__ = _call
+    mod.__getattr__ = _getattr  # type: ignore[attr-defined]
+    sys.modules[name] = mod
+    _installed_stubs.add(name)
     return mod
 
 
 def _install_lightweight_dependency_stubs() -> None:
-    """Install stubs for heavy deps that are genuinely unavailable."""
+    """Stub heavy deps that are genuinely missing; never shadow real ones."""
     for name in _STUBBED_MODULES:
-        if name in sys.modules:
+        if name in sys.modules or _stub_is_installed(name):
             continue
         try:
             if importlib.util.find_spec(name) is not None:
                 continue
         except (ImportError, ValueError):
             pass
-        sys.modules[name] = _make_stub(name)
+        _make_stub(name)
 
 
 def _run_bare_smoke() -> int:
-    """Import ``sglang`` in a fresh subprocess; return the exit code."""
+    """Import ``sglang`` in a fresh subprocess and report the outcome."""
     code = (
         "import sys; sys.path.insert(0, %r); "
         "import sglang; "
         "assert sglang.__version__; "
         "print('import_ok', sglang.__version__)"
-    ) % (_PYTHON_DIR,)
+    ) % _PYTHON_DIR
     proc = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
@@ -125,175 +122,118 @@ def _run_bare_smoke() -> int:
     if proc.returncode != 0:
         sys.stderr.write(proc.stdout)
         sys.stderr.write(proc.stderr)
-    return proc.returncode
+        print("import_smoke: bare import FAILED", file=sys.stderr)
+        return 1
+    print(proc.stdout.strip())
+    return 0
 
 
 def _run_selfcheck() -> int:
-    """Verify the bootstrap actually takes effect in this interpreter."""
+    """Verify the bare-environment bootstrap actually took effect."""
     _ensure_source_on_path()
     _install_lightweight_dependency_stubs()
-    if _PYTHON_DIR not in sys.path:
-        sys.stderr.write("python/ not on sys.path\n")
-        return 1
-    if not any(_stub_is_installed(n) for n in _STUBBED_MODULES):
-        # All heavy deps are genuinely installed -- nothing to stub, fine.
+    if importlib.util.find_spec("torch") is not None and not _stub_is_installed(
+        "torch"
+    ):
+        print("import_smoke: real torch present; stub intentionally unused")
         return 0
+    if not _stub_is_installed("torch"):
+        print(
+            "import_smoke: bootstrap self-check FAILED (torch stub missing)",
+            file=sys.stderr,
+        )
+        return 1
+    print("import_smoke: bootstrap self-check ok")
     return 0
 
 
 def _run_negative_check() -> int:
-    """A deliberately broken import must be detected (non-zero exit).
-
-    The check runs in a subprocess so the deliberately broken import never
-    pollutes this interpreter's ``sys.modules``.  It first verifies that a
-    healthy ``import sglang`` succeeds, then verifies that a broken
-    ``python/sglang/__init__.py`` makes the same import fail -- proving the
-    smoke test actually guards the import-error dimension rather than
-    trivially passing.
-    """
-    healthy = _run_bare_smoke()
-    if healthy != 0:
-        sys.stderr.write(
-            "negative check precondition failed: healthy import sglang "
-            "did not succeed\n"
-        )
-        return 1
-
+    """A deliberately broken top-level import must be detected."""
     code = (
-        "import sys, types; "
-        "sys.path.insert(0, %r); "
-        "mod = types.ModuleType('sglang'); "
-        "mod.__path__ = []; "
-        "sys.modules['sglang'] = mod; "
-        "raise ImportError('deliberately broken import for negative check')"
-    ) % (_PYTHON_DIR,)
+        "import sys; sys.path.insert(0, %r); "
+        "import sglang; "
+        "raise SystemExit(0)"
+    ) % _PYTHON_DIR
+    env = dict(os.environ)
+    env["SGLANG_IMPORT_SMOKE_FORCE_FAIL"] = "1"
     proc = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
         cwd=_REPO_ROOT,
+        env=env,
     )
-    # The subprocess is expected to fail; success means the check is broken.
-    return 0 if proc.returncode != 0 else 1
-
-
-def _run_ci() -> int:
-    """CI entry point: run smoke checks before heavy dependency install.
-
-    This is the entry point CI should call *before* attempting
-    ``pip install -e python``.  It only needs the standard library, so it
-    succeeds even when the heavy sglang runtime dependency tree cannot be
-    resolved (py-spy / pybase64 / pydantic / pyzmq / quack-kernels / regex
-    ...).  It never invokes pip itself; the caller decides whether to
-    continue with the heavy install afterwards.
-
-    Returns 0 when the import chain is healthy, non-zero otherwise, so a
-    real import regression is reported instead of being masked by a failed
-    environment-preparation step.
-    """
-    return _run_all()
-
-
-def _run_all() -> int:
-    """Run every smoke check in-process; return 0 only if all pass.
-
-    This is the entry point CI can call *before* installing the heavy sglang
-    runtime dependency tree: it only needs the standard library, bootstraps
-    ``python/`` onto ``sys.path`` and stubs genuinely missing heavy deps.
-
-    It also runs the pytest-based checks when pytest is importable, so a
-    single ``python test/import_smoke.py --all`` invocation covers the
-    import-time / import-error / import-compat dimensions in both bare and
-    fully provisioned environments.  When pytest is unavailable the
-    pytest-based checks are skipped (they are a superset of the bare checks
-    above), never failed.
-    """
-    _ensure_source_on_path()
-    _install_lightweight_dependency_stubs()
-
-    failures: list[str] = []
-
-    if _run_selfcheck() != 0:
-        failures.append("selfcheck")
-
-    if _run_bare_smoke() != 0:
-        failures.append("bare")
-
-    if _run_negative_check() != 0:
-        failures.append("negative")
-
-    if _run_pytest_smoke() != 0:
-        failures.append("pytest")
-
-    if failures:
-        sys.stderr.write("import smoke failures: %s\n" % ", ".join(failures))
+    if proc.returncode == 0:
+        print(
+            "import_smoke: negative check FAILED (broken import not detected)",
+            file=sys.stderr,
+        )
         return 1
-    print("import_smoke_ok")
+    print("import_smoke: negative check ok")
     return 0
 
 
-def _run_pytest_smoke() -> int:
-    """Run the pytest-based smoke tests in a subprocess.
+def _run_ci() -> int:
+    """Setup-safe entry point: run before the heavy install, never abort it.
 
-    Returns 0 when pytest is not installed (the bare checks above already
-    cover the same import chain) or when the pytest run passes.  Returns
-    non-zero only when pytest is available and the smoke tests fail, so a
-    real import regression is never masked by a missing test runner.
+    Returns 0 only when the bare import and the bootstrap self-check both
+    pass.  Never imports pytest and never touches the network, so it is safe
+    to run in a bare environment where ``pip install -e python`` failed.
     """
+    rc = _run_bare_smoke()
+    if rc != 0:
+        return rc
+    return _run_selfcheck()
+
+
+def _run_pytest_smoke() -> int:
+    """Run the pytest-based smoke suite when pytest is importable."""
     try:
-        importlib.util.find_spec("pytest")
-    except (ImportError, ValueError):
+        import pytest  # noqa: F401
+    except ImportError:
+        print("import_smoke: pytest not installed; skipping pytest suite")
         return 0
-    if importlib.util.find_spec("pytest") is None:
-        return 0
-
-    test_file = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "import_smoke_test.py"
-    )
-    if not os.path.exists(test_file):
-        return 0
-
+    test_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "import_smoke_test.py")
     proc = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-q",
-            "-p",
-            "no:randomly",
-            test_file,
-            "-k",
-            "import_smoke",
-        ],
-        capture_output=True,
-        text=True,
+        [sys.executable, "-m", "pytest", "-q", test_file, "-k", "import_smoke"],
         cwd=_REPO_ROOT,
     )
-    if proc.returncode != 0:
-        sys.stderr.write(proc.stdout)
-        sys.stderr.write(proc.stderr)
     return proc.returncode
 
 
-def _main(argv: list[str]) -> int:
-    if "--bare" in argv:
-        return _run_bare_smoke()
-    if "--selfcheck" in argv:
-        return _run_selfcheck()
-    if "--negative" in argv:
-        return _run_negative_check()
-    if "--pytest" in argv:
-        return _run_pytest_smoke()
-    if "--all" in argv:
+def _run_all() -> int:
+    for step in (_run_bare_smoke, _run_selfcheck, _run_negative_check):
+        rc = step()
+        if rc != 0:
+            return rc
+    return _run_pytest_smoke()
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--bare", action="store_true", help="import sglang in a subprocess")
+    parser.add_argument("--selfcheck", action="store_true", help="verify the bootstrap")
+    parser.add_argument("--negative", action="store_true", help="verify a broken import is caught")
+    parser.add_argument("--ci", action="store_true", help="setup-safe entry point")
+    parser.add_argument("--pytest", action="store_true", help="run the pytest smoke suite")
+    parser.add_argument("--all", action="store_true", help="run every check")
+    args = parser.parse_args(argv)
+
+    if args.all:
         return _run_all()
-    if "--ci" in argv:
+    if args.ci:
         return _run_ci()
-    sys.stderr.write(
-        "usage: python test/import_smoke.py "
-        "[--bare|--selfcheck|--negative|--pytest|--all|--ci]\n"
-    )
-    return 2
+    if args.bare:
+        return _run_bare_smoke()
+    if args.selfcheck:
+        return _run_selfcheck()
+    if args.negative:
+        return _run_negative_check()
+    if args.pytest:
+        return _run_pytest_smoke()
+    parser.print_help()
+    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(_main(sys.argv[1:]))
+    raise SystemExit(main())

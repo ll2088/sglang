@@ -23,8 +23,26 @@
 #
 #     pip install --no-build-isolation --no-deps -e python
 #
-# It intentionally pins nothing: it exists so that a caller can pass ``-c``
-# and, if desired, add exclusions here without touching .github/.
+# Never run a bare ``pip install -e python`` as part of the smoke job: that
+# resolves the full runtime dependency tree (py-spy / pybase64 / pydantic /
+# pyzmq / quack-kernels / regex ...) and can abort the job before any smoke
+# check runs.  The smoke checks are designed to run *before* that step and
+# to keep working when it fails.
+#
+# It pins the smoke-only toolchain to versions that ship wheels for the
+# Python interpreters used by CI (3.10-3.13).  The heavy sglang runtime
+# dependency tree is deliberately NOT constrained here: the smoke checks
+# never install it (see the --no-deps note above), so pinning it would only
+# re-introduce the resolution failures this file exists to avoid.
+#
+# Keep these bounds loose enough to accept patch releases but tight enough
+# to reject wheels that only exist for a different interpreter ABI (the
+# cp314/cp312 mix seen in CI logs).
+#
+pytest>=7.4,<9
+#
+# It intentionally pins nothing else: it exists so that a caller can pass
+# ``-c`` and, if desired, add exclusions here without touching .github/.
 #
 # CI wiring note (no .github/ edits required): the smoke checks are also
 # exposed as a standalone, dependency-free entry point so a CI step can run
