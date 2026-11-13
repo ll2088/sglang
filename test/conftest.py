@@ -1,54 +1,88 @@
 """Pytest bootstrap for the lightweight import smoke tests.
 
-``test/import_smoke_test.py`` is designed to run in a bare environment (only
-the standard library and pytest) so that a failed CI dependency-resolution
-step cannot mask a real regression in the ``sglang`` top-level import chain.
+This conftest runs before pytest collects any test module.  It makes the
+``sglang`` source tree importable and installs minimal stubs for the heavy
+third-party dependencies of ``sglang`` so that the import smoke tests can run
+in a bare environment (standard library + pytest only), without requiring
+``pip install -e python`` to have succeeded.
 
-That contract only holds if the bootstrap runs *before* pytest imports any
-module that pulls in ``sglang`` (e.g. ``test/run_suite.py``, which imports
-``sglang.test.ci.ci_register`` at module scope).  This conftest performs the
-bootstrap at collection time, before test modules are imported, so the smoke
-tests stay runnable even when ``pip install -e python`` failed and neither the
-``sglang`` distribution metadata nor its heavy runtime dependencies are
-available.
-
-Both helpers are idempotent and never shadow a real installation, so this is
-safe in a fully provisioned CI environment as well.
+A failed CI environment-preparation step (e.g. resolving py-spy / pybase64 /
+pydantic / pyzmq / quack-kernels) must not mask a real import regression, so
+the bootstrap is intentionally self-contained and never shadows a real
+installation.
 """
 
 import importlib.util
 import os
 import sys
+import types
 
 
-def _load_smoke_module():
-    """Import ``test/import_smoke_test.py`` by file path.
+def _ensure_source_on_path() -> None:
+    """Make ``python/sglang`` importable from the source tree."""
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    python_dir = os.path.join(repo_root, "python")
+    if os.path.isdir(os.path.join(python_dir, "sglang")):
+        if python_dir not in sys.path:
+            sys.path.insert(0, python_dir)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
 
-    ``test/`` has no ``__init__.py``, so the module is loaded by path rather
-    than by package import.  Loading it executes its module-level bootstrap
-    (``_ensure_source_on_path`` + ``_install_lightweight_dependency_stubs``),
-    which is exactly what we want before any other test module is imported.
+
+_HEAVY_DEPENDENCY_STUBS = (
+    "torch",
+    "transformers",
+    "flashinfer",
+    "numpy",
+    "requests",
+    "pydantic",
+    "pybase64",
+    "IPython",
+    "tqdm",
+)
+
+
+def _install_lightweight_dependency_stubs() -> None:
+    """Install minimal stubs for heavy third-party deps of ``sglang``.
+
+    A stub is only created when the module is neither already imported nor
+    resolvable via ``importlib.util.find_spec``, so a real installation is
+    never shadowed.
     """
-    smoke_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "import_smoke_test.py")
-    if not os.path.isfile(smoke_path):
-        return None
-    existing = sys.modules.get("import_smoke_test")
-    if existing is not None:
-        return existing
-    spec = importlib.util.spec_from_file_location("import_smoke_test", smoke_path)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["import_smoke_test"] = module
-    spec.loader.exec_module(module)
-    return module
+    for name in _HEAVY_DEPENDENCY_STUBS:
+        if name in sys.modules:
+            continue
+        try:
+            spec = importlib.util.find_spec(name)
+        except (ImportError, ValueError):
+            spec = None
+        if spec is not None:
+            continue
+        stub = types.ModuleType(name)
+        stub.__path__ = []  # type: ignore[attr-defined]
+        stub.__version__ = "0.0.0+stub"  # type: ignore[attr-defined]
+
+        def _stub_getattr(item, _name=name):
+            if item.startswith("__") and item.endswith("__"):
+                raise AttributeError(item)
+            return _StubAny()
+
+        stub.__getattr__ = _stub_getattr  # type: ignore[attr-defined]
+        sys.modules[name] = stub
 
 
-# Run the bootstrap as early as possible: at conftest import time, before
-# pytest collects and imports the test modules.  This keeps the smoke tests
-# self-contained even when the sglang distribution (and its heavy runtime
-# dependencies) were never installed.
-_smoke = _load_smoke_module()
-if _smoke is not None:
-    _smoke._ensure_source_on_path()
-    _smoke._install_lightweight_dependency_stubs()
+class _StubAny:
+    """Permissive stand-in for any attribute of a stubbed dependency."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __getattr__(self, item):
+        return _StubAny()
+
+    def __call__(self, *args, **kwargs):
+        return _StubAny()
+
+
+_ensure_source_on_path()
+_install_lightweight_dependency_stubs()
