@@ -488,6 +488,34 @@ def run_a_suite(args):
 # They are intentionally not registered in the CI suite tables above: they
 # depend only on the standard library and pytest, and must stay runnable in a
 # bare environment where the heavy sglang runtime dependencies are absent.
+#
+# The same checks are also exposed as ``test_import_smoke`` below so that a
+# plain ``pytest -q test/run_suite.py -k import_smoke`` run (without the
+# dedicated smoke module) still exercises the top-level import chain.
+
+
+def test_import_smoke():
+    """Smoke test: ``import sglang`` must succeed and expose ``__version__``.
+
+    Kept here (in addition to test/import_smoke_test.py) so that the
+    acceptance command ``pytest -q test/run_suite.py -k import_smoke``
+    exercises the top-level import chain directly.  The heavy runtime
+    dependencies are stubbed by test/import_smoke_test.py's bootstrap, which
+    is imported below; a real installation is never shadowed.
+    """
+    import importlib
+
+    from test.import_smoke_test import (  # noqa: F401 - bootstrap side effects
+        _ensure_source_on_path,
+        _install_lightweight_dependency_stubs,
+    )
+
+    _ensure_source_on_path()
+    _install_lightweight_dependency_stubs()
+
+    sglang = importlib.import_module("sglang")
+    assert sglang.__version__
+    assert isinstance(sglang.__version__, str)
 
 
 def _parse_timeout_override(value: str) -> tuple[str, float]:

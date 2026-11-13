@@ -12,6 +12,7 @@ aborting collection with an opaque error.
 
 import importlib
 import importlib.metadata
+import importlib.util
 import os
 import sys
 import types
@@ -50,6 +51,10 @@ def _install_lightweight_dependency_stubs() -> None:
     ``importlib.util.find_spec``.  This keeps the smoke tests honest in a
     fully provisioned CI environment where the real torch is present, and
     avoids masking a genuine import regression behind a permissive stub.
+
+    The stub is installed at module import time (see the call at the bottom
+    of this file) so that ``pytest -k import_smoke`` also works in a bare
+    environment, not just the ``--bare`` entry point.
     """
     for name in ("torch",):
         # Never shadow a real installation: if the module is already imported
@@ -83,6 +88,14 @@ def _install_lightweight_dependency_stubs() -> None:
 
         stub.__getattr__ = _stub_getattr  # type: ignore[attr-defined]
         sys.modules[name] = stub
+
+
+# Install the source path and lightweight stubs at module import time so that
+# ``pytest -k import_smoke`` works in a bare environment (no sglang runtime
+# deps installed).  Both helpers are idempotent and never shadow a real
+# installation, so this is safe in a fully provisioned CI environment too.
+_ensure_source_on_path()
+_install_lightweight_dependency_stubs()
 
 
 def _import_or_skip(module_name: str):
@@ -216,6 +229,17 @@ def _run_bare_smoke() -> int:
 
     print(f"import_smoke: OK (sglang.__version__={version})")
     return 0
+
+
+@pytest.mark.import_smoke
+def test_import_smoke_bare_entrypoint():
+    """Smoke test: the ``--bare`` entry point must succeed without pytest.
+
+    This exercises the same code path CI uses when it cannot install the full
+    ``sglang`` dependency tree, so a regression in the bare-environment
+    bootstrap is caught by the normal pytest run as well.
+    """
+    assert _run_bare_smoke() == 0
 
 
 # When this file is executed directly (``python test/import_smoke_test.py``)
