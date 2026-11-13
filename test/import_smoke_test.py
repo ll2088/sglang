@@ -73,11 +73,25 @@ def test_import_smoke_bare_entrypoint_isolated():
 
 
 @pytest.mark.import_smoke
+def test_import_smoke_ci_entrypoint():
+    """The CI entry point must pass before the heavy install runs."""
+    assert _smoke._run_ci() == 0
+
+
+@pytest.mark.import_smoke
 def test_import_platform_stubs():
     """The platform stubs module must import without raising."""
     stubs = _import_or_skip("sglang._platform_stubs")
     assert hasattr(stubs, "install_platform_stubs")
     assert callable(stubs.install_platform_stubs)
+
+
+@pytest.mark.import_smoke
+def test_import_platform_stubs_install_is_idempotent():
+    """Calling install_platform_stubs twice must not raise."""
+    stubs = _import_or_skip("sglang._platform_stubs")
+    stubs.install_platform_stubs()
+    stubs.install_platform_stubs()
 
 
 @pytest.mark.import_smoke

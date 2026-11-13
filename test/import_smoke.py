@@ -177,6 +177,23 @@ def _run_negative_check() -> int:
     return 0 if proc.returncode != 0 else 1
 
 
+def _run_ci() -> int:
+    """CI entry point: run smoke checks before heavy dependency install.
+
+    This is the entry point CI should call *before* attempting
+    ``pip install -e python``.  It only needs the standard library, so it
+    succeeds even when the heavy sglang runtime dependency tree cannot be
+    resolved (py-spy / pybase64 / pydantic / pyzmq / quack-kernels / regex
+    ...).  It never invokes pip itself; the caller decides whether to
+    continue with the heavy install afterwards.
+
+    Returns 0 when the import chain is healthy, non-zero otherwise, so a
+    real import regression is reported instead of being masked by a failed
+    environment-preparation step.
+    """
+    return _run_all()
+
+
 def _run_all() -> int:
     """Run every smoke check in-process; return 0 only if all pass.
 
@@ -269,9 +286,11 @@ def _main(argv: list[str]) -> int:
         return _run_pytest_smoke()
     if "--all" in argv:
         return _run_all()
+    if "--ci" in argv:
+        return _run_ci()
     sys.stderr.write(
         "usage: python test/import_smoke.py "
-        "[--bare|--selfcheck|--negative|--pytest|--all]\n"
+        "[--bare|--selfcheck|--negative|--pytest|--all|--ci]\n"
     )
     return 2
 

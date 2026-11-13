@@ -556,6 +556,11 @@ def _load_import_smoke_module():
 def test_import_smoke():
     """Smoke test: ``import sglang`` must succeed and expose ``__version__``.
 
+    Degrades gracefully when pytest is unavailable: the bare entry point is
+    still exercised, so the import chain is checked even in a bare
+    environment where the heavy sglang runtime dependency tree (and pytest)
+    were never installed.
+
     Kept here (in addition to test/import_smoke_test.py) so that the
     acceptance command ``pytest -q test/run_suite.py -k import_smoke``
     exercises the top-level import chain directly.  The heavy runtime
@@ -570,6 +575,18 @@ def test_import_smoke():
     _smoke = _load_import_smoke_module()
 
     assert _smoke._run_bare_smoke() == 0
+
+
+def test_import_smoke_ci_entrypoint():
+    """The CI entry point must pass without the heavy dependency tree.
+
+    ``python test/import_smoke.py --ci`` is the command CI can run *before*
+    ``pip install -e python``; it only needs the standard library and must
+    return 0 when the import chain is healthy.
+    """
+    _smoke = _load_import_smoke_module()
+
+    assert _smoke._run_ci() == 0
 
 
 def test_import_smoke_negative():
