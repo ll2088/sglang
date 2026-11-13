@@ -34,6 +34,30 @@ def test_tvm_ffi_importable():
         pytest.fail(f"tvm_ffi failed to import: {exc!r}")
 
 
+def test_tvm_ffi_public_api_surface():
+    """The tvm_ffi public API used by downstream wheels must stay importable.
+
+    SGLang does not call tvm_ffi directly, but the version bump touches the
+    Rust FFI/object system and stubgen. This test pins the presence of the
+    top-level entry points so a future bump that removes or renames them is
+    caught here instead of at runtime.
+    """
+    try:
+        tvm_ffi = importlib.import_module("tvm_ffi")
+    except ImportError:
+        pytest.skip("tvm_ffi is not installed in this environment")
+
+    for attr in ("__version__",):
+        assert hasattr(tvm_ffi, attr), f"tvm_ffi is missing expected attribute {attr!r}"
+
+    version = getattr(tvm_ffi, "__version__", None)
+    if version is not None:
+        assert version == EXPECTED_TVM_FFI_VERSION, (
+            f"tvm_ffi.__version__={version!r} does not match the pinned "
+            f"apache-tvm-ffi=={EXPECTED_TVM_FFI_VERSION}"
+        )
+
+
 @pytest.mark.parametrize(
     "module_name",
     [
