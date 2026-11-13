@@ -189,13 +189,47 @@ def test_import_public_api_symbols():
         assert hasattr(sglang, name), f"missing public symbol: {name}"
 
 
+def _run_bare_smoke() -> int:
+    """Run the smoke checks without pytest.
+
+    Used by CI jobs that must not install the full ``sglang`` dependency tree
+    (whose resolution can fail during environment preparation and mask real
+    import regressions).  Only the standard library is required: the source
+    tree is put on ``sys.path`` and lightweight stubs are installed for any
+    genuinely missing heavy dependency before importing ``sglang``.
+
+    Returns a process exit code (0 on success, 1 on failure) and prints a
+    single-line, greppable result so the CI log carries an explicit signal.
+    """
+    _ensure_source_on_path()
+    _install_lightweight_dependency_stubs()
+    try:
+        sglang = importlib.import_module("sglang")
+    except Exception as exc:  # noqa: BLE001 - report any import failure
+        print(f"import_smoke: FAIL ({type(exc).__name__}: {exc})")
+        return 1
+
+    version = getattr(sglang, "__version__", None)
+    if not version or not isinstance(version, str):
+        print(f"import_smoke: FAIL (bad __version__: {version!r})")
+        return 1
+
+    print(f"import_smoke: OK (sglang.__version__={version})")
+    return 0
+
+
 # When this file is executed directly (``python test/import_smoke_test.py``)
 # rather than collected by pytest, it bootstraps a minimal environment and
 # then re-invokes pytest on itself.  This lets CI run the smoke tests without
 # first installing the full ``sglang`` dependency chain (which can fail during
 # environment preparation and mask real import regressions).  The entry point
 # lives at the end of the module so that every helper it calls is defined.
+#
+# ``--bare`` skips pytest entirely and runs the checks with the standard
+# library only, for environments where pytest itself is not installed.
 if __name__ == "__main__":
+    if "--bare" in sys.argv[1:]:
+        raise SystemExit(_run_bare_smoke())
     _ensure_source_on_path()
     _install_lightweight_dependency_stubs()
     raise SystemExit(
