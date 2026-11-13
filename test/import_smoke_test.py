@@ -42,29 +42,47 @@ def _ensure_source_on_path() -> None:
         sys.path.insert(0, repo_root)
 
 
+# Heavy third-party modules that ``sglang/__init__.py`` (transitively) needs
+# but that the smoke tests must not require to be installed.  A permissive
+# stub is registered for each one that is genuinely missing, so the import
+# chain under test can be exercised in a bare environment (standard library +
+# pytest only) without triggering a full ``pip install sglang``.
+_HEAVY_DEPENDENCY_STUBS = (
+    "torch",
+    "transformers",
+    "flashinfer",
+    "numpy",
+    "requests",
+    "pydantic",
+    "pybase64",
+    "IPython",
+    "tqdm",
+)
+
+
 def _install_lightweight_dependency_stubs() -> None:
     """Install minimal stubs for heavy third-party deps of ``sglang``.
 
     The smoke tests must run in a bare environment (only the standard library
     and pytest) so that a broken CI dependency-resolution step cannot mask a
     real regression in the import chain under test.  ``sglang/__init__.py``
-    pulls in ``torch`` (via ``hf_transformers_patches`` and ``lang.api``);
-    when torch is absent we register a permissive stub module so the import
-    chain can still be exercised.
+    pulls in ``torch`` (via ``hf_transformers_patches`` and ``lang.api``) and
+    a handful of other heavy packages; when any of them is absent we register
+    a permissive stub module so the import chain can still be exercised.
 
     Real installations are never shadowed: a stub is only created when the
     module is neither already imported nor resolvable via
     ``importlib.util.find_spec``.  This keeps the smoke tests honest in a
-    fully provisioned CI environment where the real torch is present, and
-    avoids masking a genuine import regression behind a permissive stub.
+    fully provisioned CI environment where the real dependencies are present,
+    and avoids masking a genuine import regression behind a permissive stub.
 
-    The stub is installed at module import time (see the call at the bottom
+    The stubs are installed at module import time (see the call at the bottom
     of this file) so that ``pytest -k import_smoke`` also works in a bare
     environment, not just the ``--bare`` entry point.  The helper is
     idempotent: repeated calls (including from ``_import_or_skip``) never
     replace an already-installed stub or a real installation.
     """
-    for name in ("torch",):
+    for name in _HEAVY_DEPENDENCY_STUBS:
         # Never shadow a real installation: if the module is already imported
         # or resolvable on sys.path, leave it alone.
         if name in sys.modules:
@@ -275,6 +293,31 @@ def test_lightweight_dependency_stubs_effective():
         "lightweight torch stub was not installed; the bare-environment "
         "bootstrap is broken"
     )
+
+
+@pytest.mark.import_smoke
+def test_import_smoke_without_installed_distribution():
+    """Smoke test: the import chain must work without ``pip install sglang``.
+
+    Guards the CI contract that the smoke tests are self-contained: they add
+    ``python/`` to ``sys.path`` and stub heavy dependencies, so they must not
+    depend on the ``sglang`` distribution (or its runtime dependency tree)
+    being installed.  A regression here would re-introduce the environment
+    preparation failure that blocked the import-time/import-error/
+    import-compat/tests dimensions.
+    """
+    _ensure_source_on_path()
+    _install_lightweight_dependency_stubs()
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    python_dir = os.path.join(repo_root, "python")
+    assert python_dir in sys.path, (
+        "python/ must be on sys.path so the smoke tests do not require an "
+        "installed sglang distribution"
+    )
+
+    sglang = _import_or_skip("sglang")
+    assert sglang.__version__
 
 
 @pytest.mark.import_smoke
