@@ -12,8 +12,26 @@ aborting collection with an opaque error.
 
 import importlib
 import importlib.metadata
+import os
+import sys
 
 import pytest
+
+
+def _ensure_source_on_path() -> None:
+    """Make ``python/sglang`` importable from the source tree.
+
+    The smoke tests must be runnable even when the ``sglang`` distribution is
+    not installed (e.g. the CI environment-preparation step failed while
+    resolving the heavy runtime dependency chain).  Adding the source
+    directory to ``sys.path`` lets us exercise the real import chain without
+    requiring a successful ``pip install``.
+    """
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    python_dir = os.path.join(repo_root, "python")
+    if os.path.isdir(os.path.join(python_dir, "sglang")):
+        if python_dir not in sys.path:
+            sys.path.insert(0, python_dir)
 
 
 def _import_or_skip(module_name: str):
@@ -35,6 +53,7 @@ def _import_or_skip(module_name: str):
     import chain under test.  Errors raised from ``sglang``'s own modules are
     re-raised so that a real regression still fails the test.
     """
+    _ensure_source_on_path()
     try:
         return importlib.import_module(module_name)
     except ModuleNotFoundError as exc:
