@@ -91,6 +91,19 @@ def test_matching_layer_list_is_accepted():
     assert layout.packed_fp4 is False
 
 
+@pytest.mark.parametrize("bad_config", ["mxfp4", 32, ["mxfp4"]])
+def test_non_dict_quantization_config_fails(bad_config):
+    with pytest.raises(EngramLayoutError):
+        EngramLayout.from_metadata(256, LAYER_IDS, bad_config)
+
+
+def test_non_iterable_layer_list_fails():
+    with pytest.raises(EngramLayoutError):
+        EngramLayout.from_metadata(
+            256, LAYER_IDS, {"engram_embed_layers": 17}
+        )
+
+
 @pytest.mark.parametrize("head_dim", [0, -8, 255, 257])
 def test_invalid_head_dim_fails(head_dim):
     with pytest.raises(EngramLayoutError):
@@ -167,6 +180,16 @@ def test_decode_rejects_long_packed_data():
 def test_decode_rejects_non_byte():
     with pytest.raises(EngramLayoutError):
         decode_e2m1_packed([256])
+
+
+def test_decode_rejects_non_byte_without_dim():
+    with pytest.raises(EngramLayoutError):
+        decode_e2m1_packed([-1])
+
+
+def test_decode_rejects_bool_byte():
+    with pytest.raises(EngramLayoutError):
+        decode_e2m1_packed([True])
 
 
 def test_decode_rejects_odd_dim():
