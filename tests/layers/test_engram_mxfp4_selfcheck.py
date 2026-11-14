@@ -45,6 +45,10 @@ def _load_engram_mxfp4():
     module_path = os.path.join(
         _PYTHON_DIR, "sglang", "srt", "layers", "engram_mxfp4.py"
     )
+    if not os.path.isfile(module_path):
+        raise ImportError(
+            f"engram_mxfp4 module not importable and not found at {module_path!r}"
+        )
     spec = importlib.util.spec_from_file_location("engram_mxfp4", module_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load engram_mxfp4 from {module_path!r}")
