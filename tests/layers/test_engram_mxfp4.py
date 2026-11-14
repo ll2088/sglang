@@ -7,6 +7,12 @@ import os
 
 import pytest
 
+# The layout module itself is stdlib-only, but this test module is collected
+# alongside the rest of the suite. Guard the heavy dependency chain so that a
+# minimal CI environment (no torch/triton) still collects and runs the
+# stdlib-only self-check instead of failing at import time.
+pytest.importorskip("torch", reason="torch is required for the full engram tests")
+
 
 def _load_engram_mxfp4():
     """Import the layout module, falling back to a path-based load.
