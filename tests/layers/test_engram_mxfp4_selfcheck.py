@@ -31,31 +31,24 @@ if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
 def _load_engram_mxfp4():
     """Import the layout module without requiring the full sglang package.
 
-    The path-based load is tried first: ``engram_mxfp4`` is stdlib-only, so
-    loading it directly from its file path never triggers the heavy sglang
-    dependency chain (torch, triton, ...). This keeps the self-check runnable
-    during a minimal CI environment preparation where ``pip install -e python``
-    may fail. The normal package import is only used as a fallback when the
-    file is not present at the expected location.
+    ``engram_mxfp4`` is stdlib-only, so it is always loaded directly from its
+    file path. This never triggers the heavy sglang dependency chain (torch,
+    triton, ...), which keeps the self-check runnable during a minimal CI
+    environment preparation where ``pip install -e python`` may fail. There is
+    deliberately no ``from sglang...`` fallback: importing the package would
+    pull in the very dependencies this entry point exists to avoid.
     """
     module_path = os.path.join(
         _PYTHON_DIR, "sglang", "srt", "layers", "engram_mxfp4.py"
     )
-    if os.path.isfile(module_path):
-        spec = importlib.util.spec_from_file_location("engram_mxfp4", module_path)
-        if spec is not None and spec.loader is not None:
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            return module
-
-    try:
-        from sglang.srt.layers import engram_mxfp4 as module
-
-        return module
-    except Exception as exc:  # noqa: BLE001 - report a clear error
-        raise ImportError(
-            f"engram_mxfp4 module not importable and not found at {module_path!r}"
-        ) from exc
+    if not os.path.isfile(module_path):
+        raise ImportError(f"engram_mxfp4 module not found at {module_path!r}")
+    spec = importlib.util.spec_from_file_location("engram_mxfp4", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load engram_mxfp4 from {module_path!r}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 _engram_mxfp4 = _load_engram_mxfp4()

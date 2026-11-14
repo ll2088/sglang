@@ -34,7 +34,8 @@ def _load_selfcheck():
 
     Loading by path avoids importing the ``tests`` package (which may pull in
     heavy dependencies) and keeps this entry point usable in a minimal CI
-    environment.
+    environment. The self-check module itself is stdlib-only and loads the
+    layout module by file path, so no sglang/torch/triton import is triggered.
     """
     if not os.path.isfile(_SELFCHECK_PATH):
         raise ImportError(f"self-check module not found at {_SELFCHECK_PATH!r}")

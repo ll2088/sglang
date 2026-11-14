@@ -21,6 +21,10 @@ except Exception as _torch_exc:  # noqa: BLE001 - any import failure means skip
         allow_module_level=True,
     )
 
+# The layout module is stdlib-only and is loaded by file path below, so this
+# module never imports the sglang package. That keeps collection working in a
+# minimal CI environment where the full dependency chain is unavailable.
+
 
 def _load_engram_mxfp4():
     """Import the layout module, preferring a path-based load.
@@ -44,16 +48,10 @@ def _load_engram_mxfp4():
             spec.loader.exec_module(module)
             return module
 
-    try:
-        from sglang.srt.layers import engram_mxfp4 as module
-
-        return module
-    except Exception as exc:  # noqa: BLE001 - report a clear skip reason
-        pytest.skip(
-            f"engram_mxfp4 module not importable and not found at {module_path!r}: "
-            f"{exc!r}",
-            allow_module_level=True,
-        )
+    pytest.skip(
+        f"engram_mxfp4 module not found at {module_path!r}",
+        allow_module_level=True,
+    )
 
 
 _engram_mxfp4 = _load_engram_mxfp4()
