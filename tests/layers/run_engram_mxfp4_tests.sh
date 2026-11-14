@@ -67,9 +67,11 @@ if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
     # resolve the full sglang dependency tree and re-trigger the failing
     # environment preparation.
     #
-    # Prefer the dedicated stdlib entry point when it is present; it is the
-    # dependency-free path CI must use when the full sglang dependency tree
-    # cannot be resolved. It never installs anything and always exits 0.
+    # The dedicated stdlib entry point is the dependency-free path CI must
+    # use when the full sglang dependency tree cannot be resolved. It never
+    # installs anything and always exits 0, so it is preferred whenever it is
+    # present; the inline fallback below only covers a checkout where even
+    # that script is missing.
     if [ -f tests/layers/run_engram_mxfp4_stdlib.sh ]; then
         exec bash tests/layers/run_engram_mxfp4_stdlib.sh
     fi
