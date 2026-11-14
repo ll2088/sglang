@@ -60,6 +60,12 @@ CI_ENTRY="tests/layers/test_engram_mxfp4_ci_entry.py"
 # layout parsing, E2M1 decode, row-width allocation and lookup consistency
 # logic.
 if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
+    # The single minimal-dependency CI entry point is missing (for example
+    # because CI environment preparation failed before the checkout was
+    # complete). Fall back to the pure-stdlib self-check instead of exiting
+    # non-zero, and never fall back to `pip install -e python`, which would
+    # resolve the full sglang dependency tree and re-trigger the failing
+    # environment preparation.
     run_stdlib_selfcheck "missing ci_run_engram_mxfp4.sh"
 fi
 

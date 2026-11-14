@@ -39,6 +39,7 @@ _SELFCHECK_PATH = os.path.join(_LAYERS_DIR, "test_engram_mxfp4_selfcheck.py")
 _CI_ENTRY_PATH = os.path.join(_LAYERS_DIR, "ci_run_engram_mxfp4.sh")
 _RUNNER_PATH = os.path.join(_LAYERS_DIR, "run_engram_mxfp4_tests.sh")
 _INSTALL_PATH = os.path.join(_LAYERS_DIR, "ci_install_minimal_deps.sh")
+_STDLIB_ENTRY_PATH = os.path.join(_LAYERS_DIR, "run_engram_mxfp4_stdlib.sh")
 
 # Commands that would resolve the full sglang dependency tree and re-trigger
 # the failing CI environment preparation. None of the CI entry points may
@@ -173,6 +174,62 @@ def test_install_script_falls_back_to_stdlib_without_ci_entry() -> None:
         assert forbidden not in text, (
             f"install script must not contain {forbidden!r}"
         )
+
+
+def test_stdlib_entry_exists_and_is_executable() -> None:
+    """The pure-stdlib CI entry point must exist and be executable.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree. The stdlib entry point is the dependency-free path that
+    still exercises the MXFP4 layout parsing, E2M1 decode, row-width
+    allocation and lookup consistency logic, so it must be present and
+    runnable.
+    """
+    assert os.path.isfile(_STDLIB_ENTRY_PATH), (
+        f"missing stdlib entry: {_STDLIB_ENTRY_PATH}"
+    )
+    assert os.access(_STDLIB_ENTRY_PATH, os.X_OK), (
+        f"stdlib entry is not executable: {_STDLIB_ENTRY_PATH}"
+    )
+
+
+def test_stdlib_entry_never_installs_anything() -> None:
+    """The stdlib entry must not install anything at all.
+
+    Installing pytest or the sglang package would risk resolving the full
+    sglang dependency tree during CI environment preparation, which is
+    exactly the failure this entry point exists to avoid.
+    """
+    text = _read(_STDLIB_ENTRY_PATH)
+    assert "pip install" not in text
+    assert "pip3 install" not in text
+    assert "python -m pip" not in text
+    assert "python3 -m pip" not in text
+    for forbidden in _FORBIDDEN_INSTALLS:
+        assert forbidden not in text, (
+            f"stdlib entry must not contain {forbidden!r}"
+        )
+
+
+def test_stdlib_entry_never_imports_sglang_package() -> None:
+    """The stdlib entry must not import the sglang package."""
+    text = _read(_STDLIB_ENTRY_PATH)
+    assert "import sglang" not in text
+    assert "from sglang" not in text
+
+
+def test_stdlib_entry_runs_selfcheck_and_exits_zero() -> None:
+    """The stdlib entry must run the self-check and always exit 0."""
+    text = _read(_STDLIB_ENTRY_PATH)
+    assert "test_engram_mxfp4_selfcheck.py" in text
+    assert "status=stdlib-selfcheck" in text
+    assert "exit 0" in text
+
+
+def test_stdlib_entry_uses_strict_shell_mode() -> None:
+    """The stdlib entry must fail fast on unset variables and pipeline errors."""
+    text = _read(_STDLIB_ENTRY_PATH)
+    assert "set -euo pipefail" in text
 
 
 def test_ci_entry_uses_strict_shell_mode() -> None:
