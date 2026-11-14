@@ -86,6 +86,22 @@ def pytest_configure(config):  # noqa: ARG001 - pytest hook signature
     _install_sglang_stub()
 
 
+def pytest_sessionstart(session):  # noqa: ARG001 - pytest hook signature
+    """Stub ``sglang`` before collection so no import chain resolves it.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree (torch, triton, py-spy, pybase64, pydantic, pyzmq,
+    quack-kernels, regex, ...). ``pytest_configure`` runs after the root
+    ``conftest.py`` has already been imported, so a root-level ``import
+    sglang`` could still trigger that resolution. This hook runs earlier in
+    the session lifecycle and pre-seeds the stub, keeping the MXFP4 layout
+    tests collectable in a minimal environment.
+    """
+    if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
+        sys.path.insert(0, _PYTHON_DIR)
+    _install_sglang_stub()
+
+
 def pytest_collection_modifyitems(config, items):  # noqa: ARG001
     """Keep the stdlib-only MXFP4 tests runnable without the sglang tree.
 
