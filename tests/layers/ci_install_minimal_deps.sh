@@ -61,4 +61,9 @@ fi
 # This script must never run `pip install -e python`, `pip install -e .` or
 # `pip install sglang`; ci_run_engram_mxfp4.sh is the only supported entry
 # point.
+#
+# Note: this script is a thin alias. It does not install pytest either, since
+# any install step risks resolving the full sglang dependency tree during CI
+# environment preparation. ci_run_engram_mxfp4.sh handles the pytest-absent
+# case by falling back to the stdlib self-check.
 exec bash tests/layers/ci_run_engram_mxfp4.sh "$@"

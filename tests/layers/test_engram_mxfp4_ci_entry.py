@@ -105,6 +105,35 @@ def test_ci_entry_never_installs_anything() -> None:
     text = _read(_CI_ENTRY_PATH)
     assert "pip install" not in text
     assert "pip install -e" not in text
+    assert "pip3 install" not in text
+    assert "python -m pip" not in text
+    assert "python3 -m pip" not in text
+
+
+def test_ci_entry_checks_pytest_without_installing() -> None:
+    """The CI entry must probe pytest availability without installing it.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree. The entry point must therefore detect a missing pytest
+    with a plain import probe and fall back to the stdlib self-check, never
+    with an install command.
+    """
+    text = _read(_CI_ENTRY_PATH)
+    assert "import pytest" in text
+    assert "run_stdlib_selfcheck" in text
+
+
+def test_ci_entry_runs_selfcheck_and_full_suite() -> None:
+    """The CI entry must run the stdlib self-check and the torch suite.
+
+    The self-check is the dependency-free path; the torch-dependent suite is
+    run when pytest is available. Both must be referenced so the four CI
+    dimensions exercise the MXFP4 layout parsing, E2M1 decode, row-width
+    allocation and lookup consistency logic.
+    """
+    text = _read(_CI_ENTRY_PATH)
+    assert "test_engram_mxfp4_selfcheck.py" in text
+    assert "test_engram_mxfp4.py" in text
 
 
 def test_ci_entry_never_imports_sglang_package() -> None:

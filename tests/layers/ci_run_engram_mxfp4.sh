@@ -4,16 +4,20 @@
 # CI environment preparation can fail while resolving the full sglang
 # dependency tree (torch, triton, py-spy, pybase64, pydantic, pyzmq,
 # quack-kernels, regex, ...). The layout module
-# python/sglang/srt/layers/engram_mxfp4.py is stdlib-only, so its tests must
-# be runnable with only pytest installed and without importing the sglang
-# package.
+# python/sglang/srt/layers/engram_mxfp4.py is stdlib-only, so its tests must be
+# runnable without importing the sglang package and without resolving that
+# dependency tree.
 #
-# This script is the ONLY supported entry point for these tests. It:
-#   * sets PYTHONPATH=python first,
-#   * never runs `pip install -e python` / `pip install -e .` /
-#     `pip install sglang` (which would resolve the full dependency tree),
-#   * runs pytest with the minimal stdlib-only config when pytest is present,
-#   * falls back to the pure-stdlib self-check and exits 0 otherwise.
+# This script NEVER installs anything. Installing pytest would still risk
+# resolving the full sglang dependency tree during CI environment preparation,
+# which is exactly the failure this entry point exists to avoid. When pytest is
+# unavailable it falls back to the pure-stdlib self-check, which needs no
+# third-party dependency at all, and exits 0.
+#
+# It sets PYTHONPATH=python first, runs pytest with the minimal stdlib-only
+# config (-c tests/layers/pytest.ini, --rootdir=tests/layers,
+# --confcutdir=tests/layers, --engram-mxfp4-stdlib-only) when pytest is
+# available, and otherwise runs the stdlib self-check directly.
 #
 # Usage (from the repository root):
 #   bash tests/layers/ci_run_engram_mxfp4.sh
@@ -50,37 +54,36 @@ if [ ! -f "$SELFCHECK" ]; then
     exit 0
 fi
 
-# Benchmark mode: run the dependency-free benchmark and exit with its status.
+# Benchmark mode: run the dependency-free benchmark when present, otherwise
+# fall back to the stdlib self-check. Never installs anything.
 if [ "${1:-}" = "--bench" ]; then
     shift
-    if [ ! -f "$BENCH" ]; then
-        echo "[engram-mxfp4] status=stdlib-selfcheck (missing $BENCH)"
-        exit 0
+    if [ -f "$BENCH" ]; then
+        echo "[engram-mxfp4] status=bench"
+        echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
+        echo "[engram-mxfp4] running: python $BENCH"
+        python "$BENCH"
+        exit $?
     fi
-    echo "[engram-mxfp4] status=bench"
-    echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
-    echo "[engram-mxfp4] running: python $BENCH $*"
-    python "$BENCH" "$@"
-    exit $?
+    run_stdlib_selfcheck "missing $BENCH"
 fi
 
-# pytest is optional. When it is missing, fall back to the stdlib self-check
-# instead of installing anything (installing would re-trigger the failing
-# full dependency resolution).
+# pytest is optional. When it is unavailable, fall back to the stdlib
+# self-check instead of installing anything.
 if ! python -c "import pytest" >/dev/null 2>&1; then
     run_stdlib_selfcheck "pytest unavailable"
 fi
 
 echo "[engram-mxfp4] status=pytest"
 echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
-echo "[engram-mxfp4] running: python -m pytest -q -c tests/layers/pytest.ini --rootdir=tests/layers --confcutdir=tests/layers -p no:cacheprovider --engram-mxfp4-stdlib-only tests/layers/test_engram_mxfp4_selfcheck.py tests/layers/test_engram_mxfp4.py"
+echo "[engram-mxfp4] running: python -m pytest -q -c tests/layers/pytest.ini --rootdir=tests/layers --confcutdir=tests/layers --engram-mxfp4-stdlib-only -p no:cacheprovider tests/layers/test_engram_mxfp4_selfcheck.py tests/layers/test_engram_mxfp4.py"
 
 python -m pytest -q \
     -c tests/layers/pytest.ini \
     --rootdir=tests/layers \
     --confcutdir=tests/layers \
-    -p no:cacheprovider \
     --engram-mxfp4-stdlib-only \
+    -p no:cacheprovider \
     tests/layers/test_engram_mxfp4_selfcheck.py \
     tests/layers/test_engram_mxfp4.py
 status=$?
@@ -90,9 +93,5 @@ if [ "$status" -eq 0 ]; then
     exit 0
 fi
 
-# pytest ran but failed: report and fall back to the stdlib self-check so the
-# four CI dimensions still produce a decidable result. The stdlib self-check
-# covers the same layout parsing, E2M1 decode, row-width allocation and lookup
-# consistency logic without the heavy dependency tree.
-echo "[engram-mxfp4] status=pytest-failed (exit=$status)"
-run_stdlib_selfcheck "pytest failed with exit=$status"
+echo "[engram-mxfp4] status=pytest-failed"
+exit "$status"

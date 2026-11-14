@@ -68,16 +68,6 @@ if [ "${1:-}" = "--bench" ]; then
     exec bash tests/layers/ci_run_engram_mxfp4.sh --bench "$@"
 fi
 
-# If the minimal-dependency CI entry point is missing (for example because
-# CI environment preparation failed before the checkout was complete), fall
-# back to the pure-stdlib self-check instead of exiting non-zero. The layout
-# module and the self-check are stdlib-only, so this path needs no third-party
-# dependency at all and still exercises the MXFP4 layout parsing, E2M1 decode,
-# row-width allocation and lookup consistency logic.
-if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
-    run_stdlib_selfcheck "missing ci_run_engram_mxfp4.sh"
-fi
-
 # Delegate to the single minimal-dependency CI entry point. It sets
 # PYTHONPATH first, installs only pytest with --no-deps (never resolving the
 # sglang dependency tree), runs pytest with the minimal stdlib-only config,
