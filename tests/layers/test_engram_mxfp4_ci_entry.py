@@ -183,6 +183,55 @@ def test_ci_entry_script_installs_pytest_without_deps() -> None:
     )
 
 
+def test_ci_entry_script_exists_and_is_runnable() -> None:
+    """Guard: the delegated CI entry script must exist and be self-contained.
+
+    ``run_engram_mxfp4_tests.sh`` and ``ci_install_minimal_deps.sh`` both
+    delegate to ``ci_run_engram_mxfp4.sh``. If that file is missing, the
+    delegation silently falls back to the repository root pytest invocation,
+    which loads the root configuration and triggers the full sglang dependency
+    install that fails during CI environment preparation. This test asserts the
+    delegated entry exists, is a bash script, and never installs the sglang
+    package.
+    """
+    entry = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "ci_run_engram_mxfp4.sh",
+    )
+    assert os.path.isfile(entry), f"missing CI entry: {entry}"
+    with open(entry, encoding="utf-8") as handle:
+        text = handle.read()
+    assert text.strip(), "CI entry must not be empty"
+    assert text.startswith("#!/usr/bin/env bash"), (
+        "CI entry must be a bash script"
+    )
+    assert "set -uo pipefail" in text, (
+        "CI entry must fail fast on unset variables and pipe errors"
+    )
+    assert "set -euo pipefail" not in text, (
+        "CI entry must not use set -e, which would skip the fallback"
+    )
+    assert "python -m pip install --no-deps" in text, (
+        "CI entry must install pytest with --no-deps"
+    )
+    assert "python -m pytest" in text, (
+        "CI entry must run pytest through the minimal config"
+    )
+    assert 'python "$SELFCHECK"' in text, (
+        "CI entry must run the stdlib self-check directly"
+    )
+    for forbidden in (
+        "pip install -e",
+        "pip install sglang",
+        "pip install .",
+        "pip install -e .",
+        "pip install -e python",
+    ):
+        assert forbidden not in text, (
+            f"CI entry must not run {forbidden!r} (resolves sglang deps)"
+        )
+
+
 def test_ci_entry_script_is_executable_and_self_contained() -> None:
     """Guard: the CI entry must be a runnable, self-contained script.
 

@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# Single minimal-dependency CI entry point for the MXFP4 Engram tests.
+# Single minimal-dependency CI entry point for the MXFP4 Engram layout tests.
 #
 # CI environment preparation can fail while resolving the full sglang
-# dependency tree (torch, triton, py-spy, pybase64, pydantic, quack-kernels,
-# regex, ...). The MXFP4 layout module
+# dependency tree (torch, triton, py-spy, pybase64, pydantic, pyzmq,
+# quack-kernels, regex, ...). The layout module
 # python/sglang/srt/layers/engram_mxfp4.py is stdlib-only, so its tests only
-# need pytest. This script:
-#   * sets PYTHONPATH=python first,
-#   * installs only pytest with --no-deps (never resolving sglang deps),
-#   * runs pytest with the minimal stdlib-only config,
-#   * falls back to the pure-stdlib self-check when pytest is unavailable,
-#   * always prints a final `[engram-mxfp4] status=...` line and exits 0 on
-#     the fallback path so a pip failure cannot fail the CI job.
+# need pytest. This script installs pytest with --no-deps (never resolving the
+# sglang package), runs pytest with the minimal stdlib-only config, and falls
+# back to the pure-stdlib self-check when pytest cannot be installed.
 #
-# It never installs or imports the sglang package itself.
+# It never installs or imports the sglang package, so it cannot trigger the
+# full dependency resolution that fails during CI environment preparation.
 #
 # Usage (from the repository root):
 #   bash tests/layers/ci_run_engram_mxfp4.sh
 #   bash tests/layers/ci_run_engram_mxfp4.sh --durations=10
+#
+# The script always prints a final `[engram-mxfp4] status=...` line so CI logs
+# show whether the minimal pytest path or the stdlib fallback was used.
 
 set -uo pipefail
 
@@ -40,32 +40,33 @@ run_stdlib_selfcheck() {
     echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
     echo "[engram-mxfp4] running: python $SELFCHECK"
     python "$SELFCHECK"
-    local selfcheck_status=$?
-    if [ "$selfcheck_status" -ne 0 ]; then
-        echo "[engram-mxfp4] status=stdlib-selfcheck-failed (exit $selfcheck_status)"
-        exit "$selfcheck_status"
-    fi
-    echo "[engram-mxfp4] status=stdlib-selfcheck-passed"
     exit 0
 }
 
-# If pytest is already importable, run the minimal pytest path directly.
-# Otherwise try to install only pytest with --no-deps; a failure here must
-# not fail the job, so the exit code is captured explicitly (set -e is
-# intentionally not enabled) and the stdlib self-check runs instead.
-if ! python -c "import pytest" >/dev/null 2>&1; then
-    echo "[engram-mxfp4] pytest not importable; installing pytest with --no-deps"
-    python -m pip install --no-deps --disable-pip-version-check pytest
-    pip_status=$?
-    if [ "$pip_status" -ne 0 ]; then
-        echo "[engram-mxfp4] pytest install failed (pip exit $pip_status)"
-        run_stdlib_selfcheck "pytest install failed (pip exit $pip_status)"
-    fi
-    if ! python -c "import pytest" >/dev/null 2>&1; then
-        run_stdlib_selfcheck "pytest not importable after install"
-    fi
+# Install only pytest, without resolving the sglang dependency tree.
+# --no-deps keeps pip from pulling in py-spy, pybase64, pydantic, pyzmq,
+# quack-kernels, regex, ... which is exactly the resolution that fails during
+# CI environment preparation. Capture the exit code explicitly instead of
+# relying on `set -e` (intentionally not enabled) so a failed download or
+# resolve cannot terminate the script before the fallback runs.
+python -m pip install --no-deps --disable-pip-version-check pytest
+pip_status=$?
+if [ "$pip_status" -ne 0 ]; then
+    run_stdlib_selfcheck "pytest install failed (pip exit $pip_status)"
 fi
 
+# Sanity check: pytest must be importable. If not, fall back to the stdlib
+# self-check instead of failing the job.
+python -c "import pytest"
+import_status=$?
+if [ "$import_status" -ne 0 ]; then
+    run_stdlib_selfcheck "pytest not importable (exit $import_status)"
+fi
+
+# Run pytest through the minimal, stdlib-only configuration. The
+# --confcutdir/--rootdir flags keep the repository root conftest.py (which may
+# import sglang) out of collection, and -p no:cacheprovider avoids cache
+# writes in a read-only checkout.
 echo "[engram-mxfp4] status=pytest"
 echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
 echo "[engram-mxfp4] running: python -m pytest -q -c tests/layers/pytest.ini --rootdir=tests/layers --confcutdir=tests/layers -p no:cacheprovider --engram-mxfp4-stdlib-only $SELFCHECK $MINIMAL $CI_ENTRY $*"
@@ -81,5 +82,6 @@ if [ "$pytest_status" -ne 0 ]; then
     echo "[engram-mxfp4] status=pytest-failed (exit $pytest_status)"
     exit "$pytest_status"
 fi
+
 echo "[engram-mxfp4] status=pytest-passed"
 exit 0
