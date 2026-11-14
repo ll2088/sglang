@@ -144,3 +144,56 @@ def test_stdlib_entry_is_the_only_ci_path() -> None:
     assert "exit 0" in text
     assert "pip install" not in text
     assert "pytest" not in text
+
+
+def test_stdlib_entry_is_executable() -> None:
+    """The stdlib entry must be executable so CI can invoke it directly.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree. The stdlib entry is the single supported path, so it
+    must carry the executable bit; otherwise a CI step that runs it directly
+    (rather than via ``bash``) would fail before the self-check runs.
+    """
+    assert os.path.isfile(_STDLIB), f"missing stdlib entry: {_STDLIB}"
+    assert os.access(_STDLIB, os.X_OK), (
+        f"stdlib entry must be executable: {_STDLIB}"
+    )
+
+
+def test_ci_chain_reaches_stdlib_entry() -> None:
+    """The CI call chain must actually reach the stdlib entry point.
+
+    A previous regression added the stdlib entry but left CI on the old
+    ``pip install -e python`` path, so the guard never ran. This test asserts
+    that both the runner and the minimal-deps script delegate to the stdlib
+    entry, so the dependency-free path is the one CI executes.
+    """
+    for path in (_RUNNER, _INSTALL):
+        text = _read(path)
+        assert "run_engram_mxfp4_stdlib.sh" in text, (
+            f"{os.path.basename(path)} must delegate to the stdlib entry"
+        )
+        assert "exec bash" in text, (
+            f"{os.path.basename(path)} must exec the stdlib entry"
+        )
+
+
+def test_stdlib_entry_does_not_import_sglang() -> None:
+    """The stdlib entry must not import the sglang package.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree. The stdlib entry must therefore run the self-check by
+    file path and never trigger an ``import sglang`` that would resolve that
+    tree.
+    """
+    text = _read(_STDLIB)
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        assert "import sglang" not in stripped, (
+            f"stdlib entry must not import sglang: {stripped!r}"
+        )
+        assert "from sglang" not in stripped, (
+            f"stdlib entry must not import from sglang: {stripped!r}"
+        )
