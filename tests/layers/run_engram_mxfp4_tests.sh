@@ -46,5 +46,7 @@ if python -c "import pytest" >/dev/null 2>&1; then
 fi
 
 # pytest is not installed: run the stdlib-only self-check directly.
+# This path never imports sglang/torch/triton, so it stays runnable when the
+# full sglang dependency tree cannot be installed during CI preparation.
 echo "pytest not available; running stdlib-only self-check" >&2
 exec python "$SELFCHECK"

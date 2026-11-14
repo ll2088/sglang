@@ -47,6 +47,25 @@ explicit and never installs anything:
 bash tests/layers/run_engram_mxfp4_tests.sh
 ```
 
+If CI environment preparation still runs `pip install -e python`, replace it
+with the minimal-dependency preparation script, which installs only pytest
+and never resolves the sglang package:
+
+```sh
+bash tests/layers/ci_install_minimal_deps.sh
+bash tests/layers/run_engram_mxfp4_tests.sh
+```
+
+## Performance baseline
+
+The lookup path can be benchmarked without the full dependency tree. The
+script prints the median lookup latency for the FP8 and MXFP4 layouts and
+fails if the packed path is more than 10% slower than the baseline:
+
+```sh
+PYTHONPATH=python python tests/layers/bench_engram_mxfp4.py
+```
+
 It sets `PYTHONPATH=python`, passes `-c tests/layers/pytest.ini`,
 `--rootdir=tests/layers`, `--confcutdir=tests/layers` and
 `-p no:cacheprovider`, and falls back to the pure-stdlib self-check when
