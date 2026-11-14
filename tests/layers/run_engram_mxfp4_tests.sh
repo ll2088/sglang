@@ -67,13 +67,6 @@ if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
     run_stdlib_selfcheck "missing ci_run_engram_mxfp4.sh"
 fi
 
-# If pytest is not importable, do not delegate to the CI entry (which would
-# try to install it); run the pure-stdlib self-check directly so the job
-# still produces a decidable result instead of failing in setup.
-if ! python -c "import pytest" >/dev/null 2>&1; then
-    run_stdlib_selfcheck "pytest not importable"
-fi
-
 # Delegate to the single minimal-dependency CI entry point. It sets
 # PYTHONPATH first, installs only pytest with --no-deps (never resolving the
 # sglang dependency tree), runs pytest with the minimal stdlib-only config,
