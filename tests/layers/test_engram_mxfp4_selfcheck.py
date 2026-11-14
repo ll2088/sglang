@@ -14,6 +14,7 @@ Run directly with::
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 
@@ -23,18 +24,47 @@ _PYTHON_DIR = os.path.join(_REPO_ROOT, "python")
 if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
     sys.path.insert(0, _PYTHON_DIR)
 
-from sglang.srt.layers.engram_mxfp4 import (  # noqa: E402
-    E2M1_VALUES,
-    EngramLayout,
-    EngramLayoutError,
-    allocate_row_buffer,
-    decode_e2m1_nibble,
-    decode_e2m1_packed,
-    dequantize_row,
-    lookup_rows,
-    pack_e2m1,
-    row_bytes_for,
-)
+
+def _load_engram_mxfp4():
+    """Import the layout module without requiring the full sglang package.
+
+    The normal import path is tried first so the module is exercised exactly as
+    production code sees it. When the heavy dependency chain (torch, triton,
+    ...) is unavailable -- e.g. during a minimal CI environment preparation --
+    the module is loaded directly from its file path. ``engram_mxfp4`` is
+    stdlib-only, so this fallback keeps the self-check meaningful instead of
+    failing at import time.
+    """
+    try:
+        from sglang.srt.layers import engram_mxfp4 as module
+
+        return module
+    except Exception:  # noqa: BLE001 - fall back to a path-based load
+        pass
+
+    module_path = os.path.join(
+        _PYTHON_DIR, "sglang", "srt", "layers", "engram_mxfp4.py"
+    )
+    spec = importlib.util.spec_from_file_location("engram_mxfp4", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load engram_mxfp4 from {module_path!r}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_engram_mxfp4 = _load_engram_mxfp4()
+
+E2M1_VALUES = _engram_mxfp4.E2M1_VALUES
+EngramLayout = _engram_mxfp4.EngramLayout
+EngramLayoutError = _engram_mxfp4.EngramLayoutError
+allocate_row_buffer = _engram_mxfp4.allocate_row_buffer
+decode_e2m1_nibble = _engram_mxfp4.decode_e2m1_nibble
+decode_e2m1_packed = _engram_mxfp4.decode_e2m1_packed
+dequantize_row = _engram_mxfp4.dequantize_row
+lookup_rows = _engram_mxfp4.lookup_rows
+pack_e2m1 = _engram_mxfp4.pack_e2m1
+row_bytes_for = _engram_mxfp4.row_bytes_for
 
 LAYER_IDS = (17, 19)
 
