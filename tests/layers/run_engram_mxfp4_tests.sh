@@ -39,6 +39,10 @@ if grep -qE 'pip[[:space:]]+install[[:space:]]+sglang' "${BASH_SOURCE[0]}"; then
     echo "[engram-mxfp4] status=error: run_engram_mxfp4_tests.sh must not install sglang" >&2
     exit 1
 fi
+if grep -qE 'pip[[:space:]]+install[[:space:]]+\.([[:space:]]|$)' "${BASH_SOURCE[0]}"; then
+    echo "[engram-mxfp4] status=error: run_engram_mxfp4_tests.sh must not run pip install ." >&2
+    exit 1
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
@@ -68,27 +72,6 @@ echo "[engram-mxfp4] runner=run_engram_mxfp4_tests.sh"
 echo "[engram-mxfp4] python=$PYTHON_BIN ($(command -v "$PYTHON_BIN" || echo 'not found'))"
 echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
 
-# Run the pure-stdlib self-check and always exit 0. This path needs no
-# third-party dependency and still exercises the MXFP4 layout parsing, E2M1
-# decode, row-width allocation and lookup consistency logic, so the four CI
-# dimensions produce a decidable result even when pytest is unavailable.
-run_stdlib_selfcheck() {
-    local reason="$1"
-    echo "[engram-mxfp4] status=stdlib-selfcheck ($reason)"
-    echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
-    echo "[engram-mxfp4] running: $PYTHON_BIN tests/layers/test_engram_mxfp4_selfcheck.py"
-    "$PYTHON_BIN" tests/layers/test_engram_mxfp4_selfcheck.py
-    exit 0
-}
-
-SELFCHECK="tests/layers/test_engram_mxfp4_selfcheck.py"
-MINIMAL="tests/layers/test_engram_mxfp4_minimal.py"
-CI_ENTRY="tests/layers/test_engram_mxfp4_ci_entry.py"
-
-# Keep the referenced entry points visible to the guard test in
-# test_engram_mxfp4_ci_entry.py; the actual execution is delegated below.
-: "$SELFCHECK" "$MINIMAL" "$CI_ENTRY"
-
 # The pure-stdlib entry point is the only supported path. It installs
 # nothing and never resolves the sglang dependency tree, so CI environment
 # preparation cannot fail here. Prefer it over any pytest-based path so the
@@ -96,48 +79,3 @@ CI_ENTRY="tests/layers/test_engram_mxfp4_ci_entry.py"
 echo "[engram-mxfp4] branch=stdlib-entry"
 exec bash "$STDLIB_ENTRY"
 
-# Unreachable: the stdlib entry point above is the only supported path. The
-# remaining code is kept only to document the delegation chain and must never
-# be reached, so it cannot fall back to `pip install -e python`.
-
-# The single minimal-dependency CI entry point is the only supported pytest
-# path. If it is missing (for example because CI environment preparation
-# failed before the checkout was complete), fall back to the pure-stdlib
-# self-check instead of exiting non-zero, and never fall back to
-# `pip install -e python`, which would resolve the full sglang dependency
-# tree and re-trigger the failing environment preparation.
-if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
-    echo "[engram-mxfp4] branch=missing-ci-entry"
-    run_stdlib_selfcheck "missing ci_run_engram_mxfp4.sh"
-fi
-
-# The stdlib entry point is the only supported fallback. It installs nothing
-# and never resolves the sglang dependency tree, so CI environment
-# preparation cannot fail here.
-if [ ! -f tests/layers/run_engram_mxfp4_stdlib.sh ]; then
-    echo "[engram-mxfp4] branch=missing-stdlib-entry"
-    run_stdlib_selfcheck "missing run_engram_mxfp4_stdlib.sh"
-fi
-
-if [ "${1:-}" = "--bench" ]; then
-    shift
-    echo "[engram-mxfp4] branch=bench"
-    exec bash tests/layers/ci_run_engram_mxfp4.sh --bench "$@"
-fi
-
-# Delegate to the single minimal-dependency CI entry point. It sets
-# PYTHONPATH first, probes sglang importability before installing anything,
-# installs only pytest with --no-deps (never resolving the sglang dependency
-# tree), aborts immediately when pip output contains `sglang==`, runs pytest
-# with the minimal stdlib-only config, and falls back to the pure-stdlib
-# self-check when pytest is unavailable.
-#
-# This runner must never run pytest directly from the repository root and
-# must never install the sglang package; ci_run_engram_mxfp4.sh is the only
-# supported entry point.
-#
-# CI must call this script (or ci_run_engram_mxfp4.sh directly) instead of
-# `pip install -e python`, which resolves the full sglang dependency tree and
-# fails during environment preparation.
-echo "[engram-mxfp4] branch=delegate-ci-entry"
-exec bash tests/layers/ci_run_engram_mxfp4.sh "$@"

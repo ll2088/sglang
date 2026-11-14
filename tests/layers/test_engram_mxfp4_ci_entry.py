@@ -107,3 +107,40 @@ def test_scripts_do_not_install_sglang() -> None:
             assert "pip install -e" not in stripped, (
                 f"{os.path.basename(path)} must not run pip install -e: {stripped!r}"
             )
+            assert "pip install ." not in stripped, (
+                f"{os.path.basename(path)} must not run pip install .: {stripped!r}"
+            )
+
+
+def test_runner_delegates_to_stdlib_entry_only() -> None:
+    """The runner must delegate to the stdlib entry and never to pytest.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree. The runner must therefore exec the pure-stdlib entry
+    point and must not contain a reachable pytest invocation that could
+    resolve the sglang package.
+    """
+    text = _read(_RUNNER)
+    assert "exec bash \"$STDLIB_ENTRY\"" in text
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        assert "pytest" not in stripped, (
+            f"run_engram_mxfp4_tests.sh must not invoke pytest: {stripped!r}"
+        )
+
+
+def test_stdlib_entry_is_the_only_ci_path() -> None:
+    """The stdlib entry must be the single CI path for these tests.
+
+    This guards against a future edit that reintroduces a pytest-based CI
+    path which resolves the full sglang dependency tree during environment
+    preparation.
+    """
+    text = _read(_STDLIB)
+    assert "test_engram_mxfp4_selfcheck.py" in text
+    assert "status=passed" in text
+    assert "exit 0" in text
+    assert "pip install" not in text
+    assert "pytest" not in text

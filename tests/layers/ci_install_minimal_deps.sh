@@ -33,6 +33,10 @@ if grep -qE 'pip[[:space:]]+install[[:space:]]+sglang' "${BASH_SOURCE[0]}"; then
     echo "[engram-mxfp4] status=error: ci_install_minimal_deps.sh must not install sglang" >&2
     exit 1
 fi
+if grep -qE 'pip[[:space:]]+install[[:space:]]+\.([[:space:]]|$)' "${BASH_SOURCE[0]}"; then
+    echo "[engram-mxfp4] status=error: ci_install_minimal_deps.sh must not run pip install ." >&2
+    exit 1
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
