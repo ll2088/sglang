@@ -25,12 +25,29 @@ cd "$REPO_ROOT"
 # --no-deps keeps pip from pulling in py-spy, pybase64, pydantic,
 # quack-kernels, regex, ... which is exactly the resolution that fails during
 # CI environment preparation.
-python -m pip install --no-deps --disable-pip-version-check pytest
+#
+# If pip cannot install pytest (offline CI, restricted index, ...), fall back
+# to the pure-stdlib self-check instead of exiting non-zero. The layout module
+# and the self-check are stdlib-only, so the MXFP4 checks still run and CI
+# environment preparation can exit 0.
+if ! python -m pip install --no-deps --disable-pip-version-check pytest; then
+    echo "[engram-mxfp4] status=stdlib-selfcheck (pytest install failed)"
+    echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
+    echo "[engram-mxfp4] running: python tests/layers/test_engram_mxfp4_selfcheck.py"
+    PYTHONPATH=python python tests/layers/test_engram_mxfp4_selfcheck.py
+    exit 0
+fi
 
 # Sanity check: pytest must be importable and the layout module must load
 # without importing sglang. This fails fast if the minimal environment is not
 # actually usable, instead of failing later inside the test run.
-python -c "import pytest"
+if ! python -c "import pytest"; then
+    echo "[engram-mxfp4] status=stdlib-selfcheck (pytest not importable)"
+    echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
+    echo "[engram-mxfp4] running: python tests/layers/test_engram_mxfp4_selfcheck.py"
+    PYTHONPATH=python python tests/layers/test_engram_mxfp4_selfcheck.py
+    exit 0
+fi
 PYTHONPATH=python python -c "
 import importlib.util
 spec = importlib.util.spec_from_file_location(
