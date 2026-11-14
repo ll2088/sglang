@@ -76,7 +76,7 @@ class EngramLayout:
         ):
             raise EngramLayoutError(
                 "quantization_config must be a dict or None, got "
-                f"{type(quantization_config).__name__}"
+                f"{type(quantization_config).__name__}: {quantization_config!r}"
             )
         quant = quantization_config if quantization_config is not None else {}
         embed_quant = quant.get("engram_embed_quant", "fp8")
