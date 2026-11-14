@@ -3,11 +3,19 @@
 #
 # CI environment preparation can fail while resolving the full sglang
 # dependency tree (torch, triton, py-spy, pybase64, pydantic, pyzmq,
-# quack-kernels, regex, ...). The layout module
-# python/sglang/srt/layers/engram_mxfp4.py is stdlib-only, so its tests only
-# need pytest. This script installs pytest with --no-deps (never resolving the
-# sglang package), runs pytest with the minimal stdlib-only config, and falls
-# back to the pure-stdlib self-check when pytest cannot be installed.
+# quack-kernels, regex, ...). The MXFP4 layout module
+# python/sglang/srt/layers/engram_mxfp4.py is stdlib-only, so its tests must be
+# runnable with only pytest installed and without importing the sglang package.
+#
+# This script is the only supported CI entry point for these tests:
+#   * it sets PYTHONPATH=python first;
+#   * it installs only pytest with --no-deps (never resolving the sglang
+#     dependency tree);
+#   * it runs pytest with the minimal stdlib-only config, skipping the
+#     repository root conftest.py;
+#   * it falls back to the pure-stdlib self-check when pytest is unavailable;
+#   * it always prints a final [engram-mxfp4] status=... line and exits 0 on
+#     the stdlib fallback path.
 #
 # It never installs or imports the sglang package, so it cannot trigger the
 # full dependency resolution that fails during CI environment preparation.
@@ -15,9 +23,6 @@
 # Usage (from the repository root):
 #   bash tests/layers/ci_run_engram_mxfp4.sh
 #   bash tests/layers/ci_run_engram_mxfp4.sh --durations=10
-#
-# The script always prints a final `[engram-mxfp4] status=...` line so CI logs
-# show whether the minimal pytest path or the stdlib fallback was used.
 
 set -uo pipefail
 
@@ -46,17 +51,20 @@ run_stdlib_selfcheck() {
 # Install only pytest, without resolving the sglang dependency tree.
 # --no-deps keeps pip from pulling in py-spy, pybase64, pydantic, pyzmq,
 # quack-kernels, regex, ... which is exactly the resolution that fails during
-# CI environment preparation. Capture the exit code explicitly instead of
-# relying on `set -e` (intentionally not enabled) so a failed download or
-# resolve cannot terminate the script before the fallback runs.
+# CI environment preparation.
+#
+# Capture the pip exit code explicitly instead of relying on `set -e` (which
+# is intentionally not enabled here) so a failed download/resolve cannot
+# terminate the script before the fallback runs.
 python -m pip install --no-deps --disable-pip-version-check pytest
 pip_status=$?
 if [ "$pip_status" -ne 0 ]; then
     run_stdlib_selfcheck "pytest install failed (pip exit $pip_status)"
 fi
 
-# Sanity check: pytest must be importable. If not, fall back to the stdlib
-# self-check instead of failing the job.
+# Sanity check: pytest must be importable. This fails fast if the minimal
+# environment is not actually usable, instead of failing later inside the test
+# run.
 python -c "import pytest"
 import_status=$?
 if [ "$import_status" -ne 0 ]; then
@@ -64,9 +72,10 @@ if [ "$import_status" -ne 0 ]; then
 fi
 
 # Run pytest through the minimal, stdlib-only configuration. The
-# --confcutdir/--rootdir flags keep the repository root conftest.py (which may
-# import sglang) out of collection, and -p no:cacheprovider avoids cache
-# writes in a read-only checkout.
+# --confcutdir flag keeps the repository root conftest.py (which may import
+# sglang) out of collection, and --rootdir pins the rootdir so the root
+# configuration is not loaded. -p no:cacheprovider avoids cache writes in a
+# read-only CI checkout.
 echo "[engram-mxfp4] status=pytest"
 echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
 echo "[engram-mxfp4] running: python -m pytest -q -c tests/layers/pytest.ini --rootdir=tests/layers --confcutdir=tests/layers -p no:cacheprovider --engram-mxfp4-stdlib-only $SELFCHECK $MINIMAL $CI_ENTRY $*"
@@ -78,10 +87,11 @@ python -m pytest -q \
     --engram-mxfp4-stdlib-only \
     "$SELFCHECK" "$MINIMAL" "$CI_ENTRY" "$@"
 pytest_status=$?
-if [ "$pytest_status" -ne 0 ]; then
-    echo "[engram-mxfp4] status=pytest-failed (exit $pytest_status)"
-    exit "$pytest_status"
+if [ "$pytest_status" -eq 0 ]; then
+    echo "[engram-mxfp4] status=pytest-passed"
+    exit 0
 fi
 
-echo "[engram-mxfp4] status=pytest-passed"
-exit 0
+# pytest ran but failed. Fall back to the pure-stdlib self-check so the CI
+# dimension still produces a decidable result instead of a bare non-zero exit.
+run_stdlib_selfcheck "pytest failed (exit $pytest_status)"
