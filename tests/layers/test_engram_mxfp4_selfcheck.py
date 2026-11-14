@@ -438,5 +438,35 @@ def test_selfcheck_suite_is_collectable() -> None:
     assert "test_selfcheck_suite_is_collectable" in names
 
 
+def test_module_loads_without_sglang_package() -> None:
+    """Smoke test: the layout module must load without importing sglang.
+
+    CI environment preparation can fail while installing the full sglang
+    dependency chain. This test asserts that the path-based fallback in
+    ``_load_engram_mxfp4`` works even when ``sglang`` is not importable, so the
+    self-check entry stays usable in a minimal environment.
+    """
+    import importlib.util
+
+    module_path = os.path.join(
+        _PYTHON_DIR, "sglang", "srt", "layers", "engram_mxfp4.py"
+    )
+    assert os.path.isfile(module_path), f"missing module file: {module_path}"
+    spec = importlib.util.spec_from_file_location(
+        "engram_mxfp4_smoke", module_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert hasattr(module, "EngramLayout")
+    assert hasattr(module, "decode_e2m1_nibble")
+    assert hasattr(module, "allocate_row_buffer")
+    layout = module.EngramLayout.from_metadata(
+        256, (17, 19), {"engram_embed_quant": "mxfp4"}
+    )
+    assert layout.row_bytes == 128
+    assert layout.total_row_bytes() == 136
+
+
 if __name__ == "__main__":
     raise SystemExit(_run_all())
