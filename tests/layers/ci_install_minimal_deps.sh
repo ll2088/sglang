@@ -62,3 +62,16 @@ fi
 # `pip install sglang`; ci_run_engram_mxfp4.sh is the only supported entry
 # point.
 exec bash tests/layers/ci_run_engram_mxfp4.sh "$@"
+
+# Delegate to the single minimal-dependency CI entry point. It installs only
+# pytest with --no-deps (never resolving the sglang dependency tree), runs
+# pytest with the minimal stdlib-only config, and falls back to the pure
+# stdlib self-check when pytest is unavailable. Keeping the install logic in
+# exactly one place avoids the duplicated/unreachable fallback branches that
+# previously let CI fall back to `pip install -e python` and resolve the full
+# sglang dependency tree.
+#
+# This script must never run `pip install -e python`, `pip install -e .` or
+# `pip install sglang`; ci_run_engram_mxfp4.sh is the only supported entry
+# point.
+exec bash tests/layers/ci_run_engram_mxfp4.sh "$@"

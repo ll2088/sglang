@@ -101,6 +101,28 @@ def test_ci_entry_installs_only_pytest_with_no_deps() -> None:
     assert "pip install -e" not in text
 
 
+def test_ci_entry_never_imports_sglang_package() -> None:
+    """The CI entry must not import the sglang package.
+
+    Importing ``sglang`` would resolve the full dependency tree (torch,
+    triton, py-spy, pybase64, pydantic, pyzmq, quack-kernels, regex, ...),
+    which is exactly the CI environment preparation failure this entry point
+    exists to avoid. The layout module and the self-check are loaded by file
+    path instead.
+    """
+    text = _read(_CI_ENTRY_PATH)
+    assert "import sglang" not in text
+    assert "from sglang" not in text
+
+
+def test_ci_entry_sets_pythonpath_before_pytest() -> None:
+    """The CI entry must export PYTHONPATH=python before running pytest."""
+    text = _read(_CI_ENTRY_PATH)
+    assert "export PYTHONPATH=" in text
+    assert "python" in text
+    assert text.index("export PYTHONPATH=") < text.index("python -m pytest")
+
+
 def test_ci_entry_falls_back_to_stdlib_selfcheck() -> None:
     """The CI entry must fall back to the stdlib self-check and exit 0."""
     text = _read(_CI_ENTRY_PATH)
