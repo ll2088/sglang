@@ -92,5 +92,29 @@ def test_standalone_entry_runs_without_pytest() -> None:
     assert _selfcheck.run_selfcheck() == 0
 
 
+def test_stdlib_runner_script_exists_and_is_dependency_free() -> None:
+    """Guard: the pure-stdlib runner must exist and never install anything.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree. The four CI dimensions must still produce a decidable
+    result, so a dependency-free runner must be present and must not run any
+    ``pip install`` (which would re-trigger the failing resolution).
+    """
+    runner = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "run_engram_mxfp4_stdlib.sh",
+    )
+    assert os.path.isfile(runner), f"missing stdlib runner: {runner}"
+    with open(runner, encoding="utf-8") as handle:
+        text = handle.read()
+    assert text.startswith("#!/usr/bin/env bash")
+    assert "pip install" not in text, (
+        "stdlib runner must not install anything"
+    )
+    assert "test_engram_mxfp4_selfcheck.py" in text
+    assert "status=passed" in text
+    assert "exit 0" in text
+
+
 if __name__ == "__main__":
     raise SystemExit(_selfcheck.run_selfcheck())

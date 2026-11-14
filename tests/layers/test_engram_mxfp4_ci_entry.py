@@ -154,6 +154,9 @@ def test_ci_entry_script_installs_pytest_without_deps() -> None:
         text = handle.read()
     assert "--no-deps" in text, "CI entry must install pytest with --no-deps"
     assert "PYTHONPATH" in text, "CI entry must set PYTHONPATH"
+    assert "pip_status" in text, (
+        "CI entry must capture the pip exit code explicitly"
+    )
     assert "pip install -e" not in text, (
         "CI entry must not install the sglang package"
     )
@@ -203,6 +206,9 @@ def test_ci_entry_script_is_executable_and_self_contained() -> None:
     )
     assert "set -uo pipefail" in text, (
         "CI entry must fail fast on unset variables and pipe errors"
+    )
+    assert "set -euo pipefail" not in text, (
+        "CI entry must not use set -e, which would skip the fallback"
     )
     assert "python -m pip install --no-deps" in text, (
         "CI entry must install pytest with --no-deps"
