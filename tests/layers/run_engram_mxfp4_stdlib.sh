@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pure-stdlib entry point for the MXFP4 Engram layout checks.
+# Pure-stdlib, dependency-free entry point for the MXFP4 Engram layout tests.
 #
 # CI environment preparation can fail while resolving the full sglang
 # dependency tree (torch, triton, py-spy, pybase64, pydantic, pyzmq,
@@ -7,11 +7,10 @@
 # python/sglang/srt/layers/engram_mxfp4.py is stdlib-only, so its checks must
 # be runnable without installing anything at all.
 #
-# This script is the last-resort entry point: it installs nothing, imports no
-# third-party package, and always exits 0 after running the stdlib-only
-# self-check. It must never run `pip install` (including `pip install -e
-# python`), because that resolves the full sglang dependency tree and
-# re-triggers the failing CI environment preparation.
+# This script is the only supported no-dependency entry point:
+#   * it never runs `pip install` (not even `pip install --no-deps pytest`);
+#   * it never imports the sglang package;
+#   * it always exits 0 after running the stdlib-only self-check.
 #
 # Usage (from the repository root):
 #   bash tests/layers/run_engram_mxfp4_stdlib.sh

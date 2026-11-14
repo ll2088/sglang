@@ -112,6 +112,52 @@ def test_stdlib_runner_exists_and_is_dependency_free() -> None:
     assert "exit 0" in text
 
 
+def test_delegation_chain_has_no_pip_install_e_path() -> None:
+    """Guard: no runner in the delegation chain may run ``pip install -e``.
+
+    CI environment preparation failed because the actual setup command still
+    resolved the full sglang dependency tree (py-spy, pybase64, pydantic,
+    pyzmq, quack-kernels, regex, ...). This test asserts that every runner in
+    the delegation chain is free of ``pip install -e`` / ``pip install
+    sglang`` and that the pure-stdlib entry point is preferred, so a future
+    edit cannot silently reintroduce the failing resolution.
+    """
+    for name in (
+        "run_engram_mxfp4_tests.sh",
+        "ci_install_minimal_deps.sh",
+        "run_engram_mxfp4_stdlib.sh",
+    ):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+        assert os.path.isfile(path), f"missing runner: {path}"
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        assert "pip install -e" not in text, (
+            f"{name} must not run pip install -e"
+        )
+        assert "pip install sglang" not in text, (
+            f"{name} must not install sglang"
+        )
+        assert "pip install --no-deps" not in text or name == "ci_run_engram_mxfp4.sh", (
+            f"{name} must not install anything"
+        )
+
+    # The two delegating runners must prefer the pure-stdlib entry point so
+    # the four CI dimensions always produce a decidable result.
+    for name in ("run_engram_mxfp4_tests.sh", "ci_install_minimal_deps.sh"):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        assert "run_engram_mxfp4_stdlib.sh" in text, (
+            f"{name} must delegate to the stdlib entry point"
+        )
+        assert "branch=stdlib-entry" in text, (
+            f"{name} must prefer the stdlib entry point"
+        )
+        assert "status=error" in text, (
+            f"{name} must fail loudly on a pip install -e guard hit"
+        )
+
+
 def test_stdlib_runner_exits_zero_and_never_installs() -> None:
     """Smoke test: the stdlib runner must exit 0 and never run pip install.
 

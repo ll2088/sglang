@@ -24,6 +24,20 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# Hard guard: this preparation script must never resolve the full sglang
+# dependency tree. If a future edit reintroduces `pip install -e python` (or
+# any sglang install) into this script, fail immediately instead of silently
+# pulling in py-spy, pybase64, pydantic, pyzmq, quack-kernels, regex, ... and
+# failing during CI environment preparation.
+if grep -qE 'pip[[:space:]]+install[[:space:]]+(-e|--editable)[[:space:]]+(\.|python)' "${BASH_SOURCE[0]}"; then
+    echo "[engram-mxfp4] status=error: ci_install_minimal_deps.sh must not run pip install -e" >&2
+    exit 1
+fi
+if grep -qE 'pip[[:space:]]+install[[:space:]]+sglang' "${BASH_SOURCE[0]}"; then
+    echo "[engram-mxfp4] status=error: ci_install_minimal_deps.sh must not install sglang" >&2
+    exit 1
+fi
+
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}python"
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -50,17 +64,23 @@ run_stdlib_selfcheck() {
     exit 0
 }
 
-# The single minimal-dependency CI entry point is the only supported path.
-# If it is missing (for example because CI environment preparation failed
-# before the checkout was complete), fall back to the pure-stdlib self-check
-# instead of exiting non-zero, and never fall back to `pip install -e python`,
-# which would resolve the full sglang dependency tree and re-trigger the
-# failing environment preparation.
+# The pure-stdlib entry point is the only supported path. It installs
+# nothing and never resolves the sglang dependency tree, so CI environment
+# preparation cannot fail here. Prefer it over any pytest-based path so the
+# four CI dimensions always produce a decidable result.
+if [ -f tests/layers/run_engram_mxfp4_stdlib.sh ]; then
+    echo "[engram-mxfp4] branch=stdlib-entry"
+    exec bash tests/layers/run_engram_mxfp4_stdlib.sh
+fi
+
+# The single minimal-dependency CI entry point is the only supported pytest
+# path. If it is missing (for example because CI environment preparation
+# failed before the checkout was complete), fall back to the pure-stdlib
+# self-check instead of exiting non-zero, and never fall back to
+# `pip install -e python`, which would resolve the full sglang dependency
+# tree and re-trigger the failing environment preparation.
 if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
     echo "[engram-mxfp4] branch=missing-ci-entry"
-    if [ -f tests/layers/run_engram_mxfp4_stdlib.sh ]; then
-        exec bash tests/layers/run_engram_mxfp4_stdlib.sh
-    fi
     run_stdlib_selfcheck "missing ci_run_engram_mxfp4.sh"
 fi
 
