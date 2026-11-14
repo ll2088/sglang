@@ -86,6 +86,24 @@ pre-seeds a `sglang` stub in `pytest_configure`, so even if the repository
 root configuration is loaded, no import chain can pull in the full sglang
 dependency tree.
 
+### Why the minimal-dependency entry must be the CI command
+
+If CI still resolves the full sglang dependency tree (py-spy, pybase64,
+pydantic, quack-kernels, regex, ...), the minimal-dependency entry point is
+not being called. `tests/layers/ci_run_engram_mxfp4.sh` is the single command
+CI must run for these tests: it sets `PYTHONPATH=python` first, installs only
+pytest with `--no-deps`, runs pytest with `-c tests/layers/pytest.ini`,
+`--rootdir=tests/layers`, `--confcutdir=tests/layers` and
+`--engram-mxfp4-stdlib-only`, and falls back to the pure-stdlib self-check
+when pytest cannot be installed. It never installs or imports the sglang
+package, so it cannot trigger the full dependency resolution.
+
+The runner `tests/layers/run_engram_mxfp4_tests.sh` delegates to that entry
+point and does not run pytest from the repository root, so there is exactly
+one code path and no duplicated/unreachable fallback branch. Both scripts
+print a final `[engram-mxfp4] status=...` line (`pytest`, `pytest-passed`,
+`pytest-failed`, or `stdlib-selfcheck`) so CI logs show which path was taken.
+
 ## Performance baseline
 
 The lookup path can be benchmarked without the full dependency tree. The

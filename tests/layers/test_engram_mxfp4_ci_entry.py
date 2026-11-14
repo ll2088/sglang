@@ -112,5 +112,58 @@ def test_ci_entry_does_not_import_sglang() -> None:
     assert "sglang" not in sys.modules
 
 
+def test_ci_runner_uses_minimal_deps_entry() -> None:
+    """Guard: the runner must delegate to the minimal-dependency CI entry.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree (py-spy, pybase64, pydantic, quack-kernels, ...). The
+    runner must not run pytest directly from the repository root, because that
+    loads the root configuration and can trigger the full dependency install.
+    It must delegate to ``ci_run_engram_mxfp4.sh``, which installs only pytest
+    with ``--no-deps`` and otherwise falls back to the stdlib self-check.
+    """
+    runner = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "run_engram_mxfp4_tests.sh",
+    )
+    assert os.path.isfile(runner), f"missing runner: {runner}"
+    with open(runner, encoding="utf-8") as handle:
+        text = handle.read()
+    assert "ci_run_engram_mxfp4.sh" in text, (
+        "runner must delegate to the minimal-dependency CI entry"
+    )
+    assert "pip install -e" not in text, (
+        "runner must not install the sglang package"
+    )
+
+
+def test_ci_entry_script_installs_pytest_without_deps() -> None:
+    """Guard: the CI entry must install pytest with ``--no-deps``.
+
+    Without ``--no-deps`` pip resolves sglang's install_requires (py-spy,
+    pybase64, pydantic, quack-kernels, ...), which is exactly the resolution
+    that fails during CI environment preparation. The entry must also set
+    PYTHONPATH before installing and must expose a stdlib fallback.
+    """
+    entry = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "ci_run_engram_mxfp4.sh",
+    )
+    assert os.path.isfile(entry), f"missing CI entry: {entry}"
+    with open(entry, encoding="utf-8") as handle:
+        text = handle.read()
+    assert "--no-deps" in text, "CI entry must install pytest with --no-deps"
+    assert "PYTHONPATH" in text, "CI entry must set PYTHONPATH"
+    assert "pip install -e" not in text, (
+        "CI entry must not install the sglang package"
+    )
+    assert "run_stdlib_selfcheck" in text, (
+        "CI entry must expose a stdlib self-check fallback"
+    )
+    assert "status=" in text, (
+        "CI entry must log which path was taken"
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(_selfcheck.run_selfcheck())

@@ -40,20 +40,11 @@ if [ "${1:-}" = "--bench" ]; then
     exec python tests/layers/bench_engram_mxfp4.py "$@"
 fi
 
-if python -c "import pytest" >/dev/null 2>&1; then
-    exec python -m pytest -q \
-        -c tests/layers/pytest.ini \
-        --rootdir=tests/layers \
-        --confcutdir=tests/layers \
-        -p no:cacheprovider \
-        --engram-mxfp4-stdlib-only \
-        "$@" \
-        "$SELFCHECK" "$MINIMAL" "$CI_ENTRY"
-fi
-
-# pytest is not installed: delegate to the single minimal-dependency CI entry
-# point, which installs only pytest --no-deps and otherwise falls back to the
-# stdlib-only self-check. This keeps the runner usable in a minimal CI
-# environment without resolving the full sglang dependency tree. The fallback
-# lives inside ci_run_engram_mxfp4.sh, so there is exactly one code path here.
+# Delegate to the single minimal-dependency CI entry point. It sets
+# PYTHONPATH first, installs only pytest with --no-deps (never resolving the
+# sglang dependency tree), runs pytest with the minimal stdlib-only config,
+# and falls back to the pure-stdlib self-check when pytest is unavailable.
+# Keeping exactly one code path here avoids the duplicated/unreachable
+# fallback branches that previously let CI fall back to `pip install -e
+# python` and resolve the full sglang dependency tree.
 exec bash tests/layers/ci_run_engram_mxfp4.sh "$@"
