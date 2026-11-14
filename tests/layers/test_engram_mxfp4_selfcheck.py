@@ -455,6 +455,17 @@ def run_selfcheck() -> int:
     return _run_all()
 
 
+def run_selfcheck() -> int:
+    """Run every stdlib-only self-check case and return a process exit code.
+
+    This is the dependency-free entry point used by CI when the full sglang
+    dependency chain (torch, triton, ...) cannot be installed. It never
+    imports pytest, torch, triton or sglang, so it stays runnable during a
+    minimal environment preparation.
+    """
+    return _run_all()
+
+
 def _run_all() -> int:
     tests = _collect_tests()
     failures = []
