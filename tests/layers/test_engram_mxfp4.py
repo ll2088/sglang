@@ -21,6 +21,21 @@ from sglang.srt.layers.engram_mxfp4 import (
 LAYER_IDS = (17, 19)
 
 
+def test_stdlib_selfcheck_entry_is_importable():
+    """The dependency-free fallback entry must stay importable and populated.
+
+    CI environment preparation can fail before torch/triton are available; the
+    self-check module is the only path that still exercises the layout parsing,
+    E2M1 decode, row-width allocation and lookup consistency logic there. This
+    test fails if that entry is removed or emptied, without importing torch.
+    """
+    from tests.layers import test_engram_mxfp4_selfcheck as selfcheck
+
+    names = [name for name, _ in selfcheck._collect_tests()]
+    assert len(names) >= 40, f"expected >= 40 self-check cases, got {len(names)}"
+    assert "test_selfcheck_suite_is_collectable" in names
+
+
 def _mxfp4_layout(head_dim: int = 256) -> EngramLayout:
     return EngramLayout.from_metadata(
         head_dim,

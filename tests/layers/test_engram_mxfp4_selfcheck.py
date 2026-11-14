@@ -374,12 +374,16 @@ def test_dequantize_applies_ue8m0_scale_per_block() -> None:
     assert abs(out[layout.block_size] - 1.0) < 1e-6
 
 
-def _run_all() -> int:
-    tests = [
+def _collect_tests() -> list[tuple[str, object]]:
+    return [
         (name, obj)
         for name, obj in sorted(globals().items())
         if name.startswith("test_") and callable(obj)
     ]
+
+
+def _run_all() -> int:
+    tests = _collect_tests()
     failures = []
     for name, fn in tests:
         try:
@@ -390,6 +394,18 @@ def _run_all() -> int:
         print(f"FAIL {name}: {exc!r}")
     print(f"{len(tests) - len(failures)}/{len(tests)} self-check cases passed")
     return 1 if failures else 0
+
+
+def test_selfcheck_suite_is_collectable() -> None:
+    """Guard: the stdlib-only suite must expose a non-trivial case count.
+
+    This keeps the fallback entry meaningful when pytest is available but the
+    heavy dependency set (torch, triton, ...) is not, and it fails loudly if a
+    future edit accidentally removes the self-check cases.
+    """
+    names = [name for name, _ in _collect_tests()]
+    assert len(names) >= 40, f"expected >= 40 self-check cases, got {len(names)}"
+    assert "test_selfcheck_suite_is_collectable" in names
 
 
 if __name__ == "__main__":
