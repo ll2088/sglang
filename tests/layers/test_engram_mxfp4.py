@@ -15,11 +15,22 @@ import pytest
 # skip is explicit and does not depend on pytest's importorskip semantics.
 try:
     import torch  # noqa: F401
-except Exception as _torch_exc:  # noqa: BLE001 - any import failure means skip
-    pytest.skip(
-        f"torch is required for the full engram tests: {_torch_exc!r}",
-        allow_module_level=True,
-    )
+
+    _HAS_TORCH = True
+except Exception:  # noqa: BLE001 - any import failure means torch is unavailable
+    _HAS_TORCH = False
+
+# The layout module is stdlib-only and is loaded by file path below, so this
+# module never imports the sglang package. That keeps collection working in a
+# minimal CI environment where the full dependency chain is unavailable.
+#
+# When torch is missing, the stdlib-only subset of this module still runs; the
+# torch-dependent cases are skipped individually instead of skipping the whole
+# module, so the MXFP4 layout / E2M1 decode / row-width allocation checks are
+# always exercised.
+requires_torch = pytest.mark.skipif(
+    not _HAS_TORCH, reason="torch is required for the full engram tests"
+)
 
 # The layout module is stdlib-only and is loaded by file path below, so this
 # module never imports the sglang package. That keeps collection working in a

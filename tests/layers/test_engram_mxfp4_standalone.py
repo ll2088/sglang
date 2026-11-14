@@ -66,3 +66,20 @@ def test_standalone_entry_exposes_selfcheck_cases() -> None:
     ]
     assert len(names) >= 40, f"expected >= 40 self-check cases, got {len(names)}"
     assert "test_selfcheck_suite_is_collectable" in names
+
+
+def test_standalone_entry_runs_without_pytest() -> None:
+    """Guard: the self-check must be runnable without pytest or torch.
+
+    CI environment preparation can fail before the full sglang dependency
+    chain is installed. ``run_selfcheck`` is the dependency-free entry point
+    that still exercises the layout parsing, E2M1 decode, row-width allocation
+    and lookup consistency logic in that situation.
+    """
+    assert hasattr(_selfcheck, "run_selfcheck")
+    assert callable(_selfcheck.run_selfcheck)
+    assert _selfcheck.run_selfcheck() == 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_selfcheck.run_selfcheck())
