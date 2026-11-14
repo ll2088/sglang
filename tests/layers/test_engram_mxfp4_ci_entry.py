@@ -193,6 +193,32 @@ def test_stdlib_entry_exists_and_is_executable() -> None:
     )
 
 
+def test_runner_prefers_stdlib_entry_when_ci_entry_missing() -> None:
+    """The runner must prefer the stdlib entry when the CI entry is missing.
+
+    CI environment preparation can fail before the checkout is complete, so
+    the runner must delegate to the dedicated stdlib entry point (which never
+    installs anything and always exits 0) instead of falling into any install
+    branch.
+    """
+    text = _read(_RUNNER_PATH)
+    assert "run_engram_mxfp4_stdlib.sh" in text
+    assert "exec bash tests/layers/run_engram_mxfp4_stdlib.sh" in text
+
+
+def test_install_script_prefers_stdlib_entry_when_ci_entry_missing() -> None:
+    """The minimal-deps script must prefer the stdlib entry when missing.
+
+    CI environment preparation can fail before the checkout is complete, so
+    the script must delegate to the dedicated stdlib entry point (which never
+    installs anything and always exits 0) instead of falling into any install
+    branch.
+    """
+    text = _read(_INSTALL_PATH)
+    assert "run_engram_mxfp4_stdlib.sh" in text
+    assert "exec bash tests/layers/run_engram_mxfp4_stdlib.sh" in text
+
+
 def test_stdlib_entry_never_installs_anything() -> None:
     """The stdlib entry must not install anything at all.
 

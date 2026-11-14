@@ -53,6 +53,13 @@ if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
     # non-zero, and never fall back to `pip install -e python`, which would
     # resolve the full sglang dependency tree and re-trigger the failing
     # environment preparation.
+    #
+    # Prefer the dedicated stdlib entry point when it is present; it is the
+    # dependency-free path CI must use when the full sglang dependency tree
+    # cannot be resolved. It never installs anything and always exits 0.
+    if [ -f tests/layers/run_engram_mxfp4_stdlib.sh ]; then
+        exec bash tests/layers/run_engram_mxfp4_stdlib.sh
+    fi
     run_stdlib_selfcheck "missing ci_run_engram_mxfp4.sh"
 fi
 
