@@ -7,9 +7,13 @@ re-exports its ``test_*`` functions so pytest collects them directly.
 
 Run with::
 
-    python -m pytest -q tests/layers/test_engram_mxfp4_standalone.py
+    PYTHONPATH=python python -m pytest -q --confcutdir=tests/layers \
+        -p no:cacheprovider tests/layers/test_engram_mxfp4_standalone.py
 
-No third-party dependency beyond pytest is required.
+No third-party dependency beyond pytest is required. The ``--confcutdir``
+flag keeps the repository root ``conftest.py`` (which may import ``sglang``)
+out of collection, so this entry point stays runnable when the full sglang
+dependency tree cannot be installed during CI environment preparation.
 """
 
 from __future__ import annotations

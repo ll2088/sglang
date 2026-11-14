@@ -13,10 +13,14 @@ is stdlib-only, so the tests for it must not require that install.
 
 ## Running without installing sglang
 
-Point `PYTHONPATH` at the source directory and run the self-check directly:
+Point `PYTHONPATH` at the source directory and run the self-check directly.
+Use `--confcutdir=tests/layers` so the repository root `conftest.py` (which
+may import `sglang`) is not loaded, and `-p no:cacheprovider` to avoid
+writing cache files in a read-only CI checkout:
 
 ```sh
-PYTHONPATH=python python -m pytest -q tests/layers/test_engram_mxfp4_selfcheck.py
+PYTHONPATH=python python -m pytest -q --confcutdir=tests/layers \
+    -p no:cacheprovider tests/layers/test_engram_mxfp4_selfcheck.py
 ```
 
 Or run the stdlib-only self-check without pytest at all:
@@ -27,7 +31,9 @@ PYTHONPATH=python python tests/layers/test_engram_mxfp4_selfcheck.py
 
 Both commands load `engram_mxfp4.py` by file path and never import the
 `sglang` package, so they work even when `pip install -e python` fails during
-dependency resolution.
+dependency resolution. CI must use these commands instead of any step that
+runs `pip install -e python` or otherwise resolves the full sglang dependency
+tree (py-spy, pybase64, pydantic, quack-kernels, ...).
 
 ## Running the full suite (torch available)
 

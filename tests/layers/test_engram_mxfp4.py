@@ -1,4 +1,14 @@
-"""Unit tests for MXFP4-packed Engram layout parsing, E2M1 decode, and allocation."""
+"""Unit tests for MXFP4-packed Engram layout parsing, E2M1 decode, and allocation.
+
+Run without installing the full sglang dependency tree::
+
+    PYTHONPATH=python python -m pytest -q --confcutdir=tests/layers \
+        -p no:cacheprovider tests/layers/test_engram_mxfp4.py
+
+The ``--confcutdir`` flag keeps the repository root ``conftest.py`` (which
+may import ``sglang``) out of collection, so these tests stay runnable when
+CI environment preparation cannot resolve the full sglang dependency tree.
+"""
 
 from __future__ import annotations
 

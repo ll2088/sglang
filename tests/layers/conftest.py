@@ -34,3 +34,17 @@ def pytest_configure(config):  # noqa: ARG001 - pytest hook signature
     """
     if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
         sys.path.insert(0, _PYTHON_DIR)
+
+
+def pytest_collection_modifyitems(config, items):  # noqa: ARG001
+    """Keep the stdlib-only MXFP4 tests runnable without the sglang tree.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree. The MXFP4 layout module and its self-check are
+    stdlib-only, so the tests under ``tests/layers`` must not require that
+    install. This hook is a no-op for other test directories and only
+    documents the intent; the actual dependency-free execution is achieved by
+    running pytest with ``PYTHONPATH=python`` and ``--confcutdir=tests/layers``
+    so the repository root conftest (which may import sglang) is not loaded.
+    """
+    return None
