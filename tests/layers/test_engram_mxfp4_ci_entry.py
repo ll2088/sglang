@@ -157,11 +157,17 @@ def test_ci_entry_script_installs_pytest_without_deps() -> None:
     assert "pip install -e" not in text, (
         "CI entry must not install the sglang package"
     )
+    assert "pip install sglang" not in text, (
+        "CI entry must not install the sglang package"
+    )
     assert "run_stdlib_selfcheck" in text, (
         "CI entry must expose a stdlib self-check fallback"
     )
     assert "status=" in text, (
         "CI entry must log which path was taken"
+    )
+    assert "exit 0" in text, (
+        "CI entry must exit 0 on the stdlib fallback path"
     )
 
 

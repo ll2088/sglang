@@ -47,4 +47,8 @@ fi
 # Keeping exactly one code path here avoids the duplicated/unreachable
 # fallback branches that previously let CI fall back to `pip install -e
 # python` and resolve the full sglang dependency tree.
+#
+# This runner must never run pytest directly from the repository root and
+# must never install the sglang package; ci_run_engram_mxfp4.sh is the only
+# supported entry point.
 exec bash tests/layers/ci_run_engram_mxfp4.sh "$@"
