@@ -35,12 +35,18 @@ SELFCHECK="tests/layers/test_engram_mxfp4_selfcheck.py"
 MINIMAL="tests/layers/test_engram_mxfp4_minimal.py"
 CI_ENTRY="tests/layers/test_engram_mxfp4_ci_entry.py"
 
+if [ "${1:-}" = "--bench" ]; then
+    shift
+    exec python tests/layers/bench_engram_mxfp4.py "$@"
+fi
+
 if python -c "import pytest" >/dev/null 2>&1; then
     exec python -m pytest -q \
         -c tests/layers/pytest.ini \
         --rootdir=tests/layers \
         --confcutdir=tests/layers \
         -p no:cacheprovider \
+        --engram-mxfp4-stdlib-only \
         "$@" \
         "$SELFCHECK" "$MINIMAL" "$CI_ENTRY"
 fi

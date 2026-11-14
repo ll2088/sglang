@@ -37,6 +37,15 @@ def pytest_addoption(parser):  # noqa: ARG001 - pytest hook signature
         "Run the stdlib-only Engram MXFP4 tests without the sglang tree.",
         default="true",
     )
+    parser.addoption(
+        "--engram-mxfp4-stdlib-only",
+        action="store_true",
+        default=False,
+        help=(
+            "Run only the stdlib-only Engram MXFP4 tests and never import "
+            "the sglang package (used by the minimal CI entry point)."
+        ),
+    )
 
 
 def pytest_configure(config):  # noqa: ARG001 - pytest hook signature
@@ -52,6 +61,13 @@ def pytest_configure(config):  # noqa: ARG001 - pytest hook signature
     """
     if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
         sys.path.insert(0, _PYTHON_DIR)
+
+    # When the minimal CI entry point is used, make sure the sglang package
+    # is never imported: the layout module and the self-check are loaded by
+    # file path, so any ``import sglang`` here would defeat the purpose of
+    # the dependency-free path and re-trigger the full dependency install.
+    if getattr(config.option, "engram_mxfp4_stdlib_only", False):
+        sys.modules.setdefault("sglang", None)
 
 
 def pytest_collection_modifyitems(config, items):  # noqa: ARG001

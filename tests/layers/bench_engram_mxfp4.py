@@ -1,20 +1,19 @@
-"""Dependency-free performance baseline for the MXFP4 Engram layout module.
+"""Dependency-free benchmark for the MXFP4 Engram lookup path.
 
-CI environment preparation can fail while resolving the full sglang
- dependency tree (torch, triton, ...). The layout module
-``python/sglang/srt/layers/engram_mxfp4.py`` is stdlib-only, so its lookup
-path can be benchmarked without that install.
-
-This script measures the median latency of the reference lookup path for
-both the FP8 and MXFP4 layouts and prints a comparison, so the performance
-acceptance criterion ("median latency not more than 10% slower than the
-baseline") has a concrete number instead of an empty metric.
+This script measures the median lookup latency for the FP8 and MXFP4
+layouts using only the standard library, so it can run in the same minimal
+CI environment as the layout tests (no torch, no triton, no sglang). It
+prints the median latency for both layouts and fails if the packed path is
+more than 10% slower than the FP8 baseline, matching the acceptance
+criterion for the performance dimension.
 
 Run with::
 
     PYTHONPATH=python python tests/layers/bench_engram_mxfp4.py
 
-It never imports sglang, torch or triton.
+or via the bundled runner::
+
+    bash tests/layers/run_engram_mxfp4_tests.sh --bench
 """
 
 from __future__ import annotations
@@ -25,9 +24,7 @@ import statistics
 import sys
 import time
 
-_REPO_ROOT = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _PYTHON_DIR = os.path.join(_REPO_ROOT, "python")
 if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
     sys.path.insert(0, _PYTHON_DIR)
@@ -37,12 +34,8 @@ _LAYOUT_PATH = os.path.join(
 )
 
 
-def _load_layout_module():
-    """Load the stdlib-only layout module by file path.
-
-    Loading by path avoids importing the ``sglang`` package, which would pull
-    in the full dependency tree this benchmark exists to avoid.
-    """
+def _load_layout():
+    """Load the stdlib-only layout module by file path (never imports sglang)."""
     if not os.path.isfile(_LAYOUT_PATH):
         raise ImportError(f"engram_mxfp4 module not found at {_LAYOUT_PATH!r}")
     spec = importlib.util.spec_from_file_location("engram_mxfp4_bench", _LAYOUT_PATH)
@@ -53,28 +46,29 @@ def _load_layout_module():
     return module
 
 
-_layout = _load_layout_module()
+_layout = _load_layout()
 
 LAYER_IDS = (17, 19)
 HEAD_DIM = 256
 ROWS = 4096
 LOOKUPS = 512
-REPEATS = 7
+REPEATS = 5
+MAX_SLOWDOWN = 1.10
 
 
 def _make_tables(layout):
-    """Build a small table pair for the given layout."""
+    """Build a small deterministic table for the given layout."""
     if layout.packed_fp4:
         row = _layout.pack_e2m1([1.0] * layout.head_dim)
     else:
-        row = [1] * layout.row_bytes
+        row = [1] * layout.head_dim
+    scales = [127] * layout.num_blocks
     table = [row] * ROWS
-    scale_table = [[127] * layout.num_blocks] * ROWS
-    ids = [i % ROWS for i in range(LOOKUPS)]
-    return table, scale_table, ids
+    scale_table = [scales] * ROWS
+    return table, scale_table
 
 
-def _time_lookups(layout, table, scale_table, ids) -> float:
+def _time_lookup(layout, table, scale_table, ids):
     """Return the median lookup latency in microseconds over REPEATS runs."""
     samples = []
     for _ in range(REPEATS):
@@ -90,26 +84,36 @@ def main() -> int:
         HEAD_DIM, LAYER_IDS, {"engram_embed_quant": "mxfp4"}
     )
 
-    fp8_table, fp8_scales, ids = _make_tables(fp8)
-    mxfp4_table, mxfp4_scales, _ = _make_tables(mxfp4)
+    ids = [i % ROWS for i in range(LOOKUPS)]
+    fp8_table, fp8_scales = _make_tables(fp8)
+    mxfp4_table, mxfp4_scales = _make_tables(mxfp4)
 
-    fp8_us = _time_lookups(fp8, fp8_table, fp8_scales, ids)
-    mxfp4_us = _time_lookups(mxfp4, mxfp4_table, mxfp4_scales, ids)
+    # Warm up both paths so the first-call overhead does not skew the median.
+    _layout.lookup_rows(fp8, fp8_table, fp8_scales, ids[:8])
+    _layout.lookup_rows(mxfp4, mxfp4_table, mxfp4_scales, ids[:8])
 
-    delta_pct = (mxfp4_us - fp8_us) / fp8_us * 100.0 if fp8_us else 0.0
+    fp8_us = _time_lookup(fp8, fp8_table, fp8_scales, ids)
+    mxfp4_us = _time_lookup(mxfp4, mxfp4_table, mxfp4_scales, ids)
 
-    print(f"rows={ROWS} head_dim={HEAD_DIM} lookups={LOOKUPS} repeats={REPEATS}")
     print(f"fp8   median lookup: {fp8_us:.2f} us")
     print(f"mxfp4 median lookup: {mxfp4_us:.2f} us")
-    print(f"mxfp4 vs fp8 delta: {delta_pct:+.2f}%")
+    print(
+        "row bytes: fp8="
+        f"{fp8.total_row_bytes()} mxfp4={mxfp4.total_row_bytes()}"
+    )
 
-    # The acceptance criterion is that the packed path is not more than 10%
-    # slower than the baseline. Report the verdict explicitly so CI logs carry
-    # a concrete performance number instead of an empty metric.
-    if delta_pct > 10.0:
-        print("PERF FAIL: mxfp4 lookup more than 10% slower than fp8 baseline")
+    if fp8_us <= 0:
+        print("baseline latency is not measurable", file=sys.stderr)
         return 1
-    print("PERF OK: mxfp4 lookup within 10% of fp8 baseline")
+    slowdown = mxfp4_us / fp8_us
+    print(f"mxfp4/fp8 ratio: {slowdown:.3f} (limit {MAX_SLOWDOWN:.2f})")
+    if slowdown > MAX_SLOWDOWN:
+        print(
+            f"packed path is {slowdown:.3f}x the baseline, above the "
+            f"{MAX_SLOWDOWN:.2f}x limit",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

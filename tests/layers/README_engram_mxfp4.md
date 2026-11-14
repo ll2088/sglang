@@ -56,6 +56,24 @@ bash tests/layers/ci_install_minimal_deps.sh
 bash tests/layers/run_engram_mxfp4_tests.sh
 ```
 
+### Single CI entry point
+
+CI must call `tests/layers/ci_run_engram_mxfp4.sh` instead of running pytest
+from the repository root. That script installs only pytest (with `--no-deps`)
+when pytest is missing, runs pytest with `-c tests/layers/pytest.ini`,
+`--rootdir=tests/layers`, `--confcutdir=tests/layers` and
+`--engram-mxfp4-stdlib-only`, and falls back to the pure-stdlib self-check
+when pytest cannot be installed. It never installs or imports the sglang
+package, so it does not trigger the full dependency resolution that fails
+during CI environment preparation:
+
+```sh
+bash tests/layers/ci_run_engram_mxfp4.sh
+```
+
+The script always prints a final `[engram-mxfp4] status=...` line so CI logs
+show whether the minimal pytest path or the stdlib fallback was used.
+
 ## Performance baseline
 
 The lookup path can be benchmarked without the full dependency tree. The
@@ -64,6 +82,12 @@ fails if the packed path is more than 10% slower than the baseline:
 
 ```sh
 PYTHONPATH=python python tests/layers/bench_engram_mxfp4.py
+```
+
+The bundled runner exposes the same benchmark through `--bench`:
+
+```sh
+bash tests/layers/run_engram_mxfp4_tests.sh --bench
 ```
 
 It sets `PYTHONPATH=python`, passes `-c tests/layers/pytest.ini`,
