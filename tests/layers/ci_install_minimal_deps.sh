@@ -73,6 +73,12 @@ if [ -f tests/layers/run_engram_mxfp4_stdlib.sh ]; then
     exec bash tests/layers/run_engram_mxfp4_stdlib.sh
 fi
 
+# The stdlib entry point is required: without it this preparation script
+# would have to fall back to a pytest path that may resolve the full sglang
+# dependency tree. Fail loudly instead of silently degrading.
+echo "[engram-mxfp4] status=error: missing run_engram_mxfp4_stdlib.sh" >&2
+exit 1
+
 # The single minimal-dependency CI entry point is the only supported pytest
 # path. If it is missing (for example because CI environment preparation
 # failed before the checkout was complete), fall back to the pure-stdlib

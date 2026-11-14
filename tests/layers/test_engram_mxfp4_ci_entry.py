@@ -112,6 +112,37 @@ def test_stdlib_runner_exists_and_is_dependency_free() -> None:
     assert "exit 0" in text
 
 
+def test_stdlib_runner_is_the_only_supported_entry() -> None:
+    """Guard: the delegating runners must require the stdlib entry point.
+
+    CI environment preparation failed because the actual setup command still
+    resolved the full sglang dependency tree. The delegating runners must
+    therefore prefer the pure-stdlib entry point and fail loudly when it is
+    missing, instead of silently falling back to a pytest path that may
+    resolve the full dependency tree.
+    """
+    for name in ("run_engram_mxfp4_tests.sh", "ci_install_minimal_deps.sh"):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+        assert os.path.isfile(path), f"missing runner: {path}"
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        assert "run_engram_mxfp4_stdlib.sh" in text, (
+            f"{name} must delegate to the stdlib entry point"
+        )
+        assert "branch=stdlib-entry" in text, (
+            f"{name} must prefer the stdlib entry point"
+        )
+        assert "missing run_engram_mxfp4_stdlib.sh" in text, (
+            f"{name} must fail loudly when the stdlib entry point is missing"
+        )
+        assert "pip install -e" not in text, (
+            f"{name} must not run pip install -e"
+        )
+        assert "pip install sglang" not in text, (
+            f"{name} must not install sglang"
+        )
+
+
 def test_delegation_chain_has_no_pip_install_e_path() -> None:
     """Guard: no runner in the delegation chain may run ``pip install -e``.
 
