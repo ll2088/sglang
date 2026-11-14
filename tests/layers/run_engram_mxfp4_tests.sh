@@ -55,4 +55,8 @@ fi
 # This runner must never run pytest directly from the repository root and
 # must never install the sglang package; ci_run_engram_mxfp4.sh is the only
 # supported entry point.
+#
+# CI must call this script (or ci_run_engram_mxfp4.sh directly) instead of
+# `pip install -e python`, which resolves the full sglang dependency tree and
+# fails during environment preparation.
 exec bash tests/layers/ci_run_engram_mxfp4.sh "$@"

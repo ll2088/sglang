@@ -169,6 +169,15 @@ def test_ci_entry_script_installs_pytest_without_deps() -> None:
     assert "exit 0" in text, (
         "CI entry must exit 0 on the stdlib fallback path"
     )
+    assert "--engram-mxfp4-stdlib-only" in text, (
+        "CI entry must pass the stdlib-only marker to pytest"
+    )
+    assert "--confcutdir=tests/layers" in text, (
+        "CI entry must skip the repository root conftest.py"
+    )
+    assert "--rootdir=tests/layers" in text, (
+        "CI entry must pin rootdir so the root config is not loaded"
+    )
 
 
 def test_ci_entry_never_resolves_sglang_dependencies() -> None:
