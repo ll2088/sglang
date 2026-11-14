@@ -2,21 +2,22 @@
 # Single minimal-dependency CI entry point for the MXFP4 Engram layout tests.
 #
 # CI environment preparation can fail while resolving the full sglang
-# dependency tree (torch, triton, py-spy, pybase64, pydantic, quack-kernels,
-# regex, ...). The layout module python/sglang/srt/layers/engram_mxfp4.py is
-# stdlib-only, so its tests must be runnable with only pytest installed and
-# without importing the sglang package.
+# dependency tree (torch, triton, py-spy, pybase64, pydantic, pyzmq,
+# quack-kernels, regex, ...). The layout module
+# python/sglang/srt/layers/engram_mxfp4.py is stdlib-only, so its tests must
+# be runnable with only pytest installed and without importing the sglang
+# package.
 #
-# This script is the ONLY supported entry point for these tests. It:
-#   * sets PYTHONPATH=python first,
-#   * installs only pytest with --no-deps (never resolving sglang deps),
-#   * runs pytest with the minimal stdlib-only config,
-#   * falls back to the pure-stdlib self-check when pytest is unavailable,
-#   * always prints a final [engram-mxfp4] status=... line and exits 0 on the
-#     stdlib fallback path.
-#
-# It never installs or imports the sglang package, so it cannot trigger the
-# full dependency resolution that fails during CI environment preparation.
+# This script is the ONLY supported CI entry point for these tests:
+#   * it never runs `pip install -e python`, `pip install -e .` or
+#     `pip install sglang`, so it cannot trigger the full dependency
+#     resolution that fails during CI environment preparation;
+#   * it sets PYTHONPATH=python first;
+#   * it runs pytest with -c tests/layers/pytest.ini, --rootdir=tests/layers,
+#     --confcutdir=tests/layers and --engram-mxfp4-stdlib-only, so the
+#     repository root conftest.py (which may import sglang) is not loaded;
+#   * it falls back to the pure-stdlib self-check and exits 0 when pytest is
+#     unavailable.
 #
 # Usage (from the repository root):
 #   bash tests/layers/ci_run_engram_mxfp4.sh
@@ -46,38 +47,39 @@ run_stdlib_selfcheck() {
     exit 0
 }
 
-# If the stdlib self-check is missing (for example because CI environment
-# preparation failed before the checkout was complete), there is nothing to
-# run; report it and exit 0 so the four CI dimensions stay decidable instead
-# of failing on an unrelated setup error.
 if [ ! -f "$SELFCHECK" ]; then
     echo "[engram-mxfp4] status=stdlib-selfcheck (missing $SELFCHECK)"
     exit 0
 fi
 
-# Try to install only pytest with --no-deps. This never resolves sglang's
-# install_requires (py-spy, pybase64, pydantic, quack-kernels, regex, ...),
-# which is exactly the resolution that fails during CI environment
-# preparation. The exit code is captured explicitly so a failed install falls
-# through to the stdlib self-check instead of aborting the script.
-pip_status=0
+# Install only pytest with --no-deps when it is missing. This never resolves
+# the sglang dependency tree, so it cannot re-trigger the failing environment
+# preparation. If the install fails, fall back to the stdlib self-check.
 if ! python -c "import pytest" >/dev/null 2>&1; then
     echo "[engram-mxfp4] installing pytest with --no-deps"
-    python -m pip install --no-deps pytest
-    pip_status=$?
-fi
-
-if [ "$pip_status" -ne 0 ]; then
-    run_stdlib_selfcheck "pytest install failed (exit=$pip_status)"
+    if ! python -m pip install --no-deps pytest; then
+        run_stdlib_selfcheck "pytest install failed"
+    fi
 fi
 
 if ! python -c "import pytest" >/dev/null 2>&1; then
     run_stdlib_selfcheck "pytest unavailable"
 fi
 
+TARGETS=()
+for candidate in "$SELFCHECK" "$MINIMAL" "$CI_ENTRY"; do
+    if [ -f "$candidate" ]; then
+        TARGETS+=("$candidate")
+    fi
+done
+
+if [ "${#TARGETS[@]}" -eq 0 ]; then
+    run_stdlib_selfcheck "no test targets found"
+fi
+
 echo "[engram-mxfp4] status=pytest"
 echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
-echo "[engram-mxfp4] running: python -m pytest -q -c tests/layers/pytest.ini --rootdir=tests/layers --confcutdir=tests/layers -p no:cacheprovider --engram-mxfp4-stdlib-only $SELFCHECK $MINIMAL $CI_ENTRY"
+echo "[engram-mxfp4] running: python -m pytest -q -c tests/layers/pytest.ini --rootdir=tests/layers --confcutdir=tests/layers -p no:cacheprovider --engram-mxfp4-stdlib-only ${TARGETS[*]} $*"
 
 python -m pytest -q \
     -c tests/layers/pytest.ini \
@@ -85,13 +87,14 @@ python -m pytest -q \
     --confcutdir=tests/layers \
     -p no:cacheprovider \
     --engram-mxfp4-stdlib-only \
-    "$SELFCHECK" "$MINIMAL" "$CI_ENTRY"
-pytest_status=$?
+    "${TARGETS[@]}" \
+    "$@"
+status=$?
 
-if [ "$pytest_status" -eq 0 ]; then
+if [ "$status" -eq 0 ]; then
     echo "[engram-mxfp4] status=pytest-passed"
-    exit 0
+else
+    echo "[engram-mxfp4] status=pytest-failed (exit=$status)"
 fi
 
-echo "[engram-mxfp4] status=pytest-failed (exit=$pytest_status)"
-run_stdlib_selfcheck "pytest failed (exit=$pytest_status)"
+exit "$status"

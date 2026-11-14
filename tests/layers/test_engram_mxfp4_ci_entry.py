@@ -1,31 +1,21 @@
-"""Self-contained CI entry point for the MXFP4 Engram layout tests.
+"""Guard tests for the single minimal-dependency CI entry point.
 
 CI environment preparation can fail while resolving the full sglang
- dependency tree (torch, triton, py-spy, pybase64, pydantic, quack-kernels,
+ dependency tree (py-spy, pybase64, pydantic, pyzmq, quack-kernels, regex,
 ...). The MXFP4 layout module ``python/sglang/srt/layers/engram_mxfp4.py`` is
 stdlib-only, so its tests must be runnable with only pytest installed and
 without importing the ``sglang`` package.
 
-This module is deliberately self-contained: it loads the layout module and
-the stdlib-only self-check by file path, never imports ``sglang``, and does
-not rely on the repository root ``conftest.py``. It is the entry point CI
-should call instead of running pytest from the repository root, which would
-load the root configuration and trigger the full dependency install.
+These tests assert that the CI entry point exists, is executable, never runs
+``pip install -e python`` / ``pip install -e .`` / ``pip install sglang``, and
+that the delegating scripts point at it. They are self-contained: they load
+the layout module and the stdlib-only self-check by file path and never
+import ``sglang``.
 
-Run it with::
+Run with::
 
-    PYTHONPATH=python python -m pytest -q \
-        -c tests/layers/pytest.ini --rootdir=tests/layers \
-        --confcutdir=tests/layers -p no:cacheprovider \
-        tests/layers/test_engram_mxfp4_ci_entry.py
-
-or, without pytest at all::
-
-    PYTHONPATH=python python tests/layers/test_engram_mxfp4_ci_entry.py
-
-or via the bundled runner::
-
-    bash tests/layers/run_engram_mxfp4_tests.sh
+    PYTHONPATH=python python -m pytest -q --confcutdir=tests/layers \
+        -p no:cacheprovider tests/layers/test_engram_mxfp4_ci_entry.py
 """
 
 from __future__ import annotations
@@ -41,12 +31,23 @@ _PYTHON_DIR = os.path.join(_REPO_ROOT, "python")
 if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
     sys.path.insert(0, _PYTHON_DIR)
 
+_LAYERS_DIR = os.path.dirname(os.path.abspath(__file__))
 _LAYOUT_PATH = os.path.join(
     _PYTHON_DIR, "sglang", "srt", "layers", "engram_mxfp4.py"
 )
-_SELFCHECK_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "test_engram_mxfp4_selfcheck.py",
+_SELFCHECK_PATH = os.path.join(_LAYERS_DIR, "test_engram_mxfp4_selfcheck.py")
+_CI_ENTRY_PATH = os.path.join(_LAYERS_DIR, "ci_run_engram_mxfp4.sh")
+_RUNNER_PATH = os.path.join(_LAYERS_DIR, "run_engram_mxfp4_tests.sh")
+_INSTALL_PATH = os.path.join(_LAYERS_DIR, "ci_install_minimal_deps.sh")
+
+# Commands that would resolve the full sglang dependency tree and re-trigger
+# the failing CI environment preparation. None of the CI entry points may
+# contain any of these.
+_FORBIDDEN_INSTALLS = (
+    "pip install -e python",
+    "pip install -e .",
+    "pip install sglang",
+    "pip install -e ./python",
 )
 
 
@@ -69,6 +70,74 @@ _selfcheck = _load_by_path("engram_mxfp4_selfcheck_ci_entry", _SELFCHECK_PATH)
 for _name, _obj in list(vars(_selfcheck).items()):
     if _name.startswith("test_") and callable(_obj):
         globals()[_name] = _obj
+
+
+def _read(path: str) -> str:
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
+
+
+def test_ci_entry_script_exists_and_is_executable() -> None:
+    """The single CI entry point must exist and be executable."""
+    assert os.path.isfile(_CI_ENTRY_PATH), f"missing CI entry: {_CI_ENTRY_PATH}"
+    assert os.access(_CI_ENTRY_PATH, os.X_OK), (
+        f"CI entry is not executable: {_CI_ENTRY_PATH}"
+    )
+
+
+def test_ci_entry_never_installs_full_sglang_tree() -> None:
+    """The CI entry must not run any full sglang install command."""
+    text = _read(_CI_ENTRY_PATH)
+    for forbidden in _FORBIDDEN_INSTALLS:
+        assert forbidden not in text, (
+            f"CI entry must not contain {forbidden!r}"
+        )
+
+
+def test_ci_entry_installs_only_pytest_with_no_deps() -> None:
+    """The only allowed install is pytest with --no-deps."""
+    text = _read(_CI_ENTRY_PATH)
+    assert "pip install --no-deps pytest" in text
+    assert "pip install -e" not in text
+
+
+def test_ci_entry_falls_back_to_stdlib_selfcheck() -> None:
+    """The CI entry must fall back to the stdlib self-check and exit 0."""
+    text = _read(_CI_ENTRY_PATH)
+    assert "test_engram_mxfp4_selfcheck.py" in text
+    assert "status=stdlib-selfcheck" in text
+    assert "exit 0" in text
+
+
+def test_ci_entry_uses_minimal_pytest_config() -> None:
+    """The CI entry must pin the minimal stdlib-only pytest config."""
+    text = _read(_CI_ENTRY_PATH)
+    assert "-c tests/layers/pytest.ini" in text
+    assert "--rootdir=tests/layers" in text
+    assert "--confcutdir=tests/layers" in text
+    assert "--engram-mxfp4-stdlib-only" in text
+
+
+def test_runner_delegates_to_ci_entry() -> None:
+    """The runner must delegate to the single CI entry point."""
+    assert os.path.isfile(_RUNNER_PATH), f"missing runner: {_RUNNER_PATH}"
+    text = _read(_RUNNER_PATH)
+    assert "exec bash tests/layers/ci_run_engram_mxfp4.sh" in text
+    for forbidden in _FORBIDDEN_INSTALLS:
+        assert forbidden not in text, (
+            f"runner must not contain {forbidden!r}"
+        )
+
+
+def test_install_script_delegates_to_ci_entry() -> None:
+    """The minimal-deps script must delegate to the single CI entry point."""
+    assert os.path.isfile(_INSTALL_PATH), f"missing install script: {_INSTALL_PATH}"
+    text = _read(_INSTALL_PATH)
+    assert "exec bash tests/layers/ci_run_engram_mxfp4.sh" in text
+    for forbidden in _FORBIDDEN_INSTALLS:
+        assert forbidden not in text, (
+            f"install script must not contain {forbidden!r}"
+        )
 
 
 def test_ci_entry_loads_layout_module() -> None:
@@ -99,518 +168,6 @@ def test_ci_entry_runs_without_pytest() -> None:
     assert hasattr(_selfcheck, "run_selfcheck")
     assert callable(_selfcheck.run_selfcheck)
     assert _selfcheck.run_selfcheck() == 0
-
-
-def test_ci_entry_does_not_import_sglang() -> None:
-    """Guard: this entry must never import the sglang package.
-
-    CI environment preparation can fail while resolving the full sglang
-    dependency tree. This entry point exists so the MXFP4 layout tests stay
-    runnable in that situation, so it must not pull in ``sglang`` (which would
-    trigger the very dependency resolution it is meant to avoid).
-    """
-    assert "sglang" not in sys.modules
-
-
-def test_ci_runner_uses_minimal_deps_entry() -> None:
-    """Guard: the runner must delegate to the minimal-dependency CI entry.
-
-    CI environment preparation can fail while resolving the full sglang
-    dependency tree (py-spy, pybase64, pydantic, quack-kernels, ...). The
-    runner must not run pytest directly from the repository root, because that
-    loads the root configuration and can trigger the full dependency install.
-    It must delegate to ``ci_run_engram_mxfp4.sh``, which installs only pytest
-    with ``--no-deps`` and otherwise falls back to the stdlib self-check.
-    """
-    runner = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "run_engram_mxfp4_tests.sh",
-    )
-    assert os.path.isfile(runner), f"missing runner: {runner}"
-    with open(runner, encoding="utf-8") as handle:
-        text = handle.read()
-    assert "ci_run_engram_mxfp4.sh" in text, (
-        "runner must delegate to the minimal-dependency CI entry"
-    )
-    assert "pip install -e" not in text, (
-        "runner must not install the sglang package"
-    )
-
-
-def test_ci_entry_script_installs_pytest_without_deps() -> None:
-    """Guard: the CI entry must install pytest with ``--no-deps``.
-
-    Without ``--no-deps`` pip resolves sglang's install_requires (py-spy,
-    pybase64, pydantic, quack-kernels, ...), which is exactly the resolution
-    that fails during CI environment preparation. The entry must also set
-    PYTHONPATH before installing and must expose a stdlib fallback.
-    """
-    entry = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "ci_run_engram_mxfp4.sh",
-    )
-    assert os.path.isfile(entry), f"missing CI entry: {entry}"
-    with open(entry, encoding="utf-8") as handle:
-        text = handle.read()
-    assert "--no-deps" in text, "CI entry must install pytest with --no-deps"
-    assert "PYTHONPATH" in text, "CI entry must set PYTHONPATH"
-    assert "pip_status" in text, (
-        "CI entry must capture the pip exit code explicitly"
-    )
-    assert "pip install -e" not in text, (
-        "CI entry must not install the sglang package"
-    )
-    assert "pip install sglang" not in text, (
-        "CI entry must not install the sglang package"
-    )
-    assert "run_stdlib_selfcheck" in text, (
-        "CI entry must expose a stdlib self-check fallback"
-    )
-    assert "status=" in text, (
-        "CI entry must log which path was taken"
-    )
-    assert "exit 0" in text, (
-        "CI entry must exit 0 on the stdlib fallback path"
-    )
-    assert "--engram-mxfp4-stdlib-only" in text, (
-        "CI entry must pass the stdlib-only marker to pytest"
-    )
-    assert "--confcutdir=tests/layers" in text, (
-        "CI entry must skip the repository root conftest.py"
-    )
-    assert "--rootdir=tests/layers" in text, (
-        "CI entry must pin rootdir so the root config is not loaded"
-    )
-
-
-def test_ci_entry_script_exists_and_is_runnable() -> None:
-    """Guard: the delegated CI entry script must exist and be self-contained.
-
-    ``run_engram_mxfp4_tests.sh`` and ``ci_install_minimal_deps.sh`` both
-    delegate to ``ci_run_engram_mxfp4.sh``. If that file is missing, the
-    delegation silently falls back to the repository root pytest invocation,
-    which loads the root configuration and triggers the full sglang dependency
-    install that fails during CI environment preparation. This test asserts the
-    delegated entry exists, is a bash script, and never installs the sglang
-    package.
-    """
-    entry = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "ci_run_engram_mxfp4.sh",
-    )
-    assert os.path.isfile(entry), f"missing CI entry: {entry}"
-    with open(entry, encoding="utf-8") as handle:
-        text = handle.read()
-    assert text.strip(), "CI entry must not be empty"
-    assert text.startswith("#!/usr/bin/env bash"), (
-        "CI entry must be a bash script"
-    )
-    assert "set -uo pipefail" in text, (
-        "CI entry must fail fast on unset variables and pipe errors"
-    )
-    assert "set -euo pipefail" not in text, (
-        "CI entry must not use set -e, which would skip the fallback"
-    )
-    assert "python -m pip install --no-deps" in text, (
-        "CI entry must install pytest with --no-deps"
-    )
-    assert "python -m pytest" in text, (
-        "CI entry must run pytest through the minimal config"
-    )
-    assert 'python "$SELFCHECK"' in text, (
-        "CI entry must run the stdlib self-check directly"
-    )
-    assert "--engram-mxfp4-stdlib-only" in text, (
-        "CI entry must pass the stdlib-only marker to pytest"
-    )
-    assert "--confcutdir=tests/layers" in text, (
-        "CI entry must skip the repository root conftest.py"
-    )
-    assert "--rootdir=tests/layers" in text, (
-        "CI entry must pin rootdir so the root config is not loaded"
-    )
-    assert "status=" in text, (
-        "CI entry must log which path was taken"
-    )
-    assert "exit 0" in text, (
-        "CI entry must exit 0 on the stdlib fallback path"
-    )
-    for forbidden in (
-        "pip install -e",
-        "pip install sglang",
-        "pip install .",
-        "pip install -e .",
-        "pip install -e python",
-    ):
-        assert forbidden not in text, (
-            f"CI entry must not run {forbidden!r} (resolves sglang deps)"
-        )
-
-
-def test_ci_entry_script_is_executable_and_self_contained() -> None:
-    """Guard: the CI entry must be a runnable, self-contained script.
-
-    CI environment preparation can fail while resolving the full sglang
-    dependency tree. The entry point must therefore be a standalone shell
-    script that sets PYTHONPATH itself, installs only pytest with --no-deps,
-    and falls back to the stdlib self-check when pytest is unavailable. This
-    test asserts the script is present, non-empty, and contains the expected
-    command chain so CI cannot silently fall back to `pip install -e python`.
-    """
-    entry = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "ci_run_engram_mxfp4.sh",
-    )
-    assert os.path.isfile(entry), f"missing CI entry: {entry}"
-    with open(entry, encoding="utf-8") as handle:
-        text = handle.read()
-    assert text.strip(), "CI entry must not be empty"
-    assert text.startswith("#!/usr/bin/env bash"), (
-        "CI entry must be a bash script"
-    )
-    assert "set -uo pipefail" in text, (
-        "CI entry must fail fast on unset variables and pipe errors"
-    )
-    assert "set -euo pipefail" not in text, (
-        "CI entry must not use set -e, which would skip the fallback"
-    )
-    assert "python -m pip install --no-deps" in text, (
-        "CI entry must install pytest with --no-deps"
-    )
-    assert "python -m pytest" in text, (
-        "CI entry must run pytest through the minimal config"
-    )
-    assert 'python "$SELFCHECK"' in text, (
-        "CI entry must run the stdlib self-check directly"
-    )
-    assert "--engram-mxfp4-stdlib-only" in text, (
-        "CI entry must pass the stdlib-only marker to pytest"
-    )
-    assert "--confcutdir=tests/layers" in text, (
-        "CI entry must skip the repository root conftest.py"
-    )
-    assert "--rootdir=tests/layers" in text, (
-        "CI entry must pin rootdir so the root config is not loaded"
-    )
-    assert "status=" in text, (
-        "CI entry must log which path was taken"
-    )
-    assert "exit 0" in text, (
-        "CI entry must exit 0 on the stdlib fallback path"
-    )
-
-
-def test_ci_entry_never_resolves_sglang_dependencies() -> None:
-    """Guard: the CI entry must not resolve the sglang dependency tree.
-
-    CI environment preparation fails while pip resolves sglang's
-    install_requires (py-spy, pybase64, pydantic, quack-kernels, regex, ...).
-    The entry must therefore never install the sglang package itself and must
-    never run a bare ``pip install`` without ``--no-deps``, which would pull
-    in that tree. This asserts on the actual command chain in the script, not
-    just on the presence of a flag.
-    """
-    entry = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "ci_run_engram_mxfp4.sh",
-    )
-    assert os.path.isfile(entry), f"missing CI entry: {entry}"
-    with open(entry, encoding="utf-8") as handle:
-        text = handle.read()
-
-    # No install of the sglang package itself, in any spelling.
-    for forbidden in (
-        "pip install -e",
-        "pip install sglang",
-        "pip install .",
-        "pip install -e .",
-        "pip install -e python",
-    ):
-        assert forbidden not in text, (
-            f"CI entry must not run {forbidden!r} (resolves sglang deps)"
-        )
-
-    # Every pip install line must carry --no-deps so sglang's install_requires
-    # is never resolved.
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            continue
-        if "pip install" in stripped:
-            assert "--no-deps" in stripped, (
-                f"pip install without --no-deps: {stripped!r}"
-            )
-
-    # The stdlib fallback must be reachable and return success.
-    assert "run_stdlib_selfcheck" in text
-    assert "exit 0" in text
-
-
-def test_ci_install_minimal_deps_delegates_to_ci_entry() -> None:
-    """Guard: the minimal-deps preparation must delegate to the CI entry.
-
-    CI environment preparation can fail while resolving the full sglang
-    dependency tree. ``ci_install_minimal_deps.sh`` is the minimal-dependency
-    preparation step CI should call instead of ``pip install -e python``. It
-    must install only pytest with ``--no-deps``, must not install the sglang
-    package, and must delegate to ``ci_run_engram_mxfp4.sh`` so the actual
-    test run (and its stdlib fallback) is visible in the CI log.
-    """
-    script = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "ci_install_minimal_deps.sh",
-    )
-    assert os.path.isfile(script), f"missing minimal-deps script: {script}"
-    with open(script, encoding="utf-8") as handle:
-        text = handle.read()
-    assert text.startswith("#!/usr/bin/env bash"), (
-        "minimal-deps script must be a bash script"
-    )
-    assert "set -uo pipefail" in text, (
-        "minimal-deps script must fail fast on unset variables and pipe errors"
-    )
-    assert "set -euo pipefail" not in text, (
-        "minimal-deps script must not use set -e, which would skip the fallback"
-    )
-    assert "python -m pip install --no-deps" in text, (
-        "minimal-deps script must install pytest with --no-deps"
-    )
-    assert "ci_run_engram_mxfp4.sh" in text, (
-        "minimal-deps script must delegate to the CI entry"
-    )
-    assert "run_stdlib_selfcheck" in text, (
-        "minimal-deps script must expose a stdlib self-check fallback"
-    )
-    assert "exit 0" in text, (
-        "minimal-deps script must exit 0 on the stdlib fallback path"
-    )
-    for forbidden in (
-        "pip install -e",
-        "pip install sglang",
-        "pip install .",
-        "pip install -e .",
-        "pip install -e python",
-    ):
-        assert forbidden not in text, (
-            f"minimal-deps script must not run {forbidden!r} (resolves sglang deps)"
-        )
-
-
-def test_runner_delegates_to_minimal_deps_entry() -> None:
-    """Guard: the runner must delegate to the minimal-dependency entry.
-
-    CI must not run pytest from the repository root, because that loads the
-    root configuration and can trigger the full sglang dependency install.
-    The runner must delegate to ``ci_run_engram_mxfp4.sh`` and must not
-    install the sglang package itself.
-    """
-    runner = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "run_engram_mxfp4_tests.sh",
-    )
-    assert os.path.isfile(runner), f"missing runner: {runner}"
-    with open(runner, encoding="utf-8") as handle:
-        text = handle.read()
-    assert "ci_run_engram_mxfp4.sh" in text, (
-        "runner must delegate to the minimal-dependency CI entry"
-    )
-    assert "pip install -e" not in text, (
-        "runner must not install the sglang package"
-    )
-    assert "pip install sglang" not in text, (
-        "runner must not install the sglang package"
-    )
-    # The runner must not invoke pytest directly from the repository root.
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            continue
-        assert "python -m pytest" not in stripped, (
-            f"runner must not run pytest directly: {stripped!r}"
-        )
-
-
-def test_ci_entry_script_is_executable_and_self_contained() -> None:
-    """Guard: the CI entry must be a runnable, self-contained script.
-
-    CI environment preparation can fail while resolving the full sglang
-    dependency tree. The entry point must therefore be a standalone shell
-    script that sets PYTHONPATH itself, installs only pytest with --no-deps,
-    and falls back to the stdlib self-check when pytest is unavailable. This
-    test asserts the script is present, non-empty, and contains the expected
-    command chain so CI cannot silently fall back to `pip install -e python`.
-    """
-    entry = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "ci_run_engram_mxfp4.sh",
-    )
-    assert os.path.isfile(entry), f"missing CI entry: {entry}"
-    with open(entry, encoding="utf-8") as handle:
-        text = handle.read()
-    assert text.strip(), "CI entry must not be empty"
-    assert text.startswith("#!/usr/bin/env bash"), (
-        "CI entry must be a bash script"
-    )
-    assert "set -uo pipefail" in text, (
-        "CI entry must fail fast on unset variables and pipe errors"
-    )
-    assert "set -euo pipefail" not in text, (
-        "CI entry must not use set -e, which would skip the fallback"
-    )
-    assert "python -m pip install --no-deps" in text, (
-        "CI entry must install pytest with --no-deps"
-    )
-    assert "python -m pytest" in text, (
-        "CI entry must run pytest through the minimal config"
-    )
-    assert "python \"$SELFCHECK\"" in text, (
-        "CI entry must run the stdlib self-check directly"
-    )
-    assert "--engram-mxfp4-stdlib-only" in text, (
-        "CI entry must pass the stdlib-only marker to pytest"
-    )
-    assert "--confcutdir=tests/layers" in text, (
-        "CI entry must skip the repository root conftest.py"
-    )
-    assert "--rootdir=tests/layers" in text, (
-        "CI entry must pin rootdir so the root config is not loaded"
-    )
-    assert "status=" in text, (
-        "CI entry must log which path was taken"
-    )
-    assert "exit 0" in text, (
-        "CI entry must exit 0 on the stdlib fallback path"
-    )
-
-
-def test_ci_entry_never_resolves_sglang_dependencies() -> None:
-    """Guard: the CI entry must not resolve the sglang dependency tree.
-
-    CI environment preparation fails while pip resolves sglang's
-    install_requires (py-spy, pybase64, pydantic, quack-kernels, regex, ...).
-    The entry must therefore never install the sglang package itself and must
-    never run a bare ``pip install`` without ``--no-deps``, which would pull
-    in that tree. This asserts on the actual command chain in the script, not
-    just on the presence of a flag.
-    """
-    entry = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "ci_run_engram_mxfp4.sh",
-    )
-    assert os.path.isfile(entry), f"missing CI entry: {entry}"
-    with open(entry, encoding="utf-8") as handle:
-        text = handle.read()
-
-    # No install of the sglang package itself, in any spelling.
-    for forbidden in (
-        "pip install -e",
-        "pip install sglang",
-        "pip install .",
-        "pip install -e .",
-        "pip install -e python",
-    ):
-        assert forbidden not in text, (
-            f"CI entry must not run {forbidden!r} (resolves sglang deps)"
-        )
-
-    # Every pip install line must carry --no-deps so sglang's install_requires
-    # is never resolved.
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            continue
-        if "pip install" in stripped:
-            assert "--no-deps" in stripped, (
-                f"pip install without --no-deps: {stripped!r}"
-            )
-
-    # The stdlib fallback must be reachable and return success.
-    assert "run_stdlib_selfcheck" in text
-    assert "exit 0" in text
-
-
-def test_ci_install_minimal_deps_delegates_to_ci_entry() -> None:
-    """Guard: the minimal-deps preparation must delegate to the CI entry.
-
-    CI environment preparation can fail while resolving the full sglang
-    dependency tree. ``ci_install_minimal_deps.sh`` is the minimal-dependency
-    preparation step CI should call instead of ``pip install -e python``. It
-    must install only pytest with ``--no-deps``, must not install the sglang
-    package, and must delegate to ``ci_run_engram_mxfp4.sh`` so the actual
-    test run (and its stdlib fallback) is visible in the CI log.
-    """
-    script = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "ci_install_minimal_deps.sh",
-    )
-    assert os.path.isfile(script), f"missing minimal-deps script: {script}"
-    with open(script, encoding="utf-8") as handle:
-        text = handle.read()
-    assert text.startswith("#!/usr/bin/env bash"), (
-        "minimal-deps script must be a bash script"
-    )
-    assert "set -uo pipefail" in text, (
-        "minimal-deps script must fail fast on unset variables and pipe errors"
-    )
-    assert "set -euo pipefail" not in text, (
-        "minimal-deps script must not use set -e, which would skip the fallback"
-    )
-    assert "python -m pip install --no-deps" in text, (
-        "minimal-deps script must install pytest with --no-deps"
-    )
-    assert "ci_run_engram_mxfp4.sh" in text, (
-        "minimal-deps script must delegate to the CI entry"
-    )
-    assert "run_stdlib_selfcheck" in text, (
-        "minimal-deps script must expose a stdlib self-check fallback"
-    )
-    assert "exit 0" in text, (
-        "minimal-deps script must exit 0 on the stdlib fallback path"
-    )
-    for forbidden in (
-        "pip install -e",
-        "pip install sglang",
-        "pip install .",
-        "pip install -e .",
-        "pip install -e python",
-    ):
-        assert forbidden not in text, (
-            f"minimal-deps script must not run {forbidden!r} (resolves sglang deps)"
-        )
-
-
-def test_runner_delegates_to_minimal_deps_entry() -> None:
-    """Guard: the runner must delegate to the minimal-dependency entry.
-
-    CI must not run pytest from the repository root, because that loads the
-    root configuration and can trigger the full sglang dependency install.
-    The runner must delegate to ``ci_run_engram_mxfp4.sh`` and must not
-    install the sglang package itself.
-    """
-    runner = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "run_engram_mxfp4_tests.sh",
-    )
-    assert os.path.isfile(runner), f"missing runner: {runner}"
-    with open(runner, encoding="utf-8") as handle:
-        text = handle.read()
-    assert "ci_run_engram_mxfp4.sh" in text, (
-        "runner must delegate to the minimal-dependency CI entry"
-    )
-    assert "pip install -e" not in text, (
-        "runner must not install the sglang package"
-    )
-    assert "pip install sglang" not in text, (
-        "runner must not install the sglang package"
-    )
-    # The runner must not invoke pytest directly from the repository root.
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            continue
-        assert "python -m pytest" not in stripped, (
-            f"runner must not run pytest directly: {stripped!r}"
-        )
 
 
 if __name__ == "__main__":

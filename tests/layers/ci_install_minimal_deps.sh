@@ -46,19 +46,19 @@ if [ ! -f "$SELFCHECK" ]; then
     exit 0
 fi
 
-pip_status=0
-if ! python -c "import pytest" >/dev/null 2>&1; then
-    echo "[engram-mxfp4] installing pytest with --no-deps"
-    python -m pip install --no-deps pytest
-    pip_status=$?
-fi
-
-if [ "$pip_status" -ne 0 ]; then
-    run_stdlib_selfcheck "pytest install failed (exit=$pip_status)"
-fi
-
 if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
     run_stdlib_selfcheck "missing ci_run_engram_mxfp4.sh"
 fi
 
+# Delegate to the single minimal-dependency CI entry point. It installs only
+# pytest with --no-deps (never resolving the sglang dependency tree), runs
+# pytest with the minimal stdlib-only config, and falls back to the pure
+# stdlib self-check when pytest is unavailable. Keeping the install logic in
+# exactly one place avoids the duplicated/unreachable fallback branches that
+# previously let CI fall back to `pip install -e python` and resolve the full
+# sglang dependency tree.
+#
+# This script must never run `pip install -e python`, `pip install -e .` or
+# `pip install sglang`; ci_run_engram_mxfp4.sh is the only supported entry
+# point.
 exec bash tests/layers/ci_run_engram_mxfp4.sh "$@"

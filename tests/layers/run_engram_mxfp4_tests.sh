@@ -67,22 +67,6 @@ if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
     run_stdlib_selfcheck "missing ci_run_engram_mxfp4.sh"
 fi
 
-# The delegated entry point is the single minimal-dependency CI entry. It
-# installs only pytest with --no-deps (never resolving the sglang dependency
-# tree) and falls back to the pure-stdlib self-check when pytest is
-# unavailable. Keeping exactly one code path here avoids the duplicated or
-# unreachable fallback branches that previously let CI fall back to
-# `pip install -e python` and resolve the full sglang dependency tree.
-#
-# This runner must never run pytest directly from the repository root and
-# must never install the sglang package; ci_run_engram_mxfp4.sh is the only
-# supported entry point.
-#
-# CI must call this script (or ci_run_engram_mxfp4.sh directly) instead of
-# `pip install -e python`, which resolves the full sglang dependency tree and
-# fails during environment preparation.
-exec bash tests/layers/ci_run_engram_mxfp4.sh "$@"
-
 # Delegate to the single minimal-dependency CI entry point. It sets
 # PYTHONPATH first, installs only pytest with --no-deps (never resolving the
 # sglang dependency tree), runs pytest with the minimal stdlib-only config,
