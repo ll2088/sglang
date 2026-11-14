@@ -19,6 +19,9 @@ import os
 import sys
 
 # Make ``sglang`` importable when running this file directly from a checkout.
+# This module is stdlib-only on purpose: it must be collectable and runnable
+# even when the full sglang dependency chain (torch, triton, ...) is not
+# installed, so CI environment preparation failures cannot block it.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _PYTHON_DIR = os.path.join(_REPO_ROOT, "python")
 if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
@@ -28,33 +31,31 @@ if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
 def _load_engram_mxfp4():
     """Import the layout module without requiring the full sglang package.
 
-    The normal import path is tried first so the module is exercised exactly as
-    production code sees it. When the heavy dependency chain (torch, triton,
-    ...) is unavailable -- e.g. during a minimal CI environment preparation --
-    the module is loaded directly from its file path. ``engram_mxfp4`` is
-    stdlib-only, so this fallback keeps the self-check meaningful instead of
-    failing at import time.
+    The path-based load is tried first: ``engram_mxfp4`` is stdlib-only, so
+    loading it directly from its file path never triggers the heavy sglang
+    dependency chain (torch, triton, ...). This keeps the self-check runnable
+    during a minimal CI environment preparation where ``pip install -e python``
+    may fail. The normal package import is only used as a fallback when the
+    file is not present at the expected location.
     """
+    module_path = os.path.join(
+        _PYTHON_DIR, "sglang", "srt", "layers", "engram_mxfp4.py"
+    )
+    if os.path.isfile(module_path):
+        spec = importlib.util.spec_from_file_location("engram_mxfp4", module_path)
+        if spec is not None and spec.loader is not None:
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+
     try:
         from sglang.srt.layers import engram_mxfp4 as module
 
         return module
-    except Exception:  # noqa: BLE001 - fall back to a path-based load
-        pass
-
-    module_path = os.path.join(
-        _PYTHON_DIR, "sglang", "srt", "layers", "engram_mxfp4.py"
-    )
-    if not os.path.isfile(module_path):
+    except Exception as exc:  # noqa: BLE001 - report a clear error
         raise ImportError(
             f"engram_mxfp4 module not importable and not found at {module_path!r}"
-        )
-    spec = importlib.util.spec_from_file_location("engram_mxfp4", module_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load engram_mxfp4 from {module_path!r}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+        ) from exc
 
 
 _engram_mxfp4 = _load_engram_mxfp4()

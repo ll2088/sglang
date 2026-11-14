@@ -10,46 +10,50 @@ import pytest
 # The layout module itself is stdlib-only, but this test module is collected
 # alongside the rest of the suite. Guard the heavy dependency chain so that a
 # minimal CI environment (no torch/triton) still collects and runs the
-# stdlib-only self-check instead of failing at import time.
-pytest.importorskip("torch", reason="torch is required for the full engram tests")
+# stdlib-only self-check instead of failing at import time. ``pytest.skip``
+# with ``allow_module_level=True`` is used instead of ``importorskip`` so the
+# skip is explicit and does not depend on pytest's importorskip semantics.
+try:
+    import torch  # noqa: F401
+except Exception as _torch_exc:  # noqa: BLE001 - any import failure means skip
+    pytest.skip(
+        f"torch is required for the full engram tests: {_torch_exc!r}",
+        allow_module_level=True,
+    )
 
 
 def _load_engram_mxfp4():
-    """Import the layout module, falling back to a path-based load.
+    """Import the layout module, preferring a path-based load.
 
     CI environment preparation can fail before the full sglang dependency
     chain (torch, triton, ...) is installed. ``engram_mxfp4`` is stdlib-only,
-    so load it directly from its file path in that case instead of failing at
-    collection time. The normal import path is tried first so production code
-    is exercised exactly as it is at runtime.
+    so load it directly from its file path first; this never triggers the
+    heavy sglang package import. The normal import path is only used as a
+    fallback when the file is not present at the expected location.
     """
-    try:
-        from sglang.srt.layers import engram_mxfp4 as module
-
-        return module
-    except Exception:  # noqa: BLE001 - fall back to a path-based load
-        pass
-
     repo_root = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
     module_path = os.path.join(
         repo_root, "python", "sglang", "srt", "layers", "engram_mxfp4.py"
     )
-    if not os.path.isfile(module_path):
+    if os.path.isfile(module_path):
+        spec = importlib.util.spec_from_file_location("engram_mxfp4", module_path)
+        if spec is not None and spec.loader is not None:
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+
+    try:
+        from sglang.srt.layers import engram_mxfp4 as module
+
+        return module
+    except Exception as exc:  # noqa: BLE001 - report a clear skip reason
         pytest.skip(
-            f"engram_mxfp4 module not importable and not found at {module_path!r}",
+            f"engram_mxfp4 module not importable and not found at {module_path!r}: "
+            f"{exc!r}",
             allow_module_level=True,
         )
-    spec = importlib.util.spec_from_file_location("engram_mxfp4", module_path)
-    if spec is None or spec.loader is None:
-        pytest.skip(
-            f"cannot load engram_mxfp4 from {module_path!r}",
-            allow_module_level=True,
-        )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 _engram_mxfp4 = _load_engram_mxfp4()
