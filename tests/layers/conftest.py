@@ -21,6 +21,24 @@ if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
     sys.path.insert(0, _PYTHON_DIR)
 
 
+def pytest_addoption(parser):  # noqa: ARG001 - pytest hook signature
+    """Register the stdlib-only marker used by the Engram MXFP4 tests.
+
+    CI environment preparation can fail while installing the full sglang
+    dependency tree (torch, triton, py-spy, pybase64, pydantic,
+    quack-kernels, ...). The MXFP4 layout module and its self-check are
+    stdlib-only, so this conftest must stay importable without that tree.
+    Registering the marker here (instead of relying on the repository root
+    ``pytest.ini``/``pyproject``) keeps the tests collectable when only
+    pytest is installed and the root configuration is not loaded.
+    """
+    parser.addini(
+        "engram_mxfp4_stdlib_only",
+        "Run the stdlib-only Engram MXFP4 tests without the sglang tree.",
+        default="true",
+    )
+
+
 def pytest_configure(config):  # noqa: ARG001 - pytest hook signature
     """Keep the stdlib-only Engram MXFP4 tests collectable without sglang.
 

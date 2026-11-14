@@ -35,6 +35,25 @@ dependency resolution. CI must use these commands instead of any step that
 runs `pip install -e python` or otherwise resolves the full sglang dependency
 tree (py-spy, pybase64, pydantic, quack-kernels, ...).
 
+## Minimal CI environment
+
+CI environment preparation must not install the `sglang` package itself for
+these tests. Install only the minimal test dependency set and run the tests
+with `PYTHONPATH=python`:
+
+```sh
+python -m pip install --no-deps pytest
+PYTHONPATH=python python -m pytest -q --confcutdir=tests/layers \
+    -p no:cacheprovider tests/layers/test_engram_mxfp4_selfcheck.py
+```
+
+The `--no-deps` flag prevents pip from resolving the full sglang dependency
+tree (py-spy, pybase64, pydantic, quack-kernels, ...). The `tests/layers`
+`conftest.py` registers the stdlib-only marker and keeps the source directory
+importable without importing `sglang`, so collection succeeds in a minimal
+environment. If the full dependency tree is available, the torch-dependent
+cases in `test_engram_mxfp4.py` run as well.
+
 ## Running the full suite (torch available)
 
 When the full dependency tree is installed, the torch-dependent cases run too:
