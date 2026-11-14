@@ -143,5 +143,32 @@ def test_stdlib_runner_exits_zero_and_never_installs() -> None:
     assert "status=stdlib-selfcheck" in combined
 
 
+def test_runner_delegates_to_stdlib_when_ci_entry_missing() -> None:
+    """Guard: the runner must not fall back to a sglang-resolving path.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree. When the single minimal-dependency CI entry point is
+    absent, ``run_engram_mxfp4_tests.sh`` and ``ci_install_minimal_deps.sh``
+    must delegate to the pure-stdlib entry point instead of running
+    ``pip install -e python``. This test asserts the delegation is present in
+    both scripts and that neither script contains a ``pip install -e``
+    fallback.
+    """
+    for name in ("run_engram_mxfp4_tests.sh", "ci_install_minimal_deps.sh"):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+        assert os.path.isfile(path), f"missing runner: {path}"
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        assert "run_engram_mxfp4_stdlib.sh" in text, (
+            f"{name} must delegate to the stdlib entry point"
+        )
+        assert "pip install -e" not in text, (
+            f"{name} must not fall back to pip install -e"
+        )
+        assert "pip install sglang" not in text, (
+            f"{name} must not install sglang"
+        )
+
+
 if __name__ == "__main__":
     raise SystemExit(_selfcheck.run_selfcheck())
