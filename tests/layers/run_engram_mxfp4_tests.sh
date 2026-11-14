@@ -26,14 +26,11 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$REPO_ROOT"
-
-# Hard guard: this runner must never resolve the full sglang dependency tree.
-# If a future edit reintroduces `pip install -e python` (or any sglang
-# install) into this script, fail immediately instead of silently pulling in
-# py-spy, pybase64, pydantic, pyzmq, quack-kernels, regex, ... and failing
-# during CI environment preparation.
+# Hard guard, placed before any other command so that a future edit which
+# reintroduces `pip install -e python` (or any sglang install) is rejected
+# before pip can resolve the full sglang dependency tree (py-spy, pybase64,
+# pydantic, pyzmq, quack-kernels, regex, ...). CI environment preparation
+# must never reach that resolution for these stdlib-only tests.
 if grep -qE 'pip[[:space:]]+install[[:space:]]+(-e|--editable)[[:space:]]+(\.|python)' "${BASH_SOURCE[0]}"; then
     echo "[engram-mxfp4] status=error: run_engram_mxfp4_tests.sh must not run pip install -e" >&2
     exit 1
@@ -42,6 +39,9 @@ if grep -qE 'pip[[:space:]]+install[[:space:]]+sglang' "${BASH_SOURCE[0]}"; then
     echo "[engram-mxfp4] status=error: run_engram_mxfp4_tests.sh must not install sglang" >&2
     exit 1
 fi
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$REPO_ROOT"
 
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}python"
 
