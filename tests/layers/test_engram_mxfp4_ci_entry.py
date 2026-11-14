@@ -110,6 +110,71 @@ def test_ci_entry_never_installs_anything() -> None:
     assert "python3 -m pip" not in text
 
 
+def test_ci_entry_probes_pytest_without_installing() -> None:
+    """The CI entry must probe pytest with a plain import, never an install.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree. The entry point must detect a missing pytest with a
+    plain import probe and fall back to the stdlib self-check, never with an
+    install command.
+    """
+    text = _read(_CI_ENTRY_PATH)
+    assert "import pytest" in text
+    assert "run_stdlib_selfcheck" in text
+
+
+def test_ci_entry_falls_back_to_stdlib_selfcheck() -> None:
+    """The CI entry must fall back to the stdlib self-check and exit 0."""
+    text = _read(_CI_ENTRY_PATH)
+    assert "test_engram_mxfp4_selfcheck.py" in text
+    assert "status=stdlib-selfcheck" in text
+    assert "exit 0" in text
+
+
+def test_ci_entry_uses_minimal_pytest_config() -> None:
+    """The CI entry must pin the minimal stdlib-only pytest config."""
+    text = _read(_CI_ENTRY_PATH)
+    assert "-c tests/layers/pytest.ini" in text
+    assert "--rootdir=tests/layers" in text
+    assert "--confcutdir=tests/layers" in text
+    assert "--engram-mxfp4-stdlib-only" in text
+
+
+def test_ci_entry_supports_bench_mode() -> None:
+    """The CI entry must expose the dependency-free benchmark path."""
+    text = _read(_CI_ENTRY_PATH)
+    assert "--bench" in text
+    assert "bench_engram_mxfp4.py" in text
+    assert "status=bench" in text
+
+
+def test_runner_falls_back_to_stdlib_without_ci_entry() -> None:
+    """The runner must still exit 0 when the CI entry is missing.
+
+    CI environment preparation can fail before the checkout is complete. The
+    runner must therefore fall back to the pure-stdlib self-check instead of
+    exiting non-zero, and must never fall back to `pip install -e python`.
+    """
+    text = _read(_RUNNER_PATH)
+    assert "run_stdlib_selfcheck" in text
+    assert "missing ci_run_engram_mxfp4.sh" in text
+    for forbidden in _FORBIDDEN_INSTALLS:
+        assert forbidden not in text, (
+            f"runner must not contain {forbidden!r}"
+        )
+
+
+def test_install_script_falls_back_to_stdlib_without_ci_entry() -> None:
+    """The minimal-deps script must exit 0 when the CI entry is missing."""
+    text = _read(_INSTALL_PATH)
+    assert "run_stdlib_selfcheck" in text
+    assert "missing ci_run_engram_mxfp4.sh" in text
+    for forbidden in _FORBIDDEN_INSTALLS:
+        assert forbidden not in text, (
+            f"install script must not contain {forbidden!r}"
+        )
+
+
 def test_ci_entry_uses_strict_shell_mode() -> None:
     """The CI entry must fail fast on unset variables and pipeline errors.
 
