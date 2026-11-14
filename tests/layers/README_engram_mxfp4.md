@@ -35,6 +35,40 @@ dependency resolution. CI must use these commands instead of any step that
 runs `pip install -e python` or otherwise resolves the full sglang dependency
 tree (py-spy, pybase64, pydantic, quack-kernels, ...).
 
+## Recommended CI invocation (minimal dependency path)
+
+CI environment preparation can fail while resolving the full sglang
+dependency tree, so the MXFP4 layout tests must be invoked through the
+self-contained entry points under `tests/layers` rather than from the
+repository root. The bundled runner makes the minimal-dependency path
+explicit and never installs anything:
+
+```sh
+bash tests/layers/run_engram_mxfp4_tests.sh
+```
+
+It sets `PYTHONPATH=python`, passes `-c tests/layers/pytest.ini`,
+`--rootdir=tests/layers`, `--confcutdir=tests/layers` and
+`-p no:cacheprovider`, and falls back to the pure-stdlib self-check when
+pytest is unavailable. The equivalent explicit command is:
+
+```sh
+PYTHONPATH=python python -m pytest -q \
+    -c tests/layers/pytest.ini --rootdir=tests/layers \
+    --confcutdir=tests/layers -p no:cacheprovider \
+    tests/layers/test_engram_mxfp4_selfcheck.py \
+    tests/layers/test_engram_mxfp4_minimal.py \
+    tests/layers/test_engram_mxfp4_ci_entry.py
+```
+
+`tests/layers/test_engram_mxfp4_ci_entry.py` is the self-contained entry
+point CI should call: it loads the layout module and the stdlib-only
+self-check by file path, never imports `sglang`, and does not rely on the
+repository root `conftest.py`. If the CI environment preparation step still
+runs `pip install -e python`, it must be replaced (or preceded) by a minimal
+step that installs only pytest, e.g. `python -m pip install --no-deps pytest`,
+so the full sglang dependency tree is not resolved for these tests.
+
 ## Minimal CI environment
 
 CI environment preparation must not install the `sglang` package itself for
