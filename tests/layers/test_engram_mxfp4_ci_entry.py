@@ -146,6 +146,56 @@ def test_stdlib_entry_is_the_only_ci_path() -> None:
     assert "pytest" not in text
 
 
+def test_ci_chain_never_collects_sglang_dependencies() -> None:
+    """No CI entry script may trigger sglang dependency collection.
+
+    CI environment preparation previously failed with exit=1 while pip was
+    collecting the full sglang dependency tree (py-spy, pybase64, pydantic,
+    pyzmq, quack-kernels, regex, ...). This test asserts that none of the CI
+    entry scripts contains a reachable command that would resolve that tree,
+    so the dependency-free path is the one CI actually executes.
+    """
+    forbidden = (
+        "pip install -e",
+        "pip install .",
+        "pip install sglang",
+        "pip install --editable",
+        "pip install -r",
+    )
+    for path in (_RUNNER, _INSTALL, _STDLIB):
+        text = _read(path)
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            for needle in forbidden:
+                assert needle not in stripped, (
+                    f"{os.path.basename(path)} must not resolve the sglang "
+                    f"dependency tree: {stripped!r}"
+                )
+
+
+def test_stdlib_entry_is_executable_and_self_contained() -> None:
+    """The stdlib entry must be executable and run the self-check directly.
+
+    CI must be able to invoke it as `bash tests/layers/run_engram_mxfp4_stdlib.sh`
+    without any prior installation step. This test asserts the executable bit
+    and that the script runs the stdlib self-check by file path.
+    """
+    assert os.path.isfile(_STDLIB), f"missing stdlib entry: {_STDLIB}"
+    assert os.access(_STDLIB, os.X_OK), (
+        f"stdlib entry must be executable: {_STDLIB}"
+    )
+    text = _read(_STDLIB)
+    assert "test_engram_mxfp4_selfcheck.py" in text
+    assert "status=passed" in text
+    assert "exit 0" in text
+    assert "pip install" not in text
+    assert "pytest" not in text
+    assert "import sglang" not in text
+    assert "from sglang" not in text
+
+
 def test_stdlib_entry_is_executable() -> None:
     """The stdlib entry must be executable so CI can invoke it directly.
 

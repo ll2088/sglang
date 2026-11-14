@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Pure-stdlib entry point for the MXFP4 Engram layout self-check.
+# Pure-stdlib entry point for the MXFP4 Engram layout tests.
 #
 # CI environment preparation can fail while resolving the full sglang
 # dependency tree (torch, triton, py-spy, pybase64, pydantic, pyzmq,
 # quack-kernels, regex, ...). The layout module
-# python/sglang/srt/layers/engram_mxfp4.py is stdlib-only, so its checks must
+# python/sglang/srt/layers/engram_mxfp4.py is stdlib-only, so its tests must
 # be runnable without installing the sglang package.
 #
-# This script installs nothing and never imports the sglang package. It runs
-# the dependency-free self-check directly, so CI environment preparation
-# cannot fail here. It is the single supported CI path for these tests and is
-# invoked by run_engram_mxfp4_tests.sh and ci_install_minimal_deps.sh.
+# This script installs nothing, imports no third-party dependency and never
+# imports the sglang package. It runs the stdlib-only self-check by file
+# path, so CI environment preparation cannot fail here.
 #
 # Usage (from the repository root):
 #   bash tests/layers/run_engram_mxfp4_stdlib.sh
 #
-# Exit code 0 means every self-check case passed.
+# It always prints a final `[engram-mxfp4] status=...` line so CI logs show
+# which path was taken.
 
 set -euo pipefail
 
@@ -40,10 +40,9 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "[engram-mxfp4] runner=run_engram_mxfp4_stdlib.sh"
+echo "[engram-mxfp4] entry=run_engram_mxfp4_stdlib.sh"
 echo "[engram-mxfp4] python=$PYTHON_BIN ($(command -v "$PYTHON_BIN"))"
 echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
-echo "[engram-mxfp4] selfcheck=$SELFCHECK"
 
 if "$PYTHON_BIN" "$SELFCHECK"; then
     echo "[engram-mxfp4] status=passed"
