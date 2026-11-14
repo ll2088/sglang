@@ -39,13 +39,22 @@ tree (py-spy, pybase64, pydantic, quack-kernels, ...).
 
 CI environment preparation must not install the `sglang` package itself for
 these tests. Install only the minimal test dependency set and run the tests
-with `PYTHONPATH=python`:
+with `PYTHONPATH=python`. The `tests/layers/pytest.ini` file is intentionally
+minimal and stdlib-only; pass it explicitly with `-c tests/layers/pytest.ini`
+(or use `--confcutdir=tests/layers`) so the repository root configuration is
+not loaded:
 
 ```sh
 python -m pip install --no-deps pytest
-PYTHONPATH=python python -m pytest -q --confcutdir=tests/layers \
-    -p no:cacheprovider tests/layers/test_engram_mxfp4_selfcheck.py
+PYTHONPATH=python python -m pytest -q -c tests/layers/pytest.ini \
+    --confcutdir=tests/layers -p no:cacheprovider \
+    tests/layers/test_engram_mxfp4_minimal.py
 ```
+
+The `test_engram_mxfp4_minimal.py` entry point is self-contained: it loads the
+layout module and the stdlib-only self-check by file path and never imports
+`sglang`, so it stays runnable even when the repository root `conftest.py`
+cannot be imported.
 
 The `--no-deps` flag prevents pip from resolving the full sglang dependency
 tree (py-spy, pybase64, pydantic, quack-kernels, ...). The `tests/layers`
