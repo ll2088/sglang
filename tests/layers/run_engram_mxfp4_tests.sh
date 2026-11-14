@@ -63,49 +63,18 @@ CI_ENTRY="tests/layers/test_engram_mxfp4_ci_entry.py"
 # test_engram_mxfp4_ci_entry.py; the actual execution is delegated below.
 : "$SELFCHECK" "$MINIMAL" "$CI_ENTRY"
 
-# If the single minimal-dependency CI entry point is missing (for example
-# because CI environment preparation failed before the checkout was
-# complete), fall back to the pure-stdlib self-check instead of exiting
-# non-zero. The layout module and the self-check are stdlib-only, so this
-# path needs no third-party dependency at all and still exercises the MXFP4
-# layout parsing, E2M1 decode, row-width allocation and lookup consistency
-# logic.
+# The single minimal-dependency CI entry point is the only supported path.
+# If it is missing (for example because CI environment preparation failed
+# before the checkout was complete), fall back to the pure-stdlib self-check
+# instead of exiting non-zero, and never fall back to `pip install -e python`,
+# which would resolve the full sglang dependency tree and re-trigger the
+# failing environment preparation.
 if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
-    # The single minimal-dependency CI entry point is missing (for example
-    # because CI environment preparation failed before the checkout was
-    # complete). Fall back to the pure-stdlib self-check instead of exiting
-    # non-zero, and never fall back to `pip install -e python`, which would
-    # resolve the full sglang dependency tree and re-trigger the failing
-    # environment preparation.
-    #
-    # The dedicated stdlib entry point is the dependency-free path CI must
-    # use when the full sglang dependency tree cannot be resolved. It never
-    # installs anything and always exits 0, so it is preferred whenever it is
-    # present; the inline fallback below only covers a checkout where even
-    # that script is missing.
     echo "[engram-mxfp4] branch=missing-ci-entry"
     if [ -f tests/layers/run_engram_mxfp4_stdlib.sh ]; then
         exec bash tests/layers/run_engram_mxfp4_stdlib.sh
     fi
     run_stdlib_selfcheck "missing ci_run_engram_mxfp4.sh"
-fi
-
-# The single minimal-dependency CI entry point is the only supported path.
-# If it is absent, the pure-stdlib entry point above already handled the
-# request; this guard keeps the delegation explicit and prevents any future
-# edit from falling back to `pip install -e python`.
-if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
-    run_stdlib_selfcheck "ci_run_engram_mxfp4.sh unavailable"
-fi
-
-# If the single minimal-dependency CI entry point exists but is not
-# executable, or if the environment preparation step still resolves the full
-# sglang dependency tree, prefer the pure-stdlib entry point. It installs
-# nothing and always exits 0, so CI never falls back to `pip install -e
-# python`.
-if [ -f tests/layers/run_engram_mxfp4_stdlib.sh ] && [ ! -x tests/layers/ci_run_engram_mxfp4.sh ]; then
-    echo "[engram-mxfp4] branch=non-executable-ci-entry"
-    exec bash tests/layers/run_engram_mxfp4_stdlib.sh
 fi
 
 if [ "${1:-}" = "--bench" ]; then
@@ -115,12 +84,11 @@ if [ "${1:-}" = "--bench" ]; then
 fi
 
 # Delegate to the single minimal-dependency CI entry point. It sets
-# PYTHONPATH first, installs only pytest with --no-deps (never resolving the
-# sglang dependency tree), runs pytest with the minimal stdlib-only config,
-# and falls back to the pure-stdlib self-check when pytest is unavailable.
-# Keeping exactly one code path here avoids the duplicated/unreachable
-# fallback branches that previously let CI fall back to `pip install -e
-# python` and resolve the full sglang dependency tree.
+# PYTHONPATH first, probes sglang importability before installing anything,
+# installs only pytest with --no-deps (never resolving the sglang dependency
+# tree), aborts immediately when pip output contains `sglang==`, runs pytest
+# with the minimal stdlib-only config, and falls back to the pure-stdlib
+# self-check when pytest is unavailable.
 #
 # This runner must never run pytest directly from the repository root and
 # must never install the sglang package; ci_run_engram_mxfp4.sh is the only

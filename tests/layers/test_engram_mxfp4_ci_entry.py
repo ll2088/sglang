@@ -207,6 +207,15 @@ def test_ci_entry_script_exists_and_is_dependency_free() -> None:
     assert "status=pytest-passed" in text
     assert "--confcutdir=tests/layers" in text
     assert "--engram-mxfp4-stdlib-only" in text
+    # The entry point must abort immediately when pip output contains
+    # `sglang==`, so a stray `pip install -e python` cannot keep downloading
+    # the full dependency tree.
+    assert "grep -q 'sglang=='" in text, (
+        "CI entry point must abort when pip output contains sglang=="
+    )
+    assert "PIPESTATUS" in text, (
+        "CI entry point must stream pip output and inspect its status"
+    )
 
 
 if __name__ == "__main__":
