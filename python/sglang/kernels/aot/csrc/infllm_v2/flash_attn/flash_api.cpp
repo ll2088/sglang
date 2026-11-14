@@ -445,6 +445,17 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
     params.leftpad_k = static_cast<int*>(leftpad_k.data_ptr());
   }
 
+  if (kv_batch_idx_.has_value()) {
+    auto kv_batch_idx = kv_batch_idx_.value();
+    CHECK_DEVICE(kv_batch_idx);
+    CHECK_CONTIGUOUS(kv_batch_idx);
+    TORCH_CHECK(kv_batch_idx.scalar_type() == torch::kInt32, "kv_batch_idx must have dtype int32");
+    // The forward mainloops read kv_batch_idx[bidb] for every bidb < batch_size, so a
+    // shorter tensor would be read past its end and a longer one would be silently accepted.
+    CHECK_SHAPE(kv_batch_idx, batch_size);
+    params.kv_batch_idx = reinterpret_cast<int*>(kv_batch_idx.data_ptr());
+  }
+
   // number of times random will be generated per thread, to offset philox counter in thc random
   // state
   // We use a custom RNG that increases the offset by batch_size * nheads * 32.

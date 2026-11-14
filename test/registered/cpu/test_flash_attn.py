@@ -239,6 +239,57 @@ class TestFlashAttn(CustomTestCase):
         # returns True → dispatches to flash_attn_varlen_kernel_impl
         self._test_flash_attn_large_seq_causal_mask_once([5000, 4999])
 
+    def _make_kvcache_inputs(self, batch_size, seqlen_k, nheads, head_dim):
+        dtype = torch.bfloat16
+        q = torch.randn(batch_size, 1, nheads, head_dim, dtype=dtype)
+        k_cache = torch.randn(batch_size, seqlen_k, nheads, head_dim, dtype=dtype)
+        v_cache = torch.randn_like(k_cache)
+        return q, k_cache, v_cache
+
+    def test_flash_attn_kvcache_kv_batch_idx_length_match(self):
+        # One index per sequence must NOT raise and must produce a finite output.
+        batch_size, seqlen_k, nheads, head_dim = 4, 256, 2, 128
+        q, k_cache, v_cache = self._make_kvcache_inputs(
+            batch_size, seqlen_k, nheads, head_dim
+        )
+        kv_batch_idx = torch.tensor([1, 0, 3, 2], dtype=torch.int32)
+
+        out = flash_attn_with_kvcache(
+            q, k_cache, v_cache, kv_batch_idx=kv_batch_idx
+        )
+
+        self.assertEqual(out.shape, (batch_size, 1, nheads, head_dim))
+        self.assertFalse(out.isnan().any())
+
+    def test_flash_attn_kvcache_kv_batch_idx_length_mismatch(self):
+        # The forward mainloops read kv_batch_idx[b] for every b < batch_size, so a
+        # length other than batch_size must be rejected instead of read past its end.
+        batch_size, seqlen_k, nheads, head_dim = 4, 256, 2, 128
+        q, k_cache, v_cache = self._make_kvcache_inputs(
+            batch_size, seqlen_k, nheads, head_dim
+        )
+        # Slices of one buffer: the memory right after a short slice holds valid indices.
+        buf = torch.tensor([1, 0, 3, 2, 3], dtype=torch.int32)
+        match = r"kv_batch_idx (must have shape|dimension 0 must have size)"
+
+        for kv_batch_idx in (buf[:2], buf):  # 2 and 5 indices for 4 sequences
+            with self.assertRaisesRegex(RuntimeError, match):
+                flash_attn_with_kvcache(
+                    q, k_cache, v_cache, kv_batch_idx=kv_batch_idx
+                )
+
+    def test_flash_attn_kvcache_kv_batch_idx_none(self):
+        # Without kv_batch_idx the length check must not be triggered.
+        batch_size, seqlen_k, nheads, head_dim = 4, 256, 2, 128
+        q, k_cache, v_cache = self._make_kvcache_inputs(
+            batch_size, seqlen_k, nheads, head_dim
+        )
+
+        out = flash_attn_with_kvcache(q, k_cache, v_cache)
+
+        self.assertEqual(out.shape, (batch_size, 1, nheads, head_dim))
+        self.assertFalse(out.isnan().any())
+
 
 if __name__ == "__main__":
     unittest.main()
