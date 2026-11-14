@@ -19,3 +19,18 @@ _PYTHON_DIR = os.path.join(_REPO_ROOT, "python")
 
 if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
     sys.path.insert(0, _PYTHON_DIR)
+
+
+def pytest_configure(config):  # noqa: ARG001 - pytest hook signature
+    """Keep the stdlib-only Engram MXFP4 tests collectable without sglang.
+
+    The repository root ``conftest.py`` (and any ``pytest.ini``/``pyproject``
+    ``addopts``) may import the ``sglang`` package, which pulls in the full
+    dependency tree (torch, triton, ...). CI environment preparation can fail
+    while installing that tree, so the MXFP4 layout tests must not depend on
+    it. This hook is intentionally a no-op beyond ensuring the source
+    directory is importable; the layout module itself is loaded by file path
+    in the test modules, so no ``import sglang`` is triggered here.
+    """
+    if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
+        sys.path.insert(0, _PYTHON_DIR)

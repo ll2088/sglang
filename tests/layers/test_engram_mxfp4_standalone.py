@@ -23,6 +23,13 @@ _PYTHON_DIR = os.path.join(_REPO_ROOT, "python")
 if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
     sys.path.insert(0, _PYTHON_DIR)
 
+# This entry point must stay runnable when the full sglang dependency tree
+# (torch, triton, ...) cannot be installed during CI environment preparation.
+# It therefore never imports the ``sglang`` package: the layout module and the
+# self-check are both loaded by file path below. If a future edit adds an
+# ``import sglang`` here, the standalone entry stops working in a minimal CI
+# environment, which is exactly the failure this file exists to prevent.
+
 _SELFCHECK_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "test_engram_mxfp4_selfcheck.py",
