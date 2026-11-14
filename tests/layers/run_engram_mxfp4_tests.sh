@@ -45,6 +45,18 @@ fi
 
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}python"
 
+# Hard guard: the stdlib entry point must exist before anything else runs.
+# If it is missing, fail loudly instead of falling through to a pytest path
+# that may resolve the full sglang dependency tree (py-spy, pybase64,
+# pydantic, pyzmq, quack-kernels, regex, ...) and fail during CI environment
+# preparation.
+STDLIB_ENTRY="tests/layers/run_engram_mxfp4_stdlib.sh"
+if [ ! -f "$STDLIB_ENTRY" ]; then
+    echo "[engram-mxfp4] branch=missing-stdlib-entry" >&2
+    echo "[engram-mxfp4] status=error: missing $STDLIB_ENTRY" >&2
+    exit 1
+fi
+
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
     PYTHON_BIN="python"
@@ -81,17 +93,8 @@ CI_ENTRY="tests/layers/test_engram_mxfp4_ci_entry.py"
 # nothing and never resolves the sglang dependency tree, so CI environment
 # preparation cannot fail here. Prefer it over any pytest-based path so the
 # four CI dimensions always produce a decidable result.
-if [ -f tests/layers/run_engram_mxfp4_stdlib.sh ]; then
-    echo "[engram-mxfp4] branch=stdlib-entry"
-    exec bash tests/layers/run_engram_mxfp4_stdlib.sh
-fi
-
-# The stdlib entry point is required: without it this runner would have to
-# fall back to a pytest path that may resolve the full sglang dependency
-# tree. Fail loudly instead of silently degrading.
-echo "[engram-mxfp4] branch=missing-stdlib-entry"
-echo "[engram-mxfp4] status=error: missing run_engram_mxfp4_stdlib.sh" >&2
-exit 1
+echo "[engram-mxfp4] branch=stdlib-entry"
+exec bash "$STDLIB_ENTRY"
 
 # Unreachable: the stdlib entry point above is the only supported path. The
 # remaining code is kept only to document the delegation chain and must never

@@ -109,7 +109,40 @@ def test_stdlib_runner_exists_and_is_dependency_free() -> None:
     assert "pip install" not in text, "stdlib runner must not install anything"
     assert "test_engram_mxfp4_selfcheck.py" in text
     assert "status=stdlib-selfcheck" in text
+    assert "status=passed" in text
     assert "exit 0" in text
+
+
+def test_delegating_runners_guard_before_delegating() -> None:
+    """Guard: the delegating runners must check the stdlib entry first.
+
+    CI environment preparation failed because the setup command still ran
+    ``pip install -e python`` and resolved the full sglang dependency tree.
+    The delegating runners must therefore verify that the pure-stdlib entry
+    point exists *before* doing anything else, and must fail loudly when it
+    is missing instead of falling through to a pytest path that may resolve
+    the full dependency tree.
+    """
+    for name in ("run_engram_mxfp4_tests.sh", "ci_install_minimal_deps.sh"):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+        assert os.path.isfile(path), f"missing runner: {path}"
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        assert "STDLIB_ENTRY=" in text, (
+            f"{name} must resolve the stdlib entry point before delegating"
+        )
+        assert "missing-stdlib-entry" in text, (
+            f"{name} must handle a missing stdlib entry point explicitly"
+        )
+        assert "status=error" in text, (
+            f"{name} must fail loudly when the stdlib entry point is missing"
+        )
+        assert "pip install -e" not in text, (
+            f"{name} must not run pip install -e"
+        )
+        assert "pip install sglang" not in text, (
+            f"{name} must not install sglang"
+        )
 
 
 def test_stdlib_runner_uses_only_stdlib_and_exits_zero() -> None:
