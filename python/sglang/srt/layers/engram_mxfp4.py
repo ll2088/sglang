@@ -78,7 +78,7 @@ class EngramLayout:
                 "quantization_config must be a dict or None, got "
                 f"{type(quantization_config).__name__}"
             )
-        quant = quantization_config or {}
+        quant = quantization_config if quantization_config is not None else {}
         embed_quant = quant.get("engram_embed_quant", "fp8")
         if embed_quant not in _SUPPORTED_QUANT:
             raise EngramLayoutError(f"Unsupported engram_embed_quant {embed_quant!r}")
@@ -96,6 +96,12 @@ class EngramLayout:
             )
 
         embed_layers = quant.get("engram_embed_layers", list(layer_ids))
+        if isinstance(embed_layers, (str, bytes)) or not isinstance(
+            embed_layers, Iterable
+        ):
+            raise EngramLayoutError(
+                f"engram_embed_layers must be an iterable of layer ids, got {embed_layers!r}"
+            )
         try:
             embed_layer_set = set(embed_layers)
         except TypeError as exc:
@@ -158,7 +164,7 @@ def decode_e2m1_packed(packed: Iterable[int], dim: int | None = None) -> list[fl
     """
     data = list(packed)
     for i, byte in enumerate(data):
-        if not isinstance(byte, int) or isinstance(byte, bool) or not 0 <= byte <= 0xFF:
+        if isinstance(byte, bool) or not isinstance(byte, int) or not 0 <= byte <= 0xFF:
             raise EngramLayoutError(f"packed[{i}] must be a byte, got {byte!r}")
     if dim is not None:
         if dim <= 0 or dim % 2 != 0:
