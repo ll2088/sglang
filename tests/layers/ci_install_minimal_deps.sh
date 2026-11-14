@@ -26,6 +26,11 @@ cd "$REPO_ROOT"
 
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}python"
 
+# Print the branch actually taken so CI logs make it verifiable that the
+# minimal-dependency path (and not `pip install -e python`) was used.
+echo "[engram-mxfp4] runner=ci_install_minimal_deps.sh"
+echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
+
 # Run the pure-stdlib self-check and always exit 0. This path needs no
 # third-party dependency and still exercises the MXFP4 layout parsing, E2M1
 # decode, row-width allocation and lookup consistency logic, so the four CI
@@ -52,6 +57,7 @@ if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
     # installs anything and always exits 0, so it is preferred whenever it is
     # present; the inline fallback below only covers a checkout where even
     # that script is missing.
+    echo "[engram-mxfp4] branch=missing-ci-entry"
     if [ -f tests/layers/run_engram_mxfp4_stdlib.sh ]; then
         exec bash tests/layers/run_engram_mxfp4_stdlib.sh
     fi
@@ -72,6 +78,7 @@ fi
 # nothing and always exits 0, so CI never falls back to `pip install -e
 # python`.
 if [ -f tests/layers/run_engram_mxfp4_stdlib.sh ] && [ ! -x tests/layers/ci_run_engram_mxfp4.sh ]; then
+    echo "[engram-mxfp4] branch=non-executable-ci-entry"
     exec bash tests/layers/run_engram_mxfp4_stdlib.sh
 fi
 
@@ -82,4 +89,5 @@ fi
 # Keeping exactly one code path here avoids duplicated/unreachable fallback
 # branches that previously let CI fall back to `pip install -e python` and
 # resolve the full sglang dependency tree.
+echo "[engram-mxfp4] branch=delegate-ci-entry"
 exec bash tests/layers/ci_run_engram_mxfp4.sh "$@"
