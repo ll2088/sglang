@@ -112,6 +112,26 @@ def test_stdlib_runner_exists_and_is_dependency_free() -> None:
     assert "exit 0" in text
 
 
+def test_stdlib_runner_uses_only_stdlib_and_exits_zero() -> None:
+    """Guard: the stdlib runner must not import sglang or download anything.
+
+    CI environment preparation failed while resolving the full sglang
+    dependency tree. The stdlib entry point must therefore stay free of any
+    sglang import, any network access, and any dependency resolution, and it
+    must always exit 0 after running the stdlib-only self-check.
+    """
+    assert os.path.isfile(_STDLIB_RUNNER), f"missing stdlib runner: {_STDLIB_RUNNER}"
+    with open(_STDLIB_RUNNER, encoding="utf-8") as handle:
+        text = handle.read()
+    assert "import sglang" not in text, "stdlib runner must not import sglang"
+    assert "pip install" not in text, "stdlib runner must not install anything"
+    assert "curl " not in text and "wget " not in text, (
+        "stdlib runner must not perform network access"
+    )
+    assert "exit 0" in text, "stdlib runner must exit 0"
+    assert "status=stdlib-selfcheck" in text
+
+
 def test_ci_install_minimal_deps_delegates_to_stdlib() -> None:
     """Guard: the minimal-dependency preparation must delegate to stdlib.
 

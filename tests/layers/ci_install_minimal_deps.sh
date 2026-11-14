@@ -42,3 +42,12 @@ fi
 # tree. Fail loudly instead of silently degrading.
 echo "[engram-mxfp4] status=error: missing run_engram_mxfp4_stdlib.sh" >&2
 exit 1
+
+# Unreachable: the stdlib entry point above is the only supported path. The
+# remaining code is kept only to document the delegation chain and must never
+# be reached, so it cannot fall back to `pip install -e python`.
+if [ ! -f tests/layers/run_engram_mxfp4_stdlib.sh ]; then
+    echo "[engram-mxfp4] branch=missing-stdlib-entry"
+    echo "[engram-mxfp4] status=error: missing run_engram_mxfp4_stdlib.sh" >&2
+    exit 1
+fi

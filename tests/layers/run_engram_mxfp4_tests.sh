@@ -89,6 +89,7 @@ fi
 # The stdlib entry point is required: without it this runner would have to
 # fall back to a pytest path that may resolve the full sglang dependency
 # tree. Fail loudly instead of silently degrading.
+echo "[engram-mxfp4] branch=missing-stdlib-entry"
 echo "[engram-mxfp4] status=error: missing run_engram_mxfp4_stdlib.sh" >&2
 exit 1
 
