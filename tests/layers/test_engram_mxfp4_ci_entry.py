@@ -112,6 +112,40 @@ def test_stdlib_runner_exists_and_is_dependency_free() -> None:
     assert "exit 0" in text
 
 
+def test_ci_install_minimal_deps_delegates_to_stdlib() -> None:
+    """Guard: the minimal-dependency preparation must delegate to stdlib.
+
+    CI environment preparation failed because the setup command still ran
+    ``pip install -e python`` and resolved the full sglang dependency tree.
+    ``ci_install_minimal_deps.sh`` must therefore install nothing and
+    delegate to the pure-stdlib entry point, failing loudly when it is
+    missing instead of falling back to a sglang-resolving path.
+    """
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "ci_install_minimal_deps.sh",
+    )
+    assert os.path.isfile(path), f"missing runner: {path}"
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read()
+    assert text.startswith("#!/usr/bin/env bash")
+    assert "pip install" not in text, (
+        "ci_install_minimal_deps.sh must not install anything"
+    )
+    assert "run_engram_mxfp4_stdlib.sh" in text, (
+        "ci_install_minimal_deps.sh must delegate to the stdlib entry point"
+    )
+    assert "branch=stdlib-entry" in text, (
+        "ci_install_minimal_deps.sh must prefer the stdlib entry point"
+    )
+    assert "missing run_engram_mxfp4_stdlib.sh" in text, (
+        "ci_install_minimal_deps.sh must fail loudly when the stdlib entry point is missing"
+    )
+    assert "status=error" in text, (
+        "ci_install_minimal_deps.sh must fail loudly on a pip install guard hit"
+    )
+
+
 def test_stdlib_runner_is_the_only_supported_entry() -> None:
     """Guard: the delegating runners must require the stdlib entry point.
 

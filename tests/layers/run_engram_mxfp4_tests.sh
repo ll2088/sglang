@@ -92,6 +92,10 @@ fi
 echo "[engram-mxfp4] status=error: missing run_engram_mxfp4_stdlib.sh" >&2
 exit 1
 
+# Unreachable: the stdlib entry point above is the only supported path. The
+# remaining code is kept only to document the delegation chain and must never
+# be reached, so it cannot fall back to `pip install -e python`.
+
 # The single minimal-dependency CI entry point is the only supported pytest
 # path. If it is missing (for example because CI environment preparation
 # failed before the checkout was complete), fall back to the pure-stdlib
