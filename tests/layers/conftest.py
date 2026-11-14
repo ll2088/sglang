@@ -48,6 +48,23 @@ def pytest_addoption(parser):  # noqa: ARG001 - pytest hook signature
     )
 
 
+def _install_sglang_stub() -> None:
+    """Pre-seed a stub ``sglang`` module so no import chain pulls it in.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree (torch, triton, py-spy, pybase64, pydantic, pyzmq,
+    quack-kernels, regex, ...). The MXFP4 layout module and its self-check are
+    stdlib-only and are loaded by file path, so the ``sglang`` package must
+    never be imported here. Pre-seeding ``sys.modules['sglang']`` with a stub
+    makes any accidental ``import sglang`` a no-op instead of triggering the
+    full dependency resolution that fails during CI preparation.
+    """
+    if "sglang" not in sys.modules:
+        import types
+
+        sys.modules["sglang"] = types.ModuleType("sglang")
+
+
 def pytest_configure(config):  # noqa: ARG001 - pytest hook signature
     """Keep the stdlib-only Engram MXFP4 tests collectable without sglang.
 
@@ -55,19 +72,18 @@ def pytest_configure(config):  # noqa: ARG001 - pytest hook signature
     ``addopts``) may import the ``sglang`` package, which pulls in the full
     dependency tree (torch, triton, ...). CI environment preparation can fail
     while installing that tree, so the MXFP4 layout tests must not depend on
-    it. This hook is intentionally a no-op beyond ensuring the source
-    directory is importable; the layout module itself is loaded by file path
-    in the test modules, so no ``import sglang`` is triggered here.
+    it. This hook ensures the source directory is importable and pre-seeds a
+    ``sglang`` stub so no import chain can trigger the full dependency
+    install; the layout module itself is loaded by file path in the test
+    modules.
     """
     if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
         sys.path.insert(0, _PYTHON_DIR)
 
-    # When the minimal CI entry point is used, make sure the sglang package
-    # is never imported: the layout module and the self-check are loaded by
-    # file path, so any ``import sglang`` here would defeat the purpose of
-    # the dependency-free path and re-trigger the full dependency install.
-    if getattr(config.option, "engram_mxfp4_stdlib_only", False):
-        sys.modules.setdefault("sglang", None)
+    # Always stub sglang for this directory: the layout module and the
+    # self-check are loaded by file path, so importing the real package would
+    # only re-trigger the dependency resolution this conftest exists to avoid.
+    _install_sglang_stub()
 
 
 def pytest_collection_modifyitems(config, items):  # noqa: ARG001

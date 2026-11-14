@@ -72,7 +72,19 @@ bash tests/layers/ci_run_engram_mxfp4.sh
 ```
 
 The script always prints a final `[engram-mxfp4] status=...` line so CI logs
-show whether the minimal pytest path or the stdlib fallback was used.
+show whether the minimal pytest path or the stdlib fallback was used. It also
+echoes the resolved `PYTHONPATH` and the exact pytest invocation, so CI logs
+make it verifiable that the minimal-dependency path (and not
+`pip install -e python`) was taken.
+
+CI environment preparation must not run `pip install -e python` for these
+tests. If the workflow still does, replace that step with
+`bash tests/layers/ci_run_engram_mxfp4.sh` (or
+`bash tests/layers/ci_install_minimal_deps.sh` followed by
+`bash tests/layers/run_engram_mxfp4_tests.sh`). The `tests/layers/conftest.py`
+pre-seeds a `sglang` stub in `pytest_configure`, so even if the repository
+root configuration is loaded, no import chain can pull in the full sglang
+dependency tree.
 
 ## Performance baseline
 

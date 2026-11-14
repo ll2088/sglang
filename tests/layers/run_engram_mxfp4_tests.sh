@@ -51,6 +51,12 @@ if python -c "import pytest" >/dev/null 2>&1; then
         "$SELFCHECK" "$MINIMAL" "$CI_ENTRY"
 fi
 
+# pytest is not installed: delegate to the single minimal-dependency CI entry
+# point, which installs only pytest --no-deps and otherwise falls back to the
+# stdlib-only self-check. This keeps the runner usable in a minimal CI
+# environment without resolving the full sglang dependency tree.
+exec bash tests/layers/ci_run_engram_mxfp4.sh "$@"
+
 # pytest is not installed: run the stdlib-only self-check directly.
 # This path never imports sglang/torch/triton, so it stays runnable when the
 # full sglang dependency tree cannot be installed during CI preparation.
