@@ -2,16 +2,16 @@
 # Pure-stdlib entry point for the MXFP4 Engram layout checks.
 #
 # CI environment preparation can fail while resolving the full sglang
-# dependency tree (torch, triton, py-spy, pybase64, pydantic, quack-kernels,
-# regex, ...). The layout module python/sglang/srt/layers/engram_mxfp4.py is
-# stdlib-only, so its checks must be runnable without installing anything.
+# dependency tree (torch, triton, py-spy, pybase64, pydantic, pyzmq,
+# quack-kernels, regex, ...). The layout module
+# python/sglang/srt/layers/engram_mxfp4.py is stdlib-only, so its checks must
+# be runnable without installing anything at all.
 #
-# This script never runs `pip install` (in particular it never runs
-# `pip install -e python` / `pip install -e .` / `pip install sglang`), never
-# imports the sglang package, and always exits 0 after running the
-# dependency-free self-check. It is the fallback used by
-# run_engram_mxfp4_tests.sh and ci_install_minimal_deps.sh when the single
-# minimal-dependency CI entry point is unavailable.
+# This script is the last-resort entry point: it installs nothing, imports no
+# third-party package, and always exits 0 after running the stdlib-only
+# self-check. It must never run `pip install` (including `pip install -e
+# python`), because that resolves the full sglang dependency tree and
+# re-triggers the failing CI environment preparation.
 #
 # Usage (from the repository root):
 #   bash tests/layers/run_engram_mxfp4_stdlib.sh
@@ -23,8 +23,17 @@ cd "$REPO_ROOT"
 
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}python"
 
-echo "[engram-mxfp4] status=stdlib-selfcheck"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+fi
+
+echo "[engram-mxfp4] runner=run_engram_mxfp4_stdlib.sh"
+echo "[engram-mxfp4] python=$PYTHON_BIN ($(command -v "$PYTHON_BIN" || echo 'not found'))"
 echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
-echo "[engram-mxfp4] running: python tests/layers/test_engram_mxfp4_selfcheck.py"
-python tests/layers/test_engram_mxfp4_selfcheck.py
+echo "[engram-mxfp4] status=stdlib-selfcheck"
+echo "[engram-mxfp4] running: $PYTHON_BIN tests/layers/test_engram_mxfp4_selfcheck.py"
+
+"$PYTHON_BIN" tests/layers/test_engram_mxfp4_selfcheck.py
+
 exit 0

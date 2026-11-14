@@ -168,6 +168,29 @@ def test_runner_delegates_to_stdlib_when_ci_entry_missing() -> None:
         assert "pip install sglang" not in text, (
             f"{name} must not install sglang"
         )
+        # The stdlib entry point must be the only fallback when the CI entry
+        # point is missing, and it must be present in the checkout.
+        assert "missing-stdlib-entry" in text, (
+            f"{name} must handle a missing stdlib entry point explicitly"
+        )
+
+
+def test_stdlib_entry_point_exists_and_is_dependency_free() -> None:
+    """Guard: the pure-stdlib entry point must exist and install nothing.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree. ``run_engram_mxfp4_stdlib.sh`` is the last-resort entry
+    point: it must exist, must not run any ``pip install``, and must always
+    exit 0 after running the stdlib-only self-check.
+    """
+    assert os.path.isfile(_STDLIB_RUNNER), f"missing stdlib runner: {_STDLIB_RUNNER}"
+    with open(_STDLIB_RUNNER, encoding="utf-8") as handle:
+        text = handle.read()
+    assert text.startswith("#!/usr/bin/env bash")
+    assert "pip install" not in text, "stdlib runner must not install anything"
+    assert "test_engram_mxfp4_selfcheck.py" in text
+    assert "status=stdlib-selfcheck" in text
+    assert "exit 0" in text
 
 
 def test_ci_entry_script_exists_and_is_dependency_free() -> None:

@@ -64,6 +64,14 @@ if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
     run_stdlib_selfcheck "missing ci_run_engram_mxfp4.sh"
 fi
 
+# The stdlib entry point is the only supported fallback. It installs nothing
+# and never resolves the sglang dependency tree, so CI environment
+# preparation cannot fail here.
+if [ ! -f tests/layers/run_engram_mxfp4_stdlib.sh ]; then
+    echo "[engram-mxfp4] branch=missing-stdlib-entry"
+    run_stdlib_selfcheck "missing run_engram_mxfp4_stdlib.sh"
+fi
+
 # Delegate to the single minimal-dependency CI entry point. It sets
 # PYTHONPATH first, probes sglang importability before installing anything,
 # installs only pytest with --no-deps (never resolving the sglang dependency
