@@ -170,5 +170,44 @@ def test_runner_delegates_to_stdlib_when_ci_entry_missing() -> None:
         )
 
 
+def test_ci_entry_script_exists_and_is_dependency_free() -> None:
+    """Guard: the single minimal-dependency CI entry point must exist.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree. ``ci_run_engram_mxfp4.sh`` is the only supported entry
+    point: it installs only pytest with ``--no-deps``, asserts that sglang is
+    not importable, and never runs ``pip install -e python``. This test
+    asserts the script exists and contains those guards, so a future edit
+    cannot silently reintroduce the full dependency resolution.
+    """
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "ci_run_engram_mxfp4.sh",
+    )
+    assert os.path.isfile(path), f"missing CI entry point: {path}"
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read()
+    assert text.startswith("#!/usr/bin/env bash")
+    assert "pip install --no-deps" in text, (
+        "CI entry point must install pytest with --no-deps"
+    )
+    assert "pip install -e" not in text, (
+        "CI entry point must not fall back to pip install -e"
+    )
+    assert "pip install sglang" not in text, (
+        "CI entry point must not install sglang"
+    )
+    assert "find_spec('sglang')" in text, (
+        "CI entry point must assert sglang is not importable"
+    )
+    assert "status=error" in text, (
+        "CI entry point must fail loudly when sglang is importable"
+    )
+    assert "status=stdlib-selfcheck" in text
+    assert "status=pytest-passed" in text
+    assert "--confcutdir=tests/layers" in text
+    assert "--engram-mxfp4-stdlib-only" in text
+
+
 if __name__ == "__main__":
     raise SystemExit(_selfcheck.run_selfcheck())

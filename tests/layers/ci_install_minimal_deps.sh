@@ -26,9 +26,15 @@ cd "$REPO_ROOT"
 
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}python"
 
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+fi
+
 # Print the branch actually taken so CI logs make it verifiable that the
 # minimal-dependency path (and not `pip install -e python`) was used.
 echo "[engram-mxfp4] runner=ci_install_minimal_deps.sh"
+echo "[engram-mxfp4] python=$PYTHON_BIN ($(command -v "$PYTHON_BIN" || echo 'not found'))"
 echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
 
 # Run the pure-stdlib self-check and always exit 0. This path needs no
@@ -39,8 +45,8 @@ run_stdlib_selfcheck() {
     local reason="$1"
     echo "[engram-mxfp4] status=stdlib-selfcheck ($reason)"
     echo "[engram-mxfp4] PYTHONPATH=$PYTHONPATH"
-    echo "[engram-mxfp4] running: python tests/layers/test_engram_mxfp4_selfcheck.py"
-    python tests/layers/test_engram_mxfp4_selfcheck.py
+    echo "[engram-mxfp4] running: $PYTHON_BIN tests/layers/test_engram_mxfp4_selfcheck.py"
+    "$PYTHON_BIN" tests/layers/test_engram_mxfp4_selfcheck.py
     exit 0
 }
 
