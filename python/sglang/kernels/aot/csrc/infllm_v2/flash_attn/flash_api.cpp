@@ -463,7 +463,10 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
 
   set_params_alibi(params, alibi_slopes_, batch_size, num_heads);
 
-  if (max_seqlen_k > 0) {
+  // An allocated paged cache can still have no logical keys if its page table is empty.
+  // In that case max_seqlen_k (derived from the page-table columns) is 0 while the
+  // allocated cache tensor may still be non-empty, so guard on the logical length.
+  if (max_seqlen_k > 0 && (!paged_KV || max_num_blocks_per_seq > 0)) {
     auto stream = at::cuda::getCurrentCUDAStream().stream();
     params.num_splits = 1;
     run_mha_fwd_split_stage1(params, stream);
