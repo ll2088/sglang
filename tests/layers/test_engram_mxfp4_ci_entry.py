@@ -94,10 +94,16 @@ def test_ci_entry_never_installs_full_sglang_tree() -> None:
         )
 
 
-def test_ci_entry_installs_only_pytest_with_no_deps() -> None:
-    """The only allowed install is pytest with --no-deps."""
+def test_ci_entry_never_installs_anything() -> None:
+    """The CI entry must not install anything at all.
+
+    Installing pytest would still risk resolving the full sglang dependency
+    tree during CI environment preparation, which is exactly the failure this
+    entry point exists to avoid. When pytest is unavailable the entry falls
+    back to the pure-stdlib self-check instead.
+    """
     text = _read(_CI_ENTRY_PATH)
-    assert "pip install --no-deps pytest" in text
+    assert "pip install" not in text
     assert "pip install -e" not in text
 
 
@@ -138,6 +144,14 @@ def test_ci_entry_uses_minimal_pytest_config() -> None:
     assert "--rootdir=tests/layers" in text
     assert "--confcutdir=tests/layers" in text
     assert "--engram-mxfp4-stdlib-only" in text
+
+
+def test_ci_entry_supports_bench_mode() -> None:
+    """The CI entry must expose the dependency-free benchmark path."""
+    text = _read(_CI_ENTRY_PATH)
+    assert "--bench" in text
+    assert "bench_engram_mxfp4.py" in text
+    assert "status=bench" in text
 
 
 def test_runner_delegates_to_ci_entry() -> None:

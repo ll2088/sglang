@@ -65,7 +65,7 @@ fi
 
 if [ "${1:-}" = "--bench" ]; then
     shift
-    exec python tests/layers/bench_engram_mxfp4.py "$@"
+    exec bash tests/layers/ci_run_engram_mxfp4.sh --bench "$@"
 fi
 
 # If the minimal-dependency CI entry point is missing (for example because

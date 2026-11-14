@@ -50,26 +50,13 @@ if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
     run_stdlib_selfcheck "missing ci_run_engram_mxfp4.sh"
 fi
 
-# Delegate to the single minimal-dependency CI entry point. It installs only
-# pytest with --no-deps (never resolving the sglang dependency tree), runs
-# pytest with the minimal stdlib-only config, and falls back to the pure
-# stdlib self-check when pytest is unavailable. Keeping the install logic in
-# exactly one place avoids the duplicated/unreachable fallback branches that
-# previously let CI fall back to `pip install -e python` and resolve the full
-# sglang dependency tree.
-#
-# This script must never run `pip install -e python`, `pip install -e .` or
-# `pip install sglang`; ci_run_engram_mxfp4.sh is the only supported entry
-# point.
-exec bash tests/layers/ci_run_engram_mxfp4.sh "$@"
-
-# Delegate to the single minimal-dependency CI entry point. It installs only
-# pytest with --no-deps (never resolving the sglang dependency tree), runs
-# pytest with the minimal stdlib-only config, and falls back to the pure
-# stdlib self-check when pytest is unavailable. Keeping the install logic in
-# exactly one place avoids the duplicated/unreachable fallback branches that
-# previously let CI fall back to `pip install -e python` and resolve the full
-# sglang dependency tree.
+# Delegate to the single minimal-dependency CI entry point. It never installs
+# anything (installing would re-trigger the failing full sglang dependency
+# resolution), runs pytest with the minimal stdlib-only config when pytest is
+# available, and falls back to the pure stdlib self-check otherwise. Keeping
+# the logic in exactly one place avoids the duplicated/unreachable fallback
+# branches that previously let CI fall back to `pip install -e python` and
+# resolve the full sglang dependency tree.
 #
 # This script must never run `pip install -e python`, `pip install -e .` or
 # `pip install sglang`; ci_run_engram_mxfp4.sh is the only supported entry
