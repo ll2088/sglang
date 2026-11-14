@@ -180,6 +180,41 @@ def test_ci_entry_script_installs_pytest_without_deps() -> None:
     )
 
 
+def test_ci_entry_script_is_executable_and_self_contained() -> None:
+    """Guard: the CI entry must be a runnable, self-contained script.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree. The entry point must therefore be a standalone shell
+    script that sets PYTHONPATH itself, installs only pytest with --no-deps,
+    and falls back to the stdlib self-check when pytest is unavailable. This
+    test asserts the script is present, non-empty, and contains the expected
+    command chain so CI cannot silently fall back to `pip install -e python`.
+    """
+    entry = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "ci_run_engram_mxfp4.sh",
+    )
+    assert os.path.isfile(entry), f"missing CI entry: {entry}"
+    with open(entry, encoding="utf-8") as handle:
+        text = handle.read()
+    assert text.strip(), "CI entry must not be empty"
+    assert text.startswith("#!/usr/bin/env bash"), (
+        "CI entry must be a bash script"
+    )
+    assert "set -uo pipefail" in text, (
+        "CI entry must fail fast on unset variables and pipe errors"
+    )
+    assert "python -m pip install --no-deps" in text, (
+        "CI entry must install pytest with --no-deps"
+    )
+    assert "python -m pytest" in text, (
+        "CI entry must run pytest through the minimal config"
+    )
+    assert "python \"$SELFCHECK\"" in text, (
+        "CI entry must run the stdlib self-check directly"
+    )
+
+
 def test_ci_entry_never_resolves_sglang_dependencies() -> None:
     """Guard: the CI entry must not resolve the sglang dependency tree.
 
