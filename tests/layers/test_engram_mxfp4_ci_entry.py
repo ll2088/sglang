@@ -110,6 +110,31 @@ def test_ci_entry_never_installs_anything() -> None:
     assert "python3 -m pip" not in text
 
 
+def test_ci_entry_uses_strict_shell_mode() -> None:
+    """The CI entry must fail fast on unset variables and pipeline errors.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree. The entry point must therefore surface any unexpected
+    shell error immediately instead of continuing with a partially resolved
+    environment.
+    """
+    text = _read(_CI_ENTRY_PATH)
+    assert "set -euo pipefail" in text
+
+
+def test_ci_entry_probes_pytest_without_installing() -> None:
+    """The CI entry must probe pytest with a plain import, never an install.
+
+    CI environment preparation can fail while resolving the full sglang
+    dependency tree. The entry point must detect a missing pytest with a
+    plain import probe and fall back to the stdlib self-check, never with an
+    install command.
+    """
+    text = _read(_CI_ENTRY_PATH)
+    assert "python -c \"import pytest\"" in text
+    assert "run_stdlib_selfcheck" in text
+
+
 def test_ci_entry_checks_pytest_without_installing() -> None:
     """The CI entry must probe pytest availability without installing it.
 
