@@ -58,6 +58,15 @@ if [ ! -f tests/layers/ci_run_engram_mxfp4.sh ]; then
     run_stdlib_selfcheck "missing ci_run_engram_mxfp4.sh"
 fi
 
+# If the single minimal-dependency CI entry point exists but is not
+# executable, or if the environment preparation step still resolves the full
+# sglang dependency tree, prefer the pure-stdlib entry point. It installs
+# nothing and always exits 0, so CI never falls back to `pip install -e
+# python`.
+if [ -f tests/layers/run_engram_mxfp4_stdlib.sh ] && [ ! -x tests/layers/ci_run_engram_mxfp4.sh ]; then
+    exec bash tests/layers/run_engram_mxfp4_stdlib.sh
+fi
+
 # Delegate to the single minimal-dependency CI entry point. It sets
 # PYTHONPATH first, installs only pytest with --no-deps (never resolving the
 # sglang dependency tree), runs pytest with the minimal stdlib-only config,
