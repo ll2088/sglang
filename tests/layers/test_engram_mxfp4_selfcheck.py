@@ -315,6 +315,40 @@ def test_allocate_rejects_zero_row_width() -> None:
     _expect_error(allocate_row_buffer, layout, 4, max_blocks=8)
 
 
+def test_allocate_rejects_negative_row_width() -> None:
+    layout = EngramLayout(
+        quant="mxfp4",
+        head_dim=0,
+        block_size=32,
+        scale_dtype="ue8m0",
+        packed_fp4=True,
+        row_bytes=-1,
+        num_blocks=0,
+    )
+    _expect_error(allocate_row_buffer, layout, 4, max_blocks=8)
+
+
+def test_allocate_rejects_non_int_max_blocks() -> None:
+    _expect_error(allocate_row_buffer, _mxfp4_layout(), 8, max_blocks=True)
+
+
+def test_row_bytes_rejects_non_int_rows() -> None:
+    _expect_error(row_bytes_for, _mxfp4_layout(), True)
+
+
+def test_dequantize_rejects_non_byte_row_entry() -> None:
+    layout = _mxfp4_layout()
+    row = pack_e2m1([1.0] * layout.head_dim)
+    row[0] = 256
+    _expect_error(dequantize_row, layout, row, [127] * layout.num_blocks)
+
+
+def test_lookup_rejects_non_int_id() -> None:
+    layout = _mxfp4_layout()
+    row = pack_e2m1([1.0] * layout.head_dim)
+    _expect_error(lookup_rows, layout, [row], [[127] * layout.num_blocks], [0.5])
+
+
 # --- lookup consistency across storage paths ------------------------------
 
 

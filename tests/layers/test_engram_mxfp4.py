@@ -20,6 +20,13 @@ try:
 except Exception:  # noqa: BLE001 - any import failure means torch is unavailable
     _HAS_TORCH = False
 
+# This module is intentionally stdlib-only at import time: it loads the layout
+# module by file path and never imports the sglang package. That keeps pytest
+# collection working in a minimal CI environment where the full sglang
+# dependency tree (torch, triton, ...) cannot be installed. The torch-dependent
+# cases below are skipped individually via ``requires_torch`` instead of
+# failing at import time.
+
 # The layout module is stdlib-only and is loaded by file path below, so this
 # module never imports the sglang package. That keeps collection working in a
 # minimal CI environment where the full dependency chain is unavailable.
@@ -339,6 +346,45 @@ def test_allocate_rejects_zero_row_width():
     )
     with pytest.raises(EngramLayoutError):
         allocate_row_buffer(layout, 4, max_blocks=8)
+
+
+def test_allocate_rejects_negative_row_width():
+    layout = EngramLayout(
+        quant="mxfp4",
+        head_dim=0,
+        block_size=32,
+        scale_dtype="ue8m0",
+        packed_fp4=True,
+        row_bytes=-1,
+        num_blocks=0,
+    )
+    with pytest.raises(EngramLayoutError):
+        allocate_row_buffer(layout, 4, max_blocks=8)
+
+
+def test_allocate_rejects_non_int_max_blocks():
+    with pytest.raises(EngramLayoutError):
+        allocate_row_buffer(_mxfp4_layout(), 8, max_blocks=True)
+
+
+def test_row_bytes_rejects_non_int_rows():
+    with pytest.raises(EngramLayoutError):
+        row_bytes_for(_mxfp4_layout(), True)
+
+
+def test_dequantize_rejects_non_byte_row_entry():
+    layout = _mxfp4_layout()
+    row = pack_e2m1([1.0] * layout.head_dim)
+    row[0] = 256
+    with pytest.raises(EngramLayoutError):
+        dequantize_row(layout, row, [127] * layout.num_blocks)
+
+
+def test_lookup_rejects_non_int_id():
+    layout = _mxfp4_layout()
+    row = pack_e2m1([1.0] * layout.head_dim)
+    with pytest.raises(EngramLayoutError):
+        lookup_rows(layout, [row], [[127] * layout.num_blocks], [0.5])
 
 
 # --- lookup consistency across storage paths ------------------------------
