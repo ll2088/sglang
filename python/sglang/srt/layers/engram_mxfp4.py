@@ -66,7 +66,7 @@ class EngramLayout:
         Unsupported quant formats, block sizes, scale dtypes, or partial layer
         lists fail here, before any table allocation happens.
         """
-        if not isinstance(head_dim, int) or head_dim <= 0:
+        if isinstance(head_dim, bool) or not isinstance(head_dim, int) or head_dim <= 0:
             raise EngramLayoutError(f"head_dim must be a positive int, got {head_dim!r}")
         if head_dim % 2 != 0:
             raise EngramLayoutError(f"head_dim must be even, got {head_dim}")
@@ -84,7 +84,7 @@ class EngramLayout:
             raise EngramLayoutError(f"Unsupported engram_embed_quant {embed_quant!r}")
 
         block_size = quant.get("engram_embed_block_size", _EXPECTED_BLOCK_SIZE)
-        if block_size != _EXPECTED_BLOCK_SIZE:
+        if isinstance(block_size, bool) or block_size != _EXPECTED_BLOCK_SIZE:
             raise EngramLayoutError(
                 f"engram_embed_block_size must be {_EXPECTED_BLOCK_SIZE!r}, got {block_size!r}"
             )

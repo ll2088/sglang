@@ -110,6 +110,19 @@ def test_invalid_head_dim_fails(head_dim):
         EngramLayout.from_metadata(head_dim, LAYER_IDS, None)
 
 
+@pytest.mark.parametrize("head_dim", [True, False])
+def test_bool_head_dim_fails(head_dim):
+    with pytest.raises(EngramLayoutError):
+        EngramLayout.from_metadata(head_dim, LAYER_IDS, None)
+
+
+def test_bool_block_size_fails():
+    with pytest.raises(EngramLayoutError):
+        EngramLayout.from_metadata(
+            256, LAYER_IDS, {"engram_embed_block_size": True}
+        )
+
+
 def test_head_dim_not_divisible_by_block_fails():
     with pytest.raises(EngramLayoutError):
         EngramLayout.from_metadata(48, LAYER_IDS, None)
