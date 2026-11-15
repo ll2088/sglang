@@ -296,6 +296,10 @@ class TestFlashAttn(CustomTestCase):
         self.assertEqual(out.shape[0], total_q)
         # Empty KV must not produce NaN/Inf garbage in the output.
         self.assertTrue(torch.isfinite(out).all().item())
+        # The empty-KV host path returns zero output; assert it explicitly so a
+        # regression that launches the paged kernel is caught even if the
+        # out-of-bounds read happens to yield finite garbage.
+        self.assertTrue((out == 0).all().item())
 
     @parametrize(
         batch=[2],
@@ -352,6 +356,10 @@ class TestFlashAttn(CustomTestCase):
         self.assertEqual(out.shape[0], total_q)
         # Empty KV must not produce NaN/Inf garbage in the output.
         self.assertTrue(torch.isfinite(out).all().item())
+        # The empty-KV host path returns zero output; assert it explicitly so a
+        # regression that launches the paged kernel is caught even if the
+        # out-of-bounds read happens to yield finite garbage.
+        self.assertTrue((out == 0).all().item())
 
     @parametrize(
         batch=[2],
