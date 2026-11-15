@@ -253,7 +253,7 @@ class TestFlashAttn(CustomTestCase):
         q, k_cache, v_cache = self._make_kvcache_inputs(
             batch_size, seqlen_k, nheads, head_dim
         )
-        kv_batch_idx = torch.tensor([1, 0, 3, 2], dtype=torch.int32)
+        kv_batch_idx = torch.tensor([1, 0, 3, 2], dtype=torch.int32, device="cuda")
 
         out = flash_attn_with_kvcache(
             q, k_cache, v_cache, kv_batch_idx=kv_batch_idx
@@ -270,7 +270,8 @@ class TestFlashAttn(CustomTestCase):
             batch_size, seqlen_k, nheads, head_dim
         )
         # Slices of one buffer: the memory right after a short slice holds valid indices.
-        buf = torch.tensor([1, 0, 3, 2, 3], dtype=torch.int32)
+        # Keep the buffer on CUDA so the device check passes and the length check is exercised.
+        buf = torch.tensor([1, 0, 3, 2, 3], dtype=torch.int32, device="cuda")
         match = r"kv_batch_idx (must have shape|dimension 0 must have size)"
 
         for kv_batch_idx in (buf[:2], buf):  # 2 and 5 indices for 4 sequences
