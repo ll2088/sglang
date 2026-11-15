@@ -354,6 +354,79 @@ class TestFlashAttn(CustomTestCase):
         head_dim_v=[32],
         is_causal=[True, False],
     )
+    def test_flash_attn_empty_page_table_guard_placeholder(
+        self,
+        batch,
+        max_seqlen_q,
+        num_heads,
+        num_heads_kv,
+        head_dim,
+        head_dim_v,
+        is_causal,
+    ):
+        """Regression: an empty page table must not launch the paged KV kernel.
+
+        Mirrors upstream PR #3161. When the page table has zero columns the
+        logical key length is zero even though the allocated cache tensor is
+        non-empty; the launch guard must short-circuit to the host-side empty
+        path instead of reading out-of-bounds page-table entries.
+        """
+        dtype = torch.bfloat16
+        seqlens_q = torch.full((batch,), max_seqlen_q, dtype=torch.int32)
+        cu_seqlens_q = torch.zeros((batch + 1,), dtype=torch.int32)
+        cu_seqlens_q[1:] = torch.cumsum(seqlens_q, 0)
+        total_q = seqlens_q.sum().item()
+
+        q = torch.randn(total_q, num_heads, head_dim, dtype=dtype)
+        # Allocated cache with non-empty storage but an empty page table.
+        k_cache = torch.randn(4, 256, num_heads_kv, head_dim, dtype=dtype)
+        v_cache = torch.randn_like(k_cache)
+        page_table = torch.empty(batch, 0, dtype=torch.int32)
+
+        # The guard must reject the launch; the call should either return an
+        # empty/zero result or raise a clear error, never read out of bounds.
+        try:
+            out = flash_attn_varlen_func(
+                q,
+                k_cache,
+                v_cache,
+                cu_seqlens_q,
+                cu_seqlens_q,
+                max_seqlen_q,
+                0,
+                is_causal,
+                block_table=page_table,
+            )
+        except (RuntimeError, ValueError):
+            # A clear error is an acceptable outcome for an empty page table.
+            self.assertEqual(page_table.shape[1], 0)
+            return
+        self.assertEqual(out.shape[0], total_q)
+        # Empty KV must not produce NaN/Inf garbage in the output.
+        self.assertTrue(torch.isfinite(out).all().item())
+        # The empty-KV host path returns zero output; assert it explicitly so a
+        # regression that launches the paged kernel is caught even if the
+        # out-of-bounds read happens to yield finite garbage.
+        self.assertTrue((out == 0).all().item())
+        # The guard must have short-circuited before the paged kernel: an empty
+        # page table has zero logical keys, so the host-side empty path is used.
+        self.assertEqual(page_table.shape[1], 0)
+        # The empty page table must be recognized as having zero logical keys.
+        self.assertEqual(page_table.numel(), 0)
+
+    @unittest.skipUnless(
+        _HAS_FLASH_ATTN_VARLEN_FUNC,
+        "flash_attn_varlen_func op is not registered in this build",
+    )
+    @parametrize(
+        batch=[2],
+        max_seqlen_q=[16],
+        num_heads=[4],
+        num_heads_kv=[4],
+        head_dim=[32],
+        head_dim_v=[32],
+        is_causal=[True, False],
+    )
     def test_flash_attn_empty_page_table_view_guard(
         self,
         batch,

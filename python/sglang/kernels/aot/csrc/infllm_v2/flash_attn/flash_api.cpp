@@ -476,6 +476,7 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
   const bool has_logical_kv =
       max_seqlen_k > 0 && (!paged_KV || max_num_blocks_per_seq > 0);
   if (has_logical_kv) {
+    // Non-empty logical KV: launch the paged/non-paged attention kernel.
     auto stream = at::cuda::getCurrentCUDAStream().stream();
     params.num_splits = 1;
     run_mha_fwd_split_stage1(params, stream);
