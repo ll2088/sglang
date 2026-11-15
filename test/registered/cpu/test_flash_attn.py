@@ -15,6 +15,22 @@ flash_attn_varlen_func = torch.ops.sgl_kernel.flash_attn_varlen_func
 torch.manual_seed(1234)
 
 
+def _has_flash_attn_varlen_func():
+    """Return True only when the flash_attn_varlen_func op is registered.
+
+    The empty-page-table regression tests below exercise the paged KV launch
+    guard. On CPU-only CI images the op may not be registered, in which case
+    the tests must be skipped rather than failing during collection.
+    """
+    try:
+        return hasattr(torch.ops.sgl_kernel, "flash_attn_varlen_func")
+    except Exception:
+        return False
+
+
+_HAS_FLASH_ATTN_VARLEN_FUNC = _has_flash_attn_varlen_func()
+
+
 def flash_attn_varlen_ref(
     q,
     k,
@@ -239,6 +255,10 @@ class TestFlashAttn(CustomTestCase):
         # returns True → dispatches to flash_attn_varlen_kernel_impl
         self._test_flash_attn_large_seq_causal_mask_once([5000, 4999])
 
+    @unittest.skipUnless(
+        _HAS_FLASH_ATTN_VARLEN_FUNC,
+        "flash_attn_varlen_func op is not registered in this build",
+    )
     @parametrize(
         batch=[2],
         max_seqlen_q=[16],
@@ -308,6 +328,10 @@ class TestFlashAttn(CustomTestCase):
         # The empty page table must be recognized as having zero logical keys.
         self.assertEqual(page_table.numel(), 0)
 
+    @unittest.skipUnless(
+        _HAS_FLASH_ATTN_VARLEN_FUNC,
+        "flash_attn_varlen_func op is not registered in this build",
+    )
     @parametrize(
         batch=[2],
         max_seqlen_q=[16],
@@ -375,6 +399,10 @@ class TestFlashAttn(CustomTestCase):
         self.assertEqual(page_table.numel(), 0)
         self.assertGreater(page_table.storage().size(), 0)
 
+    @unittest.skipUnless(
+        _HAS_FLASH_ATTN_VARLEN_FUNC,
+        "flash_attn_varlen_func op is not registered in this build",
+    )
     @parametrize(
         batch=[2],
         max_seqlen_q=[16],
