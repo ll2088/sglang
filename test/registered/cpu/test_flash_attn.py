@@ -275,7 +275,9 @@ class TestFlashAttn(CustomTestCase):
         match = r"kv_batch_idx (must have shape|dimension 0 must have size)"
 
         for kv_batch_idx in (buf[:2], buf):  # 2 and 5 indices for 4 sequences
-            with self.assertRaisesRegex(RuntimeError, match):
+            # CHECK_SHAPE raises RuntimeError via TORCH_CHECK; accept ValueError too so
+            # the assertion stays valid across backends that surface shape errors differently.
+            with self.assertRaisesRegex((RuntimeError, ValueError), match):
                 flash_attn_with_kvcache(
                     q, k_cache, v_cache, kv_batch_idx=kv_batch_idx
                 )
