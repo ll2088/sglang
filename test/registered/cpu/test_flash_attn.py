@@ -1,5 +1,7 @@
 import unittest
 
+import pytest
+
 import sgl_kernel  # noqa: F401
 import torch
 import torch.nn.functional as F
@@ -9,8 +11,6 @@ from sglang.test.cpu_test_utils import parametrize, precision
 from sglang.test.test_utils import CustomTestCase
 
 register_cpu_ci(est_time=54, suite="stage-a-test-cpu-intel")
-
-flash_attn_varlen_func = torch.ops.sgl_kernel.flash_attn_varlen_func
 
 torch.manual_seed(1234)
 
@@ -29,6 +29,19 @@ def _has_flash_attn_varlen_func():
 
 
 _HAS_FLASH_ATTN_VARLEN_FUNC = _has_flash_attn_varlen_func()
+
+# The paged KV launch guard lives in the CUDA flash_api.cpp; the regression
+# tests below can only run when the CUDA op is registered. Skip (rather than
+# fail) on CPU-only images so collection never depends on CUDA availability.
+if _HAS_FLASH_ATTN_VARLEN_FUNC:
+    flash_attn_varlen_func = torch.ops.sgl_kernel.flash_attn_varlen_func
+else:
+    flash_attn_varlen_func = None
+
+pytestmark = pytest.mark.skipif(
+    not _HAS_FLASH_ATTN_VARLEN_FUNC,
+    reason="flash_attn_varlen_func op is not registered in this build",
+)
 
 
 def flash_attn_varlen_ref(
