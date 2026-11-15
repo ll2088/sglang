@@ -282,6 +282,12 @@ class TestFlashAttn(CustomTestCase):
                     q, k_cache, v_cache, kv_batch_idx=kv_batch_idx
                 )
 
+        # A longer tensor must also be rejected, not silently accepted.
+        with self.assertRaisesRegex((RuntimeError, ValueError), match):
+            flash_attn_with_kvcache(
+                q, k_cache, v_cache, kv_batch_idx=buf[: batch_size + 1]
+            )
+
     def test_flash_attn_kvcache_kv_batch_idx_none(self):
         # Without kv_batch_idx the length check must not be triggered.
         batch_size, seqlen_k, nheads, head_dim = 4, 256, 2, 128
