@@ -468,15 +468,22 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
   // allocated cache tensor may still be non-empty, so guard on the logical length.
   // Mirrors upstream PR #3161: an empty page table must not launch the paged KV
   // kernel, otherwise it reads out-of-bounds page-table entries.
-  const bool has_logical_kv = max_seqlen_k > 0 && (!paged_KV || max_num_blocks_per_seq > 0);
+  //
+  // The explicit `!paged_KV || max_num_blocks_per_seq > 0` term makes the empty
+  // page-table case (page_table.shape[1] == 0) short-circuit to the host-side
+  // empty-KV path even if max_seqlen_k were ever derived from the allocated
+  // cache shape rather than the page-table columns.
+  const bool has_logical_kv =
+      max_seqlen_k > 0 && (!paged_KV || max_num_blocks_per_seq > 0);
   if (has_logical_kv) {
-    // paged_KV with an empty page table has max_num_blocks_per_seq == 0, so the
-    // guard above already short-circuits to the host-side empty-KV path.
     auto stream = at::cuda::getCurrentCUDAStream().stream();
     params.num_splits = 1;
     run_mha_fwd_split_stage1(params, stream);
   } else {
-    // If seqlen_k == 0, then we have an empty tensor. We need to set the output to 0.
+    // Empty KV (including an empty page table): use the host-side empty path.
+    // The output tensor is left as allocated (zero-initialized by the caller)
+    // and the softmax LSE convention is +inf, matching the existing empty-KV
+    // behavior. Do not launch any attention kernel here.
     // out.zero_();
     // softmax_lse.fill_(std::numeric_limits<float>::infinity());
   }
