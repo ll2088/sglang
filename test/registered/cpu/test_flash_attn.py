@@ -11,6 +11,7 @@ from sglang.test.test_utils import CustomTestCase
 register_cpu_ci(est_time=54, suite="stage-a-test-cpu-intel")
 
 flash_attn_varlen_func = torch.ops.sgl_kernel.flash_attn_varlen_func
+flash_attn_with_kvcache = torch.ops.sgl_kernel.flash_attn_with_kvcache
 
 torch.manual_seed(1234)
 
