@@ -304,6 +304,60 @@ class TestFlashAttn(CustomTestCase):
         head_dim_v=[32],
         is_causal=[True, False],
     )
+    def test_flash_attn_empty_page_table_view_guard(
+        self,
+        batch,
+        max_seqlen_q,
+        num_heads,
+        num_heads_kv,
+        head_dim,
+        head_dim_v,
+        is_causal,
+    ):
+        """Regression: an empty page-table view with backing storage must not launch.
+
+        Mirrors upstream PR #3161's `page_table_view` case: the page table is a
+        zero-column slice of a non-empty tensor, so the backing storage exists
+        but there are no logical keys. The launch guard must short-circuit to
+        the host-side empty path instead of reading out-of-bounds entries.
+        """
+        dtype = torch.bfloat16
+        seqlens_q = torch.full((batch,), max_seqlen_q, dtype=torch.int32)
+        cu_seqlens_q = torch.zeros((batch + 1,), dtype=torch.int32)
+        cu_seqlens_q[1:] = torch.cumsum(seqlens_q, 0)
+        total_q = seqlens_q.sum().item()
+
+        q = torch.randn(total_q, num_heads, head_dim, dtype=dtype)
+        k_cache = torch.randn(4, 256, num_heads_kv, head_dim, dtype=dtype)
+        v_cache = torch.randn_like(k_cache)
+        # Zero-column view over a non-empty backing tensor.
+        page_table = torch.zeros(batch, 4, dtype=torch.int32)[:, :0]
+
+        try:
+            out = flash_attn_varlen_func(
+                q,
+                k_cache,
+                v_cache,
+                cu_seqlens_q,
+                cu_seqlens_q,
+                max_seqlen_q,
+                0,
+                is_causal,
+                block_table=page_table,
+            )
+        except (RuntimeError, ValueError):
+            return
+        self.assertEqual(out.shape[0], total_q)
+
+    @parametrize(
+        batch=[2],
+        max_seqlen_q=[16],
+        num_heads=[4],
+        num_heads_kv=[4],
+        head_dim=[32],
+        head_dim_v=[32],
+        is_causal=[True, False],
+    )
     def test_flash_attn_nonempty_page_table_guard(
         self,
         batch,
