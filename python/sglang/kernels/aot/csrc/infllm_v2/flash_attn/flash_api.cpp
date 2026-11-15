@@ -468,7 +468,8 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
   // allocated cache tensor may still be non-empty, so guard on the logical length.
   // Mirrors upstream PR #3161: an empty page table must not launch the paged KV
   // kernel, otherwise it reads out-of-bounds page-table entries.
-  if (max_seqlen_k > 0 && (!paged_KV || max_num_blocks_per_seq > 0)) {
+  const bool has_logical_kv = max_seqlen_k > 0 && (!paged_KV || max_num_blocks_per_seq > 0);
+  if (has_logical_kv) {
     // paged_KV with an empty page table has max_num_blocks_per_seq == 0, so the
     // guard above already short-circuits to the host-side empty-KV path.
     auto stream = at::cuda::getCurrentCUDAStream().stream();
