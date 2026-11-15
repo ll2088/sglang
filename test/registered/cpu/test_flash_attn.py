@@ -305,6 +305,8 @@ class TestFlashAttn(CustomTestCase):
         # The guard must have short-circuited before the paged kernel: an empty
         # page table has zero logical keys, so the host-side empty path is used.
         self.assertEqual(page_table.shape[1], 0)
+        # The empty page table must be recognized as having zero logical keys.
+        self.assertEqual(page_table.numel(), 0)
 
     @parametrize(
         batch=[2],
@@ -369,6 +371,9 @@ class TestFlashAttn(CustomTestCase):
         self.assertTrue((out == 0).all().item())
         # The zero-column view must still be recognized as an empty page table.
         self.assertEqual(page_table.shape[1], 0)
+        # The view keeps backing storage but has no logical page-table entries.
+        self.assertEqual(page_table.numel(), 0)
+        self.assertGreater(page_table.storage().size(), 0)
 
     @parametrize(
         batch=[2],
