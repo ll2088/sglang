@@ -292,6 +292,8 @@ class TestFlashAttn(CustomTestCase):
                 block_table=page_table,
             )
         except (RuntimeError, ValueError):
+            # A clear error is an acceptable outcome for an empty page table.
+            self.assertEqual(page_table.shape[1], 0)
             return
         self.assertEqual(out.shape[0], total_q)
         # Empty KV must not produce NaN/Inf garbage in the output.
@@ -355,6 +357,8 @@ class TestFlashAttn(CustomTestCase):
                 block_table=page_table,
             )
         except (RuntimeError, ValueError):
+            # A clear error is an acceptable outcome for an empty page table.
+            self.assertEqual(page_table.shape[1], 0)
             return
         self.assertEqual(out.shape[0], total_q)
         # Empty KV must not produce NaN/Inf garbage in the output.
