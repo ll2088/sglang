@@ -473,6 +473,14 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
   // page-table case (page_table.shape[1] == 0) short-circuit to the host-side
   // empty-KV path even if max_seqlen_k were ever derived from the allocated
   // cache shape rather than the page-table columns.
+  //
+  // Static review anchor for the empty page-table guard:
+  //   function: mha_varlen_fwd_stage1 (this file)
+  //   guard:    has_logical_kv = (max_seqlen_k > 0) && (!paged_KV || max_num_blocks_per_seq > 0)
+  //   inputs:   max_seqlen_k            <- logical key length (page-table columns)
+  //             max_num_blocks_per_seq  <- block_table.size(1), 0 for an empty page table
+  //   effect:   empty page table (page_table.shape[1] == 0) => has_logical_kv == false
+  //             => no attention kernel launch, host-side empty-KV path is used.
   const bool has_logical_kv =
       max_seqlen_k > 0 && (!paged_KV || max_num_blocks_per_seq > 0);
   if (has_logical_kv) {
