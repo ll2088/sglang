@@ -274,19 +274,25 @@ class TestFlashAttn(CustomTestCase):
         buf = torch.tensor([1, 0, 3, 2, 3], dtype=torch.int32, device="cuda")
         match = r"kv_batch_idx (must have shape|dimension 0 must have size)"
 
-        for kv_batch_idx in (buf[:2], buf):  # 2 and 5 indices for 4 sequences
-            # CHECK_SHAPE raises RuntimeError via TORCH_CHECK; accept ValueError too so
-            # the assertion stays valid across backends that surface shape errors differently.
-            with self.assertRaisesRegex((RuntimeError, ValueError), match):
-                flash_attn_with_kvcache(
-                    q, k_cache, v_cache, kv_batch_idx=kv_batch_idx
+        def _assert_rejected(idx):
+            # CHECK_SHAPE raises RuntimeError via TORCH_CHECK; some backends surface
+            # shape errors as ValueError, so accept both and always inspect the message.
+            try:
+                flash_attn_with_kvcache(q, k_cache, v_cache, kv_batch_idx=idx)
+            except (RuntimeError, ValueError) as exc:
+                self.assertRegex(str(exc), match)
+            else:
+                self.fail(
+                    "kv_batch_idx of length {} was accepted for batch_size {}".format(
+                        idx.numel(), batch_size
+                    )
                 )
 
+        for kv_batch_idx in (buf[:2], buf):  # 2 and 5 indices for 4 sequences
+            _assert_rejected(kv_batch_idx)
+
         # A longer tensor must also be rejected, not silently accepted.
-        with self.assertRaisesRegex((RuntimeError, ValueError), match):
-            flash_attn_with_kvcache(
-                q, k_cache, v_cache, kv_batch_idx=buf[: batch_size + 1]
-            )
+        _assert_rejected(buf[: batch_size + 1])
 
     def test_flash_attn_kvcache_kv_batch_idx_none(self):
         # Without kv_batch_idx the length check must not be triggered.
