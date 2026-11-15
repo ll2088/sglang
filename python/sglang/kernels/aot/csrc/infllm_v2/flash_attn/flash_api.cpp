@@ -469,6 +469,8 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
   // Mirrors upstream PR #3161: an empty page table must not launch the paged KV
   // kernel, otherwise it reads out-of-bounds page-table entries.
   if (max_seqlen_k > 0 && (!paged_KV || max_num_blocks_per_seq > 0)) {
+    // paged_KV with an empty page table has max_num_blocks_per_seq == 0, so the
+    // guard above already short-circuits to the host-side empty-KV path.
     auto stream = at::cuda::getCurrentCUDAStream().stream();
     params.num_splits = 1;
     run_mha_fwd_split_stage1(params, stream);
