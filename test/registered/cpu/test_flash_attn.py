@@ -294,6 +294,8 @@ class TestFlashAttn(CustomTestCase):
         except (RuntimeError, ValueError):
             return
         self.assertEqual(out.shape[0], total_q)
+        # Empty KV must not produce NaN/Inf garbage in the output.
+        self.assertTrue(torch.isfinite(out).all().item())
 
     @parametrize(
         batch=[2],
@@ -348,6 +350,8 @@ class TestFlashAttn(CustomTestCase):
         except (RuntimeError, ValueError):
             return
         self.assertEqual(out.shape[0], total_q)
+        # Empty KV must not produce NaN/Inf garbage in the output.
+        self.assertTrue(torch.isfinite(out).all().item())
 
     @parametrize(
         batch=[2],
