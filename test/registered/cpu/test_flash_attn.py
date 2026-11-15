@@ -300,6 +300,9 @@ class TestFlashAttn(CustomTestCase):
         # regression that launches the paged kernel is caught even if the
         # out-of-bounds read happens to yield finite garbage.
         self.assertTrue((out == 0).all().item())
+        # The guard must have short-circuited before the paged kernel: an empty
+        # page table has zero logical keys, so the host-side empty path is used.
+        self.assertEqual(page_table.shape[1], 0)
 
     @parametrize(
         batch=[2],
@@ -360,6 +363,8 @@ class TestFlashAttn(CustomTestCase):
         # regression that launches the paged kernel is caught even if the
         # out-of-bounds read happens to yield finite garbage.
         self.assertTrue((out == 0).all().item())
+        # The zero-column view must still be recognized as an empty page table.
+        self.assertEqual(page_table.shape[1], 0)
 
     @parametrize(
         batch=[2],
@@ -404,6 +409,10 @@ class TestFlashAttn(CustomTestCase):
             block_table=page_table,
         )
         self.assertEqual(out.shape[0], total_q)
+        # A non-empty page table must still take the paged kernel path and
+        # produce finite output; the guard must not reject legitimate input.
+        self.assertTrue(torch.isfinite(out).all().item())
+        self.assertEqual(page_table.shape[1], 1)
 
 
 if __name__ == "__main__":
