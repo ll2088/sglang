@@ -34,8 +34,27 @@ def _batch_audio_features(features, masks):
     The helper must always return ``(batch, frames, features)`` and
     ``(batch, frames)`` regardless of the frame count, so a single-frame
     clip keeps the rank the audio tower / encoder-free projection expects.
+
+    This mirrors ``batch_audio_features`` in ``gemma3n_mm``: the tensor branch
+    returns the already-batched tensors unchanged (no ``squeeze(1)``), while the
+    ragged-list branch pads to the max frame count.
     """
-    return features, masks
+    if isinstance(features, torch.Tensor):
+        assert isinstance(masks, torch.Tensor)
+        return features, masks
+
+    assert isinstance(masks, list)
+    max_len = max(f.shape[0] for f in features)
+    padded_features = []
+    padded_masks = []
+    for f, m in zip(features, masks):
+        pad_len = max_len - f.shape[0]
+        if pad_len:
+            f = torch.cat([f, f.new_zeros(pad_len, f.shape[-1])], dim=0)
+            m = torch.cat([m, m.new_zeros(pad_len)], dim=0)
+        padded_features.append(f)
+        padded_masks.append(m)
+    return torch.stack(padded_features), torch.stack(padded_masks)
 
 
 def _num_frames(num_samples: int, samples_per_token: int = SAMPLES_PER_TOKEN) -> int:
@@ -101,3 +120,31 @@ def test_single_frame_batch_keeps_rank_via_helper(num_samples):
     assert batched_mask.shape == (1, frames)
     assert batched_features.dim() == 3
     assert batched_mask.dim() == 2
+
+
+def test_ragged_batching_pads_to_max_frames():
+    """Ragged per-item features are padded to the max frame count."""
+    features = [torch.zeros(3, 128), torch.zeros(6, 128)]
+    masks = [torch.ones(3, dtype=torch.bool), torch.ones(6, dtype=torch.bool)]
+
+    batched_features, batched_mask = _batch_audio_features(features, masks)
+
+    assert batched_features.shape == (2, 6, 128)
+    assert batched_mask.shape == (2, 6)
+    assert int(batched_mask[0].sum()) == 3
+    assert int(batched_mask[1].sum()) == 6
+    assert not batched_mask[0, 3:].any()
+
+
+def test_single_frame_ragged_batching_keeps_rank():
+    """A singleton frame among ragged items still yields rank-3 output."""
+    features = [torch.zeros(1, 128), torch.zeros(4, 128)]
+    masks = [torch.ones(1, dtype=torch.bool), torch.ones(4, dtype=torch.bool)]
+
+    batched_features, batched_mask = _batch_audio_features(features, masks)
+
+    assert batched_features.dim() == 3
+    assert batched_mask.dim() == 2
+    assert batched_features.shape == (2, 4, 128)
+    assert batched_mask.shape == (2, 4)
+    assert int(batched_mask[0].sum()) == 1

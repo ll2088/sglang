@@ -326,7 +326,9 @@ class Gemma3nForConditionalGeneration(PreTrainedModel):
         for input_features, input_features_mask in zip(
             all_input_features, all_input_features_mask
         ):
-            # Ensure proper tensor format
+            # Ensure proper tensor format. The audio tower consumes a
+            # (batch, frames, features) contract, so a single-frame clip must
+            # keep its time axis instead of being squeezed away.
             if input_features.dim() == 2:
                 input_features = input_features.unsqueeze(0)
             if input_features_mask.dim() == 1:

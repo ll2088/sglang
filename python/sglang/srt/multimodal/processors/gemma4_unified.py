@@ -39,8 +39,15 @@ class Gemma4UnifiedSGLangProcessor(Gemma4SGLangProcessor):
 
         The unified model is encoder-free, so the placeholder count must match
         the feature extractor's raw-frame count ``ceil(L / audio_samples_per_token)``
-        rather than any tower downsampling arithmetic.
+        rather than any tower downsampling arithmetic.  This keeps the number of
+        emitted audio tokens equal to the number of valid frames the feature
+        extractor produces, including partial trailing frames.
         """
         fe = getattr(self._processor, "feature_extractor", None)
         samples_per_token = getattr(fe, "audio_samples_per_token", 640)
+        if samples_per_token <= 0:
+            raise ValueError(
+                f"Invalid audio_samples_per_token={samples_per_token!r}; "
+                "expected a positive integer."
+            )
         return math.ceil(num_samples / samples_per_token)
