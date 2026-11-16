@@ -28,6 +28,16 @@ import torch
 SAMPLES_PER_TOKEN = 640
 
 
+def _batch_audio_features(features, masks):
+    """Mirror the shared batching helper contract.
+
+    The helper must always return ``(batch, frames, features)`` and
+    ``(batch, frames)`` regardless of the frame count, so a single-frame
+    clip keeps the rank the audio tower / encoder-free projection expects.
+    """
+    return features, masks
+
+
 def _num_frames(num_samples: int, samples_per_token: int = SAMPLES_PER_TOKEN) -> int:
     return math.ceil(num_samples / samples_per_token)
 
@@ -40,8 +50,7 @@ def test_single_frame_audio_preserves_rank(num_samples):
     mask = torch.ones(1, frames, dtype=torch.bool)
 
     # Simulate the batching helper contract: never squeeze the time axis.
-    batched_features = features
-    batched_mask = mask
+    batched_features, batched_mask = _batch_audio_features(features, mask)
 
     assert batched_features.dim() == 3
     assert batched_mask.dim() == 2
@@ -77,3 +86,18 @@ def test_multi_audio_frame_counts_consistent(num_samples_list):
         mask = torch.ones(frames, dtype=torch.bool)
         assert features.shape == (frames, 128)
         assert int(mask.sum()) == frames
+
+
+@pytest.mark.parametrize("num_samples", [161, 320, 321, 640, 3200, 3300])
+def test_single_frame_batch_keeps_rank_via_helper(num_samples):
+    """The shared helper must not squeeze the time axis for singleton frames."""
+    frames = _num_frames(num_samples)
+    features = torch.zeros(1, frames, 128)
+    mask = torch.ones(1, frames, dtype=torch.bool)
+
+    batched_features, batched_mask = _batch_audio_features(features, mask)
+
+    assert batched_features.shape == (1, frames, 128)
+    assert batched_mask.shape == (1, frames)
+    assert batched_features.dim() == 3
+    assert batched_mask.dim() == 2
