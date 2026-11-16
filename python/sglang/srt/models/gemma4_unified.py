@@ -319,6 +319,9 @@ class Gemma4UnifiedForConditionalGeneration(Gemma4ForConditionalGeneration):
 
         all_embeds = []
         for input_features, mask in zip(all_input_features, all_masks):
+            # Preserve the (batch, frames, features) contract even when the
+            # time dimension is one: squeezing it would drop the rank the
+            # encoder-free projection expects for short audio clips.
             if input_features.dim() == 2:
                 input_features = input_features.unsqueeze(0)
             if mask.dim() == 1:

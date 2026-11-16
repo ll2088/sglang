@@ -12,6 +12,8 @@
 # limitations under the License.
 # ==============================================================================
 
+import math
+
 from sglang.srt.models.gemma4_unified import Gemma4UnifiedForConditionalGeneration
 from sglang.srt.multimodal.processors.gemma4 import Gemma4SGLangProcessor
 
@@ -31,3 +33,14 @@ class Gemma4UnifiedSGLangProcessor(Gemma4SGLangProcessor):
     def _get_audio_pad_multiple(self) -> int:
         fe = getattr(self._processor, "feature_extractor", None)
         return getattr(fe, "audio_samples_per_token", 640)
+
+    def _get_audio_num_tokens(self, num_samples: int) -> int:
+        """Number of audio placeholder tokens for a raw waveform.
+
+        The unified model is encoder-free, so the placeholder count must match
+        the feature extractor's raw-frame count ``ceil(L / audio_samples_per_token)``
+        rather than any tower downsampling arithmetic.
+        """
+        fe = getattr(self._processor, "feature_extractor", None)
+        samples_per_token = getattr(fe, "audio_samples_per_token", 640)
+        return math.ceil(num_samples / samples_per_token)
