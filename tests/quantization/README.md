@@ -1,36 +1,48 @@
-# tests/quantization
+# Self-contained quantization tests
 
-Self-contained tests for explicit activation-quantization fallback handling
-(`python/sglang/srt/layers/quantization/activation_fallback.py`).
+This directory hosts the activation-quantization fallback suite
+(`test_activation_fallback.py`). It is deliberately self-contained so it can
+run on GPU-less CI runners without installing the full `sglang` runtime
+dependency set.
 
-## Why this directory is self-contained
+## Why self-contained
 
-These tests must run on GPU-less CI runners. They load the module under test
-directly from its file path and only use the standard library plus `pytest`.
-They must **not** require `pip install -e python` (or `pip install sglang`),
-which pulls the full sglang runtime dependency set and fails on such runners.
+The module under test
+(`python/sglang/srt/layers/quantization/activation_fallback.py`) only uses the
+standard library. The test module loads it directly from its file path, so no
+`import sglang` is required. This avoids the failure mode where CI runs
+`pip install -e python`, which resolves the full sglang dependency set and
+fails on runners without a GPU or the required system libraries.
 
 ## How to run
 
-Install only the minimal dependencies and run with the directory-local
-`pytest.ini` so the repository-root configuration is not picked up:
+Install only the minimal dependencies:
 
 ```bash
 pip install -r tests/quantization/requirements.txt
+```
+
+Then run the suite with the directory-local pytest configuration so the
+repository-root `pytest.ini` is not picked up:
+
+```bash
 python -m pytest -q -c tests/quantization/pytest.ini tests/quantization
 ```
 
-Do **not** run `pip install -e python` before this suite.
+Do **not** run `pip install -e python` (or `pip install sglang`) before this
+suite. That pulls the full runtime dependency set and is exactly the
+environment-setup failure this suite is designed to avoid.
 
-## What is covered
+## CI guidance
 
-- `VLLM_STRICT_QUANT_SCHEME` parsing (`""`/`"0"` disabled, anything else enabled).
-- `executed_activation_key` dispatch for kernels that honor, declare, or drop
-  the requested activation quantization (humming / marlin / mxfp4 / fp8).
-- `check_activation_quant_fallback` in default mode (once-per-kernel warning,
-  returns a reason) and strict mode (raises `ValueError` mentioning
-  `VLLM_STRICT_QUANT_SCHEME` and the requested/executed mismatch).
-- Backend selection loop: default mode selects the fallback kernel, strict mode
-  skips it and falls through to a later kernel that honors the scheme, or fails
-  with the mismatch reason.
-- MoE runner declarations (`MoeRunnerCore` base, humming, marlin).
+CI jobs that run this directory should:
+
+1. Install only `tests/quantization/requirements.txt` (pytest and
+   pytest-randomly).
+2. Set `PYTHONPATH` to the repository `python/` directory if any future test
+   in this directory needs to import `sglang` from the checkout.
+3. Invoke pytest with `-c tests/quantization/pytest.ini` so rootdir/testpaths
+   are pinned to this directory.
+
+If the CI configuration cannot be changed, provide reproducible local
+verification evidence (full commands and output) in the commit description.
