@@ -1,170 +1,46 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Minimal conftest for the activation-fallback test suite.
+"""Lightweight conftest for the self-contained activation-fallback suite.
 
-This suite is intentionally self-contained: it must run without installing the
-``sglang`` package (no GPU, no compiled kernels, no third-party deps). The
-conftest therefore only performs path and file-existence checks and does not
-import anything from ``sglang``.
+This suite must run without installing the full sglang runtime dependency set
+(no GPU, no compiled kernels). The module under test only uses the standard
+library, so it is loaded directly from its file path by the test module.
 
-CI jobs that run this directory should install only
-``tests/quantization/requirements.txt`` (pytest) and must NOT run
-``pip install -e python``, which pulls the full sglang runtime dependency set
-and fails on GPU-less runners. The directory-local ``pytest.ini`` pins
-rootdir/testpaths to this directory so the repository-root pytest
-configuration is not picked up.
+This conftest deliberately does NOT import ``sglang`` and does NOT add the
+repository root to ``sys.path`` in a way that would trigger the root
+``conftest.py`` (which may import the full runtime). It only makes the
+``python/`` source tree importable for tests that want to import the module
+under test by package path, without requiring ``pip install -e python``.
 """
 
 from __future__ import annotations
 
 import sys
-import warnings
 from pathlib import Path
 
-import pytest
 
-# This suite is intentionally self-contained: it must run without installing
-# the ``sglang`` package. The activation-fallback tests load the module under
-# test directly from its file path, so no import of ``sglang`` is required.
-#
-# We deliberately do NOT monkeypatch ``builtins.__import__`` here. Doing so
-# would break unrelated tooling (e.g. pytest plugins, coverage, or future
-# tests in this directory that legitimately need to import ``sglang`` when it
-# is installed). Instead, the individual test module loads the module under
-# test from its file path and fails with a precise message if the source tree
-# is missing.
+def _find_repo_root(start: Path) -> Path | None:
+    """Walk upwards from ``start`` looking for the repository root.
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-
-# Expose the ``python`` source tree so that, if a future test in this
-# directory does need to import ``sglang``, it can do so from the checkout
-# without a prior ``pip install -e python``. Importing ``sglang`` itself is
-# still not required by the activation-fallback suite, and this conftest does
-# not import it.
-_PYTHON_ROOT = _REPO_ROOT / "python"
-if _PYTHON_ROOT.is_dir() and str(_PYTHON_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PYTHON_ROOT))
-
-# Fail fast with an actionable diagnostic if the module under test is missing.
-# CI logs otherwise show an opaque FileNotFoundError from the test module.
-_ACTIVATION_FALLBACK_PATH = (
-    _PYTHON_ROOT
-    / "sglang"
-    / "srt"
-    / "layers"
-    / "quantization"
-    / "activation_fallback.py"
-)
-if not _ACTIVATION_FALLBACK_PATH.is_file():
-    warnings.warn(
-        "tests/quantization requires "
-        f"{_ACTIVATION_FALLBACK_PATH} to exist in the checkout; "
-        "run the suite from a full repository checkout (no sglang install "
-        "is required, but the source tree must be present). "
-        "Install only tests/quantization/requirements.txt (pytest) and run "
-        "pytest with tests/quantization as the rootdir; do not run "
-        "`pip install -e python`.",
-        RuntimeWarning,
-        stacklevel=1,
-    )
-
-# The directory-local pytest.ini pins rootdir/testpaths to this directory so
-# the suite does not depend on the repository-root pytest configuration.
-_PYTEST_INI_PATH = Path(__file__).resolve().parent / "pytest.ini"
-if not _PYTEST_INI_PATH.is_file():
-    warnings.warn(
-        "tests/quantization/pytest.ini is missing; run this suite with "
-        "`-c tests/quantization/pytest.ini` so rootdir/testpaths are pinned "
-        "to this directory and the repository-root configuration is not "
-        "picked up.",
-        RuntimeWarning,
-        stacklevel=1,
-    )
-
-
-def pytest_configure(config: pytest.Config) -> None:
-    """Warn (not fail) when the suite is misconfigured.
-
-    The activation-fallback suite must run without importing ``sglang``. If a
-    caller forgets ``-c tests/quantization/pytest.ini``, the repository-root
-    pytest configuration may be picked up and pull in the full sglang runtime
-    dependency set, which is exactly the environment-setup failure this suite
-    is designed to avoid. Surface that as a clear warning so the environment
-    is visible in CI logs, while still letting the self-contained tests run
-    when the source tree is present.
+    The repository root is identified by the presence of the ``python``
+    directory containing the ``sglang`` package. Returns ``None`` when the
+    source tree is not present (e.g. a partial checkout), in which case the
+    test module skips itself with an explicit message.
     """
 
-    if not _ACTIVATION_FALLBACK_PATH.is_file():
-        warnings.warn(
-            "tests/quantization requires "
-            f"{_ACTIVATION_FALLBACK_PATH} to exist in the checkout; run the "
-            "suite from a full repository checkout (no sglang install is "
-            "required, but the source tree must be present). The "
-            "activation-fallback tests will be skipped.",
-            RuntimeWarning,
-            stacklevel=1,
-        )
-
-    if not _PYTEST_INI_PATH.is_file():
-        warnings.warn(
-            "tests/quantization/pytest.ini is missing; run this suite with "
-            "`-c tests/quantization/pytest.ini` so rootdir/testpaths are "
-            "pinned to this directory and the repository-root configuration "
-            "is not picked up.",
-            RuntimeWarning,
-            stacklevel=1,
-        )
-
-    # The suite is self-contained and must not depend on the full sglang
-    # runtime. A full ``pip install -e python`` is not required, but it is
-    # also not fatal: the tests load the module under test directly from its
-    # file path and never import ``sglang`` themselves. Emit a warning so the
-    # environment is visible in CI logs without blocking the run.
-    if _sglang_installed_from_full_install():
-        warnings.warn(
-            "tests/quantization is running with a full sglang install "
-            "present; the suite is self-contained and only requires "
-            "tests/quantization/requirements.txt (pytest).",
-            RuntimeWarning,
-            stacklevel=1,
-        )
+    for candidate in (start, *start.parents):
+        if (candidate / "python" / "sglang" / "srt").is_dir():
+            return candidate
+    return None
 
 
-def _sglang_installed_from_full_install() -> bool:
-    """Return True when a full sglang install is present in the environment.
+_REPO_ROOT = _find_repo_root(Path(__file__).resolve().parent)
 
-    The activation-fallback suite is self-contained and must not depend on the
-    full sglang runtime. If ``sglang`` is importable, the environment was
-    prepared with the full dependency set. We only check importability here;
-    we never import ``sglang`` ourselves.
-    """
-
-    import importlib.util
-
-    return importlib.util.find_spec("sglang") is not None
-
-
-def pytest_collection_modifyitems(config: pytest.Config, items) -> None:
-    """Skip the whole suite when the source tree is missing.
-
-    The activation-fallback tests load the module under test directly from its
-    file path and never import ``sglang``. When the checkout does not contain
-    ``python/sglang/srt/layers/quantization/activation_fallback.py`` there is
-    nothing to test, so skip with an actionable message instead of failing
-    collection. This keeps CI logs pointing at the real problem (missing
-    checkout) rather than an opaque import error.
-    """
-
-    if _ACTIVATION_FALLBACK_PATH.is_file():
-        return
-
-    skip_marker = pytest.mark.skip(
-        reason=(
-            "activation_fallback module not found at "
-            f"{_ACTIVATION_FALLBACK_PATH}; run the suite from a full "
-            "repository checkout (no sglang install is required, but the "
-            "source tree must be present)."
-        )
-    )
-    for item in items:
-        item.add_marker(skip_marker)
+if _REPO_ROOT is not None:
+    _PYTHON_DIR = _REPO_ROOT / "python"
+    if _PYTHON_DIR.is_dir():
+        _python_dir_str = str(_PYTHON_DIR)
+        if _python_dir_str not in sys.path:
+            # Append rather than prepend so an installed sglang (if any) still
+            # wins; this suite does not need the package to be importable.
+            sys.path.append(_python_dir_str)

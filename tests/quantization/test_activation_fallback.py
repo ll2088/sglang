@@ -18,15 +18,33 @@ from pathlib import Path
 import pytest
 
 
-_MODULE_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "python"
-    / "sglang"
-    / "srt"
-    / "layers"
-    / "quantization"
-    / "activation_fallback.py"
-)
+def _find_module_path() -> Path:
+    """Locate the module under test without requiring a full sglang install.
+
+    Walks upwards from this file so the suite works regardless of the current
+    working directory or how deep the checkout is nested. Returns the expected
+    path even when it does not exist so the caller can skip with a clear
+    message.
+    """
+
+    relative = Path(
+        "python",
+        "sglang",
+        "srt",
+        "layers",
+        "quantization",
+        "activation_fallback.py",
+    )
+    here = Path(__file__).resolve()
+    for candidate in (here.parent, *here.parents):
+        module_path = candidate / relative
+        if module_path.is_file():
+            return module_path
+    # Fall back to the historical layout so the skip message is informative.
+    return here.parents[2] / relative
+
+
+_MODULE_PATH = _find_module_path()
 
 
 def _load_module():
