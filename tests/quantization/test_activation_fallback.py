@@ -31,18 +31,11 @@ _MODULE_PATH = (
 def _load_module():
     """Load the module under test without requiring a full sglang install.
 
-    Prefer a normal import so the test exercises the real package layout when
-    the environment is healthy; fall back to loading the file directly so the
-    suite still runs in minimal environments where ``pip install -e python``
-    has not completed.
+    The module under test only uses the standard library, so it is always
+    loaded directly from its file path. This keeps the suite runnable in
+    minimal environments where ``pip install -e python`` has not completed
+    (e.g. CI setup failures unrelated to this change).
     """
-    try:
-        from sglang.srt.layers.quantization import activation_fallback as module
-
-        return module
-    except Exception:
-        pass
-
     spec = importlib.util.spec_from_file_location(
         "_activation_fallback_under_test", _MODULE_PATH
     )

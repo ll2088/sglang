@@ -22,6 +22,13 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    "UNQUANTIZED_ACTIVATION",
+    "is_strict_quant_scheme",
+    "executed_activation_key",
+    "check_activation_quant_fallback",
+]
+
 # Sentinel used to distinguish "no activation quantization requested" from
 # "the kernel runs unquantized activations".
 UNQUANTIZED_ACTIVATION = None
