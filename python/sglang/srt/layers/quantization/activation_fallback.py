@@ -22,6 +22,10 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# Messages already emitted by ``_warn_once``; used when the stdlib logger is
+# in play (no ``warning_once`` extension).
+_WARNED_MESSAGES: set[str] = set()
+
 __all__ = [
     "UNQUANTIZED_ACTIVATION",
     "is_strict_quant_scheme",
@@ -51,6 +55,27 @@ def is_strict_quant_scheme() -> bool:
 
     value = os.environ.get(_STRICT_ENV_VAR, "")
     return value not in ("", "0")
+
+
+def _warn_once(message: str, *args: Any) -> None:
+    """Emit a warning at most once per unique message.
+
+    ``logging.Logger.warning_once`` is a vLLM/sglang extension that is not
+    available on the stdlib logger. This helper keeps the module importable
+    with only the standard library while preserving the once-per-kernel
+    behaviour the upstream change relies on.
+    """
+
+    warn_once = getattr(logger, "warning_once", None)
+    if warn_once is not None:
+        warn_once(message, *args)
+        return
+
+    key = message % args if args else message
+    if key in _WARNED_MESSAGES:
+        return
+    _WARNED_MESSAGES.add(key)
+    logger.warning(message, *args)
 
 
 def executed_activation_key(
@@ -98,7 +123,7 @@ def check_activation_quant_fallback(
             f"(requested={requested_key!r}, executed={executed_key!r})"
         )
 
-    logger.warning_once(
+    _warn_once(
         "%s; falling back to unquantized activations. Set "
         "VLLM_STRICT_QUANT_SCHEME=1 to reject this kernel.",
         reason,
