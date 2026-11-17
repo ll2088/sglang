@@ -7,5 +7,10 @@
 # third-party runtime deps).
 #
 # CI jobs that run this directory should install only the packages listed
-# below instead of the full sglang dependency set.
+# below instead of the full sglang dependency set. Do NOT run
+# ``pip install -e python`` (or ``pip install sglang``) before this suite:
+# that pulls the full runtime dependency set and fails on GPU-less runners.
+#
+# Run with:
+#   python -m pytest -q -c tests/quantization/pytest.ini tests/quantization
 pytest
