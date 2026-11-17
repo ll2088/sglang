@@ -98,6 +98,18 @@ class HummingRunnerOutput(RunnerOutput):
 class HummingMoeQuantInfo(MoeQuantInfo):
     layer: torch.nn.Module
 
+    @staticmethod
+    def executed_activation_key(
+        weight_key: Optional[Any],
+        activation_key: Optional[Any],
+    ) -> Optional[Any]:
+        # Humming runs the input schema its weights were converted with. The
+        # Humming quant method and VLLM_HUMMING_INPUT_QUANT_CONFIG supply one;
+        # weight-only conversions run unquantized activations.
+        if envs.SGLANG_HUMMING_INPUT_QUANT_CONFIG.get():
+            return activation_key
+        return None
+
 
 @register_custom_op()
 def humming_moe_runner_core_run(

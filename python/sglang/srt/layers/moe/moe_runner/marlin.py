@@ -86,6 +86,14 @@ class MarlinRunnerOutput(RunnerOutput):
 class MarlinMoeQuantInfo(MoeQuantInfo):
     """Quantization payload consumed by the Marlin backend."""
 
+    @staticmethod
+    def executed_activation_key(
+        weight_key: Optional[Any],
+        activation_key: Optional[Any],
+    ) -> Optional[Any]:
+        # Marlin is a weight-only kernel: activations always run in 16-bit.
+        return None
+
     w13_qweight: torch.Tensor
     w2_qweight: torch.Tensor
     w13_scales: torch.Tensor

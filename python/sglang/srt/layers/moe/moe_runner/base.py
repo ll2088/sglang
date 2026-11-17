@@ -134,6 +134,20 @@ class MoeRunnerCore(ABC):
     def __init__(self, config: MoeRunnerConfig):
         self.config = config
 
+    @staticmethod
+    def executed_activation_key(
+        weight_key: Optional[Any],
+        activation_key: Optional[Any],
+    ) -> Optional[Any]:
+        """Declare the activation quantization this runner actually executes.
+
+        Runners that silently run activations unquantized (e.g. weight-only
+        Marlin kernels) should override this to return ``None`` so selection
+        can surface the fallback and ``VLLM_STRICT_QUANT_SCHEME`` can reject it.
+        The default assumes the requested scheme is honored.
+        """
+        return activation_key
+
     @abstractmethod
     def run(
         self,
