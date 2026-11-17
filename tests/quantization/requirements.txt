@@ -1,24 +1,25 @@
 # Minimal dependencies for the self-contained activation-fallback suite.
+#
 # The module under test (activation_fallback.py) only uses the standard
 # library, so pytest is the only requirement. Do NOT add sglang here: the
 # whole point is to avoid the full package install in CI.
 #
-# IMPORTANT: this file must be installed with ``--no-deps`` so that pip never
-# walks the sglang dependency graph (py-spy, quack-kernels, pyzmq, ...). The
-# suite is loaded from source files via conftest.py and does not import the
-# sglang package, so no runtime dependency is required.
+# IMPORTANT: install this file with ``--no-deps`` passed on the pip command
+# line, NOT as a line inside this file (pip does not accept ``--no-deps`` as a
+# requirements-file directive). The suite is loaded from source files via
+# conftest.py and does not import the sglang package, so no runtime dependency
+# is required.
 #
 #     pip install --no-deps -r tests/quantization/requirements.txt
 #
 # CI MUST install this file directly and MUST NOT run ``pip install -e python``
-# (or ``pip install -e .``) for this suite. The previous CI failure was caused
-# by the environment preparation step still resolving the full sglang
+# (or ``pip install -e .``) for this suite. Resolving the full sglang
 # dependency set (py-spy, pybase64, pydantic, python-multipart, pyzmq,
-# quack-kernels, regex, ...), which is exactly what this file exists to avoid.
+# quack-kernels, regex, ...) is exactly what this file exists to avoid.
 #
 # Correct invocation:
 #
-#     pip install -r tests/quantization/requirements.txt
+#     pip install --no-deps -r tests/quantization/requirements.txt
 #     python -m pytest -q -c tests/quantization/pytest.ini \
 #         tests/quantization/test_activation_fallback.py
 #
@@ -32,4 +33,3 @@
 # the full sglang dependency set, the job is invoking ``pip install -e python``
 # (or equivalent) instead of this file; fix the job, not this file.
 pytest>=7.0
-
