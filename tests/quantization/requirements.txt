@@ -32,4 +32,13 @@
 # NOTE: this file intentionally lists only pytest. If a CI job still resolves
 # the full sglang dependency set, the job is invoking ``pip install -e python``
 # (or equivalent) instead of this file; fix the job, not this file.
+#
+# The suite is also runnable without installing anything at all, as long as
+# pytest is already available on the interpreter:
+#
+#     python -m pytest -q -c tests/quantization/pytest.ini \
+#         tests/quantization/test_activation_fallback.py
+#
+# This is the recommended fallback when the CI environment cannot install
+# packages at all: it avoids the dependency-resolution step entirely.
 pytest>=7.0

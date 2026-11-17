@@ -43,6 +43,10 @@ def is_strict_quant_scheme() -> bool:
     The variable is read on every call so tests can toggle it via monkeypatch
     without re-importing the module. Any value other than ``"0"``/``""`` is
     treated as enabled, matching the upstream semantics.
+
+    The environment is consulted lazily (never cached at import time) so that
+    the module stays importable without any sglang dependency and so that the
+    strict-mode switch can be flipped at runtime.
     """
 
     value = os.environ.get(_STRICT_ENV_VAR, "")
