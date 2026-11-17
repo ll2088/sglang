@@ -201,6 +201,20 @@ def test_check_strict_error_mentions_mismatch(monkeypatch):
     assert "executed" in message
 
 
+def test_check_strict_error_mentions_kernel_name(monkeypatch):
+    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
+    with pytest.raises(ValueError) as excinfo:
+        check_activation_quant_fallback("MarlinExperts", "a", None)
+    assert "MarlinExperts" in str(excinfo.value)
+
+
+def test_check_default_mode_reason_mentions_kernel_name(monkeypatch):
+    monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
+    reason = check_activation_quant_fallback("MarlinExperts", "a", None)
+    assert reason is not None
+    assert "MarlinExperts" in reason
+
+
 def test_check_strict_does_not_raise_when_honored(monkeypatch):
     monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
     assert check_activation_quant_fallback("k", "a", "a") is None
@@ -276,6 +290,20 @@ def test_strict_mode_accepts_honoring_kernel():
     assert _select([_Fp8Kernel], "a", strict=True) is _Fp8Kernel
 
 
+def test_strict_mode_error_mentions_mismatch_when_no_kernel_honors():
+    with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
+        _select([_WeightOnlyKernel, _Mxfp4Kernel], "a", strict=True)
+
+
+def test_default_mode_returns_first_kernel_in_priority_order():
+    # Priority order is preserved in default mode: the first kernel wins even
+    # when a later kernel would honor the requested scheme.
+    assert (
+        _select([_WeightOnlyKernel, _Fp8Kernel], "a", strict=False)
+        is _WeightOnlyKernel
+    )
+
+
 # ---------------------------------------------------------------------------
 # MoE runner declarations (base / humming / marlin).
 # ---------------------------------------------------------------------------
@@ -343,3 +371,24 @@ def test_marlin_runner_warns_in_default_mode(monkeypatch):
     reason = check_activation_quant_fallback("MarlinRunner", "a", executed)
     assert reason is not None
     assert "MarlinRunner" in reason
+
+
+def test_base_runner_honors_scheme_under_strict(monkeypatch):
+    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
+    executed = executed_activation_key(_BaseRunner, "w", "a")
+    assert check_activation_quant_fallback("BaseRunner", "a", executed) is None
+
+
+def test_humming_runner_without_input_config_rejected_under_strict(monkeypatch):
+    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
+    runner = _HummingRunner(has_input_config=False)
+    executed = executed_activation_key(runner, "w", "a")
+    with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
+        check_activation_quant_fallback("HummingRunner", "a", executed)
+
+
+def test_humming_runner_with_input_config_accepted_under_strict(monkeypatch):
+    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
+    runner = _HummingRunner(has_input_config=True)
+    executed = executed_activation_key(runner, "w", "a")
+    assert check_activation_quant_fallback("HummingRunner", "a", executed) is None

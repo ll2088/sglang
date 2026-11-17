@@ -1,39 +1,36 @@
-# Activation-quantization fallback tests
+# tests/quantization
 
-This directory is intentionally **self-contained**. It verifies the explicit
-activation-quantization fallback handling and the `VLLM_STRICT_QUANT_SCHEME`
-strict mode without importing the `sglang` package.
+Self-contained tests for explicit activation-quantization fallback handling
+(`python/sglang/srt/layers/quantization/activation_fallback.py`).
 
-## Why self-contained
+## Why this directory is self-contained
 
-The module under test
-(`python/sglang/srt/layers/quantization/activation_fallback.py`) only uses the
-standard library. The test module loads it directly from its file path, so no
-`sglang` install is required. This keeps the suite runnable on GPU-less CI
-runners where `pip install -e python` would pull the full runtime dependency
-set (py-spy, pydantic, quack-kernels, ...) and fail during environment setup.
+These tests must run on GPU-less CI runners. They load the module under test
+directly from its file path and only use the standard library plus `pytest`.
+They must **not** require `pip install -e python` (or `pip install sglang`),
+which pulls the full sglang runtime dependency set and fails on such runners.
 
 ## How to run
 
-Install only pytest, then run with the directory-local config:
+Install only the minimal dependencies and run with the directory-local
+`pytest.ini` so the repository-root configuration is not picked up:
 
 ```bash
 pip install -r tests/quantization/requirements.txt
 python -m pytest -q -c tests/quantization/pytest.ini tests/quantization
 ```
 
-Do **not** run `pip install -e python` (or `pip install sglang`) before this
-suite. The `-c tests/quantization/pytest.ini` flag pins rootdir/testpaths to
-this directory so the repository-root pytest configuration is not picked up.
+Do **not** run `pip install -e python` before this suite.
 
 ## What is covered
 
-- `VLLM_STRICT_QUANT_SCHEME` parsing (`""`/`"0"` disabled, anything else on).
-- `executed_activation_key` dispatch, including per-backend declarations
-  (humming / marlin / mxfp4 / fp8).
-- `check_activation_quant_fallback` for matching, mismatching, and
-  nothing-requested cases, in both default and strict mode.
-- Backend selection: default mode picks the fallback kernel, strict mode
-  rejects it while preserving priority order so a later honoring kernel can
-  still be selected.
-- MoE runner declarations (base / humming / marlin).
+- `VLLM_STRICT_QUANT_SCHEME` parsing (`""`/`"0"` disabled, anything else enabled).
+- `executed_activation_key` dispatch for kernels that honor, declare, or drop
+  the requested activation quantization (humming / marlin / mxfp4 / fp8).
+- `check_activation_quant_fallback` in default mode (once-per-kernel warning,
+  returns a reason) and strict mode (raises `ValueError` mentioning
+  `VLLM_STRICT_QUANT_SCHEME` and the requested/executed mismatch).
+- Backend selection loop: default mode selects the fallback kernel, strict mode
+  skips it and falls through to a later kernel that honors the scheme, or fails
+  with the mismatch reason.
+- MoE runner declarations (`MoeRunnerCore` base, humming, marlin).
