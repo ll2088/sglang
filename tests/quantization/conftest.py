@@ -13,6 +13,7 @@ Keeping this conftest free of ``sglang`` imports is what lets CI install only
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -30,8 +31,27 @@ from pathlib import Path
 # repository root ends up on sys.path, ``import sglang`` can be attempted
 # during collection and resolve the full dependency set. We therefore resolve
 # the module path from this file only and never rely on sys.path.
+#
+# We also defensively drop the repository root from ``sys.path`` (if present)
+# so that a stray ``import sglang`` anywhere in the collection chain cannot
+# resolve the top-level package and pull in its full dependency set.
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _THIS_DIR.parents[1]
+
+_repo_root_str = str(_REPO_ROOT)
+if _repo_root_str in sys.path:
+    sys.path.remove(_repo_root_str)
+
+# Also drop the ``python/`` subdirectory if it was injected by an editable
+# install or a parent conftest, since that is where the ``sglang`` package
+# lives and importing it would trigger the full dependency resolution.
+_python_dir_str = str(_REPO_ROOT / "python")
+if _python_dir_str in sys.path:
+    sys.path.remove(_python_dir_str)
+
+# Keep the suite hermetic: never let a stray ``PYTHONPATH`` re-introduce the
+# repository root during collection.
+os.environ.pop("PYTHONPATH", None)
 _ACTIVATION_FALLBACK_PATH = (
     _REPO_ROOT
     / "python"
@@ -53,9 +73,14 @@ if not _ACTIVATION_FALLBACK_PATH.is_file():
 
 
 def _load_activation_fallback():
-    """Load ``activation_fallback`` from its file path without importing sglang."""
+    """Load ``activation_fallback`` from its file path without importing sglang.
 
-    module_name = "sglang_activation_fallback_under_test"
+    The module is loaded under a private name that does not start with
+    ``sglang`` so that no import machinery ever tries to resolve the
+    ``sglang`` package (whose ``__init__`` pulls in the full dependency set).
+    """
+
+    module_name = "activation_fallback_under_test"
     existing = sys.modules.get(module_name)
     if existing is not None:
         return existing
@@ -79,6 +104,24 @@ def _load_activation_fallback():
     return module
 
 
+def _assert_no_sglang_imported() -> None:
+    """Fail fast if the ``sglang`` package was imported during collection.
+
+    Importing ``sglang`` triggers the full dependency resolution (py-spy,
+    quack-kernels, pyzmq, ...) which is exactly what this suite avoids. If it
+    ever happens, surface a clear error instead of a confusing dependency
+    failure.
+    """
+
+    if "sglang" in sys.modules:
+        raise RuntimeError(
+            "tests/quantization must not import the sglang package; the suite "
+            "is loaded from source files via conftest.py so CI only needs "
+            "pytest installed. Check for a stray ``import sglang`` in the "
+            "collection chain or a parent conftest.py."
+        )
+
+
 # Expose the loaded module as a fixture so tests do not need to import sglang.
 import pytest  # noqa: E402  (imported after the loader helpers for clarity)
 
@@ -87,4 +130,5 @@ import pytest  # noqa: E402  (imported after the loader helpers for clarity)
 def activation_fallback():
     """Return the activation_fallback module loaded from its source file."""
 
+    _assert_no_sglang_imported()
     return _load_activation_fallback()

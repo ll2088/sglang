@@ -285,6 +285,23 @@ def test_suite_does_not_import_sglang():
     )
 
 
+def test_suite_does_not_import_sglang_submodules():
+    """No ``sglang.*`` submodule may be imported either.
+
+    Importing any ``sglang.*`` submodule first imports the top-level
+    ``sglang`` package, which resolves the full dependency set. This test
+    catches regressions where a helper imports a submodule directly.
+    """
+
+    import sys
+
+    sglang_modules = [name for name in sys.modules if name == "sglang" or name.startswith("sglang.")]
+    assert not sglang_modules, (
+        "tests/quantization must not import any sglang submodule; found: "
+        f"{sglang_modules}"
+    )
+
+
 def test_activation_fallback_module_loaded_from_file(activation_fallback):
     """The module under test is loaded from its source file, not via sglang."""
 
