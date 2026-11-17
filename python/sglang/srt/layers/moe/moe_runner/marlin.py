@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import torch
 import triton
@@ -93,6 +93,21 @@ class MarlinMoeQuantInfo(MoeQuantInfo):
     ) -> Optional[Any]:
         # Marlin is a weight-only kernel: activations always run in 16-bit.
         return None
+
+    @classmethod
+    def check_activation_fallback(
+        cls,
+        weight_key: Optional[Any],
+        activation_key: Optional[Any],
+    ) -> Optional[str]:
+        """Surface (or reject) the Marlin weight-only activation fallback."""
+        from sglang.srt.layers.quantization.activation_fallback import (
+            check_runner_activation_fallback,
+        )
+
+        return check_runner_activation_fallback(
+            cls.__name__, weight_key, activation_key, cls
+        )
 
     w13_qweight: torch.Tensor
     w2_qweight: torch.Tensor

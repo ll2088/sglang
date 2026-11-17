@@ -99,3 +99,22 @@ def check_activation_quant_fallback(
         reason,
     )
     return reason
+
+
+def check_runner_activation_fallback(
+    runner_name: str,
+    weight_key: Optional[Any],
+    activation_key: Optional[Any],
+    runner: Any,
+) -> Optional[str]:
+    """Unified fallback check for MoE runners.
+
+    Resolves the activation quantization ``runner`` actually executes via
+    :func:`executed_activation_key` and compares it with the requested
+    ``activation_key`` through :func:`check_activation_quant_fallback`. This is
+    the single entry point MoE runner selection should use so that no silent
+    fallback branch is left behind.
+    """
+
+    executed_key = executed_activation_key(runner, weight_key, activation_key)
+    return check_activation_quant_fallback(runner_name, activation_key, executed_key)

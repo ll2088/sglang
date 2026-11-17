@@ -148,6 +148,27 @@ class MoeRunnerCore(ABC):
         """
         return activation_key
 
+    @classmethod
+    def check_activation_fallback(
+        cls,
+        weight_key: Optional[Any],
+        activation_key: Optional[Any],
+    ) -> Optional[str]:
+        """Surface (or reject) an activation-quantization fallback for this runner.
+
+        Thin wrapper around the shared helper so every runner goes through one
+        code path. Returns ``None`` when the requested scheme is honored, a
+        reason string in default mode, and raises under
+        ``VLLM_STRICT_QUANT_SCHEME=1``.
+        """
+        from sglang.srt.layers.quantization.activation_fallback import (
+            check_runner_activation_fallback,
+        )
+
+        return check_runner_activation_fallback(
+            cls.__name__, weight_key, activation_key, cls
+        )
+
     @abstractmethod
     def run(
         self,

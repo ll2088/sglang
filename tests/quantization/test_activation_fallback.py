@@ -59,6 +59,7 @@ def _load_module():
 _af = _load_module()
 
 check_activation_quant_fallback = _af.check_activation_quant_fallback
+check_runner_activation_fallback = _af.check_runner_activation_fallback
 executed_activation_key = _af.executed_activation_key
 is_strict_quant_scheme = _af.is_strict_quant_scheme
 
@@ -218,6 +219,42 @@ def test_check_default_mode_reason_mentions_kernel_name(monkeypatch):
 def test_check_strict_does_not_raise_when_honored(monkeypatch):
     monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
     assert check_activation_quant_fallback("k", "a", "a") is None
+
+
+# ---------------------------------------------------------------------------
+# check_runner_activation_fallback helper (unified MoE runner entry point).
+# ---------------------------------------------------------------------------
+
+
+def test_runner_helper_honors_scheme():
+    assert (
+        check_runner_activation_fallback("Fp8Runner", "w", "a", _Fp8Kernel)
+        is None
+    )
+
+
+def test_runner_helper_reports_fallback_in_default_mode(monkeypatch):
+    monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
+    reason = check_runner_activation_fallback(
+        "MarlinRunner", "w", "a", _WeightOnlyKernel
+    )
+    assert reason is not None
+    assert "MarlinRunner" in reason
+
+
+def test_runner_helper_raises_in_strict_mode(monkeypatch):
+    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
+    with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
+        check_runner_activation_fallback(
+            "MarlinRunner", "w", "a", _WeightOnlyKernel
+        )
+
+
+def test_runner_helper_no_fallback_when_nothing_requested():
+    assert (
+        check_runner_activation_fallback("MarlinRunner", "w", None, _WeightOnlyKernel)
+        is None
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -104,11 +104,26 @@ class HummingMoeQuantInfo(MoeQuantInfo):
         activation_key: Optional[Any],
     ) -> Optional[Any]:
         # Humming runs the input schema its weights were converted with. The
-        # Humming quant method and VLLM_HUMMING_INPUT_QUANT_CONFIG supply one;
+        # Humming quant method and SGLANG_HUMMING_INPUT_QUANT_CONFIG supply one;
         # weight-only conversions run unquantized activations.
         if envs.SGLANG_HUMMING_INPUT_QUANT_CONFIG.get():
             return activation_key
         return None
+
+    @classmethod
+    def check_activation_fallback(
+        cls,
+        weight_key: Optional[Any],
+        activation_key: Optional[Any],
+    ) -> Optional[str]:
+        """Surface (or reject) a Humming activation-quantization fallback."""
+        from sglang.srt.layers.quantization.activation_fallback import (
+            check_runner_activation_fallback,
+        )
+
+        return check_runner_activation_fallback(
+            cls.__name__, weight_key, activation_key, cls
+        )
 
 
 @register_custom_op()
