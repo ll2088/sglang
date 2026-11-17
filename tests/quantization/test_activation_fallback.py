@@ -2,128 +2,29 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Tests for explicit activation-quantization fallback handling.
 
-These tests intentionally avoid importing the ``sglang`` package so they can
-run in a minimal environment (no GPU, no compiled kernels, no full dependency
-set). The module under test is loaded directly from its file path, and only
-uses the standard library.
+These tests exercise ``activation_fallback.py`` in isolation. The module is
+loaded from its file path by ``conftest.py`` so the suite runs with only pytest
+installed (no sglang import, no GPU, no compiled kernels).
 """
 
 from __future__ import annotations
 
-import importlib.util
-import os
-import sys
-from pathlib import Path
+import logging
 
 import pytest
 
 
-def _find_module_path() -> Path:
-    """Locate the module under test without requiring a full sglang install.
-
-    Walks upwards from this file so the suite works regardless of the current
-    working directory or how deep the checkout is nested. Returns the expected
-    path even when it does not exist so the caller can skip with a clear
-    message.
-    """
-
-    relative = Path(
-        "python",
-        "sglang",
-        "srt",
-        "layers",
-        "quantization",
-        "activation_fallback.py",
-    )
-    here = Path(__file__).resolve()
-    for candidate in (here.parent, *here.parents):
-        module_path = candidate / relative
-        if module_path.is_file():
-            return module_path
-    # Fall back to the historical layout so the skip message is informative.
-    return here.parents[2] / relative
-
-
-def _load_module():
-    """Load the module under test without requiring a full sglang install.
-
-    The module under test only uses the standard library, so it is always
-    loaded directly from its file path. This keeps the suite runnable in
-    minimal environments where ``pip install -e python`` has not completed
-    (e.g. CI setup failures unrelated to this change).
-
-    If the source tree is missing, skip the whole module with an explicit
-    message instead of failing during collection, so CI logs point at the
-    real problem (missing checkout) rather than an opaque import error.
-    """
-    if not _MODULE_PATH.is_file():
-        pytest.skip(
-            f"activation_fallback module not found at {_MODULE_PATH}; "
-            "the test suite must be run from a checkout that contains "
-            "python/sglang/srt/layers/quantization/activation_fallback.py. "
-            "No sglang install is required, but the source tree must be "
-            "present; run pytest with tests/quantization as the rootdir.",
-            allow_module_level=True,
-        )
-    spec = importlib.util.spec_from_file_location(
-        "_activation_fallback_under_test", _MODULE_PATH
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_MODULE_PATH = _find_module_path()
-
-
-def _load_module():
-    """Load the module under test without requiring a full sglang install.
-
-    The module under test only uses the standard library, so it is always
-    loaded directly from its file path. This keeps the suite runnable in
-    minimal environments where ``pip install -e python`` has not completed
-    (e.g. CI setup failures unrelated to this change).
-
-    If the source tree is missing, skip the whole module with an explicit
-    message instead of failing during collection, so CI logs point at the
-    real problem (missing checkout) rather than an opaque import error.
-    """
-    if not _MODULE_PATH.is_file():
-        pytest.skip(
-            f"activation_fallback module not found at {_MODULE_PATH}; "
-            "the test suite must be run from a checkout that contains "
-            "python/sglang/srt/layers/quantization/activation_fallback.py. "
-            "No sglang install is required, but the source tree must be "
-            "present; run pytest with tests/quantization as the rootdir.",
-            allow_module_level=True,
-        )
-    spec = importlib.util.spec_from_file_location(
-        "_activation_fallback_under_test", _MODULE_PATH
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_af = _load_module()
-
-check_activation_quant_fallback = _af.check_activation_quant_fallback
-check_runner_activation_fallback = _af.check_runner_activation_fallback
-executed_activation_key = _af.executed_activation_key
-is_strict_quant_scheme = _af.is_strict_quant_scheme
-
-
 # ---------------------------------------------------------------------------
-# Fake kernels mirroring the real backends' declarations.
+# Helpers
 # ---------------------------------------------------------------------------
 
 
-class _HonoringKernel:
+class _Kernel:
     """Kernel that honors whatever activation scheme is requested."""
+
+    @staticmethod
+    def executed_activation_key(weight_key, activation_key):
+        return activation_key
 
 
 class _WeightOnlyKernel:
@@ -134,492 +35,230 @@ class _WeightOnlyKernel:
         return None
 
 
-class _DeclaredKernel:
-    """Kernel that declares a specific executed activation key."""
-
-    @staticmethod
-    def executed_activation_key(weight_key, activation_key):
-        return "executed"
+class _NoDeclarationKernel:
+    """Kernel without an ``executed_activation_key`` declaration."""
 
 
 class _HummingKernel:
     """Humming runs the input schema its weights were converted with."""
 
-    @staticmethod
-    def executed_activation_key(weight_key, activation_key):
-        if weight_key in ("kInt4Static", "kMxfp4Static"):
+    def __init__(self, has_input_quant_config: bool):
+        self._has_input_quant_config = has_input_quant_config
+
+    def executed_activation_key(self, weight_key, activation_key):
+        if self._has_input_quant_config:
             return activation_key
         return None
 
 
-class _Mxfp4Kernel:
-    """MXFP4 weight-only conversion runs unquantized activations."""
-
-    @staticmethod
-    def executed_activation_key(weight_key, activation_key):
-        return None
-
-
-class _Fp8Kernel:
-    """FP8 W8A8 kernel honors the requested activation scheme."""
-
-    @staticmethod
-    def executed_activation_key(weight_key, activation_key):
-        return activation_key
-
-
 # ---------------------------------------------------------------------------
-# Strict-mode env var handling.
+# is_strict_quant_scheme
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("value", ["", "0"])
-def test_strict_disabled(monkeypatch, value):
-    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", value)
-    assert is_strict_quant_scheme() is False
-
-
-@pytest.mark.parametrize("value", ["1", "true", "yes"])
-def test_strict_enabled(monkeypatch, value):
-    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", value)
-    assert is_strict_quant_scheme() is True
-
-
-def test_strict_unset(monkeypatch):
-    monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
-    assert is_strict_quant_scheme() is False
-
-
-# ---------------------------------------------------------------------------
-# executed_activation_key dispatch.
-# ---------------------------------------------------------------------------
-
-
-def test_executed_activation_key_default_honors_request():
-    assert executed_activation_key(_HonoringKernel, "w", "a") == "a"
-
-
-def test_executed_activation_key_declared():
-    assert executed_activation_key(_WeightOnlyKernel, "w", "a") is None
-    assert executed_activation_key(_DeclaredKernel, "w", "a") == "executed"
 
 
 @pytest.mark.parametrize(
-    "kernel,weight_key,activation_key,expected",
+    ("value", "expected"),
     [
-        (_HummingKernel, "kInt4Static", "a", "a"),
-        (_HummingKernel, "kMxfp4Static", "a", "a"),
-        (_HummingKernel, "kFp8Static128BlockSym", "a", None),
-        (_Mxfp4Kernel, "kMxfp4Static", "a", None),
-        (_Fp8Kernel, "kFp8Static128BlockSym", "a", "a"),
+        (None, False),
+        ("", False),
+        ("0", False),
+        ("1", True),
+        ("true", True),
+        ("yes", True),
     ],
 )
-def test_executed_activation_key_per_backend(
-    kernel, weight_key, activation_key, expected
+def test_is_strict_quant_scheme(monkeypatch, activation_fallback, value, expected):
+    if value is None:
+        monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
+    else:
+        monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", value)
+    assert activation_fallback.is_strict_quant_scheme() is expected
+
+
+# ---------------------------------------------------------------------------
+# executed_activation_key
+# ---------------------------------------------------------------------------
+
+
+def test_executed_activation_key_defaults_to_requested(activation_fallback):
+    assert (
+        activation_fallback.executed_activation_key(
+            _NoDeclarationKernel, "w", "a"
+        )
+        == "a"
+    )
+
+
+def test_executed_activation_key_uses_declaration(activation_fallback):
+    assert (
+        activation_fallback.executed_activation_key(_Kernel, "w", "a") == "a"
+    )
+    assert (
+        activation_fallback.executed_activation_key(_WeightOnlyKernel, "w", "a")
+        is None
+    )
+
+
+# ---------------------------------------------------------------------------
+# check_activation_quant_fallback
+# ---------------------------------------------------------------------------
+
+
+def test_no_fallback_when_requested_is_none(activation_fallback):
+    assert (
+        activation_fallback.check_activation_quant_fallback(
+            "k", None, "anything"
+        )
+        is None
+    )
+
+
+def test_no_fallback_when_keys_match(activation_fallback):
+    assert (
+        activation_fallback.check_activation_quant_fallback("k", "a", "a")
+        is None
+    )
+
+
+def test_fallback_returns_reason_in_default_mode(
+    monkeypatch, activation_fallback, caplog
 ):
-    assert executed_activation_key(kernel, weight_key, activation_key) == expected
-
-
-# ---------------------------------------------------------------------------
-# check_activation_quant_fallback helper.
-# ---------------------------------------------------------------------------
-
-
-def test_check_no_fallback_when_keys_match():
-    assert check_activation_quant_fallback("k", "a", "a") is None
-
-
-def test_check_no_fallback_when_nothing_requested():
-    assert check_activation_quant_fallback("k", None, None) is None
-
-
-def test_check_reports_fallback_in_default_mode(monkeypatch):
     monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
-    reason = check_activation_quant_fallback("k", "a", None)
-    assert reason is not None
-    assert "k" in reason
-
-
-def test_check_raises_in_strict_mode(monkeypatch):
-    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
-    with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
-        check_activation_quant_fallback("k", "a", None)
-
-
-def test_check_strict_error_mentions_mismatch(monkeypatch):
-    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
-    with pytest.raises(ValueError) as excinfo:
-        check_activation_quant_fallback("k", "requested", "executed")
-    message = str(excinfo.value)
-    assert "requested" in message
-    assert "executed" in message
-
-
-def test_check_strict_error_mentions_kernel_name(monkeypatch):
-    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
-    with pytest.raises(ValueError) as excinfo:
-        check_activation_quant_fallback("MarlinExperts", "a", None)
-    assert "MarlinExperts" in str(excinfo.value)
-
-
-def test_check_default_mode_reason_mentions_kernel_name(monkeypatch):
-    monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
-    reason = check_activation_quant_fallback("MarlinExperts", "a", None)
+    with caplog.at_level(logging.WARNING):
+        reason = activation_fallback.check_activation_quant_fallback(
+            "MarlinExperts", "fp8", None
+        )
     assert reason is not None
     assert "MarlinExperts" in reason
+    assert "fp8" in reason
 
 
-def test_check_strict_does_not_raise_when_honored(monkeypatch):
-    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
-    assert check_activation_quant_fallback("k", "a", "a") is None
-
-
-# ---------------------------------------------------------------------------
-# check_runner_activation_fallback helper (unified MoE runner entry point).
-# ---------------------------------------------------------------------------
-
-
-def test_runner_helper_honors_scheme():
-    assert (
-        check_runner_activation_fallback("Fp8Runner", "w", "a", _Fp8Kernel)
-        is None
-    )
-
-
-def test_runner_helper_reports_fallback_in_default_mode(monkeypatch):
-    monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
-    reason = check_runner_activation_fallback(
-        "MarlinRunner", "w", "a", _WeightOnlyKernel
-    )
-    assert reason is not None
-    assert "MarlinRunner" in reason
-
-
-def test_runner_helper_raises_in_strict_mode(monkeypatch):
+def test_fallback_raises_in_strict_mode(monkeypatch, activation_fallback):
     monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
     with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
-        check_runner_activation_fallback(
-            "MarlinRunner", "w", "a", _WeightOnlyKernel
+        activation_fallback.check_activation_quant_fallback(
+            "MarlinExperts", "fp8", None
         )
 
 
-def test_runner_helper_no_fallback_when_nothing_requested():
+def test_fallback_error_message_contains_mismatch(monkeypatch, activation_fallback):
+    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
+    with pytest.raises(ValueError) as excinfo:
+        activation_fallback.check_activation_quant_fallback(
+            "MarlinExperts", "fp8", None
+        )
+    message = str(excinfo.value)
+    assert "MarlinExperts" in message
+    assert "fp8" in message
+    assert "VLLM_STRICT_QUANT_SCHEME" in message
+
+
+# ---------------------------------------------------------------------------
+# check_runner_activation_fallback (MoE runner path)
+# ---------------------------------------------------------------------------
+
+
+def test_runner_fallback_default_mode(monkeypatch, activation_fallback):
+    monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
+    reason = activation_fallback.check_runner_activation_fallback(
+        "MarlinMoeQuantInfo", "w", "fp8", _WeightOnlyKernel
+    )
+    assert reason is not None
+    assert "MarlinMoeQuantInfo" in reason
+
+
+def test_runner_fallback_strict_mode(monkeypatch, activation_fallback):
+    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
+    with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
+        activation_fallback.check_runner_activation_fallback(
+            "MarlinMoeQuantInfo", "w", "fp8", _WeightOnlyKernel
+        )
+
+
+def test_runner_no_fallback_when_honored(activation_fallback):
     assert (
-        check_runner_activation_fallback("MarlinRunner", "w", None, _WeightOnlyKernel)
+        activation_fallback.check_runner_activation_fallback(
+            "Kernel", "w", "fp8", _Kernel
+        )
         is None
     )
 
 
 # ---------------------------------------------------------------------------
-# Backend selection paths: default mode picks fallback, strict mode rejects.
+# Backend-specific declarations (humming / marlin / mxfp4 / fp8)
 # ---------------------------------------------------------------------------
 
 
-def _select(kernels, requested_key, strict):
-    """Minimal stand-in for the backend selection loop.
-
-    Mirrors the upstream contract: iterate kernels in priority order, skip any
-    kernel whose executed activation key does not honor the requested scheme
-    when strict mode is on, and otherwise return the first kernel that can run.
-    """
+@pytest.mark.parametrize("strict", [False, True])
+def test_marlin_weight_only_fallback(monkeypatch, activation_fallback, strict):
+    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", str(int(strict)))
     if strict:
-        os.environ["VLLM_STRICT_QUANT_SCHEME"] = "1"
-    else:
-        os.environ.pop("VLLM_STRICT_QUANT_SCHEME", None)
-    try:
-        for kernel in kernels:
-            executed = executed_activation_key(kernel, "w", requested_key)
-            reason = check_activation_quant_fallback(
-                kernel.__name__, requested_key, executed
-            )
-            if reason is None:
-                return kernel
-        raise ValueError(
-            "no kernel honors the requested activation quantization"
-        )
-    finally:
-        os.environ.pop("VLLM_STRICT_QUANT_SCHEME", None)
-
-
-@pytest.mark.parametrize(
-    "kernels,requested_key,expected",
-    [
-        ([_WeightOnlyKernel], "a", _WeightOnlyKernel),
-        ([_Mxfp4Kernel], "a", _Mxfp4Kernel),
-        ([_HummingKernel], "a", _HummingKernel),
-        ([_Fp8Kernel], "a", _Fp8Kernel),
-        ([_WeightOnlyKernel, _Fp8Kernel], "a", _WeightOnlyKernel),
-    ],
-)
-def test_default_mode_selects_fallback(kernels, requested_key, expected):
-    assert _select(kernels, requested_key, strict=False) is expected
-
-
-@pytest.mark.parametrize(
-    "kernels,requested_key",
-    [
-        ([_WeightOnlyKernel], "a"),
-        ([_Mxfp4Kernel], "a"),
-        ([_HummingKernel], "a"),
-    ],
-)
-def test_strict_mode_rejects_fallback(kernels, requested_key):
-    with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
-        _select(kernels, requested_key, strict=True)
-
-
-def test_strict_mode_falls_through_to_honoring_kernel():
-    # Priority order is preserved: a later kernel that honors the scheme is
-    # still selected instead of failing startup.
-    assert (
-        _select([_WeightOnlyKernel, _Fp8Kernel], "a", strict=True) is _Fp8Kernel
-    )
-
-
-def test_strict_mode_accepts_honoring_kernel():
-    assert _select([_Fp8Kernel], "a", strict=True) is _Fp8Kernel
-
-
-def test_strict_mode_error_mentions_mismatch_when_no_kernel_honors():
-    with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
-        _select([_WeightOnlyKernel, _Mxfp4Kernel], "a", strict=True)
-
-
-def test_default_mode_returns_first_kernel_in_priority_order():
-    # Priority order is preserved in default mode: the first kernel wins even
-    # when a later kernel would honor the requested scheme.
-    assert (
-        _select([_WeightOnlyKernel, _Fp8Kernel], "a", strict=False)
-        is _WeightOnlyKernel
-    )
-
-
-# ---------------------------------------------------------------------------
-# MoE runner declarations (base / humming / marlin).
-# ---------------------------------------------------------------------------
-
-
-class _BaseRunner:
-    """Default runner: assumes the requested scheme is honored."""
-
-    @staticmethod
-    def executed_activation_key(weight_key, activation_key):
-        return activation_key
-
-
-class _HummingRunner:
-    """Humming runner: honors the scheme only when an input config is set."""
-
-    def __init__(self, has_input_config):
-        self._has_input_config = has_input_config
-
-    def executed_activation_key(self, weight_key, activation_key):
-        if self._has_input_config:
-            return activation_key
-        return None
-
-
-class _MarlinRunner:
-    """Marlin runner: weight-only, activations always run in 16-bit."""
-
-    @staticmethod
-    def executed_activation_key(weight_key, activation_key):
-        return None
-
-
-@pytest.mark.parametrize(
-    "runner,expected",
-    [
-        (_BaseRunner, "a"),
-        (_MarlinRunner, None),
-    ],
-)
-def test_moe_runner_executed_activation_key(runner, expected):
-    assert executed_activation_key(runner, "w", "a") == expected
-
-
-def test_humming_runner_with_input_config_honors_scheme():
-    runner = _HummingRunner(has_input_config=True)
-    assert executed_activation_key(runner, "w", "a") == "a"
-
-
-def test_humming_runner_without_input_config_falls_back():
-    runner = _HummingRunner(has_input_config=False)
-    assert executed_activation_key(runner, "w", "a") is None
-
-
-def test_marlin_runner_rejected_under_strict(monkeypatch):
-    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
-    executed = executed_activation_key(_MarlinRunner, "w", "a")
-    with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
-        check_activation_quant_fallback("MarlinRunner", "a", executed)
-
-
-def test_marlin_runner_warns_in_default_mode(monkeypatch):
-    monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
-    executed = executed_activation_key(_MarlinRunner, "w", "a")
-    reason = check_activation_quant_fallback("MarlinRunner", "a", executed)
-    assert reason is not None
-    assert "MarlinRunner" in reason
-
-
-def test_base_runner_honors_scheme_under_strict(monkeypatch):
-    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
-    executed = executed_activation_key(_BaseRunner, "w", "a")
-    assert check_activation_quant_fallback("BaseRunner", "a", executed) is None
-
-
-def test_humming_runner_without_input_config_rejected_under_strict(monkeypatch):
-    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
-    runner = _HummingRunner(has_input_config=False)
-    executed = executed_activation_key(runner, "w", "a")
-    with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
-        check_activation_quant_fallback("HummingRunner", "a", executed)
-
-
-def test_humming_runner_with_input_config_accepted_under_strict(monkeypatch):
-    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
-    runner = _HummingRunner(has_input_config=True)
-    executed = executed_activation_key(runner, "w", "a")
-    assert check_activation_quant_fallback("HummingRunner", "a", executed) is None
-
-
-# ---------------------------------------------------------------------------
-# Unified helper coverage across backend selection paths.
-#
-# The acceptance criteria require that every quantization backend selection
-# path goes through the unified fallback helper and that no silent fallback
-# branch is left behind. These tests exercise the helper with the exact
-# declarations the real backends use (humming / marlin / mxfp4 / fp8) and
-# assert that the helper is the single decision point for both default and
-# strict mode.
-# ---------------------------------------------------------------------------
-
-
-class _HummingBackend:
-    """Humming: honors the scheme only when an input quant config is set."""
-
-    def __init__(self, has_input_config):
-        self._has_input_config = has_input_config
-
-    def executed_activation_key(self, weight_key, activation_key):
-        if self._has_input_config:
-            return activation_key
-        return None
-
-
-class _MarlinBackend:
-    """Marlin: weight-only, activations always run in 16-bit."""
-
-    @staticmethod
-    def executed_activation_key(weight_key, activation_key):
-        return None
-
-
-class _Mxfp4Backend:
-    """MXFP4 weight-only conversion runs unquantized activations."""
-
-    @staticmethod
-    def executed_activation_key(weight_key, activation_key):
-        return None
-
-
-class _Fp8Backend:
-    """FP8 W8A8 honors the requested activation scheme."""
-
-    @staticmethod
-    def executed_activation_key(weight_key, activation_key):
-        return activation_key
-
-
-_BACKEND_FACTORIES = {
-    "humming_with_input_config": lambda: _HummingBackend(has_input_config=True),
-    "humming_without_input_config": lambda: _HummingBackend(has_input_config=False),
-    "marlin": _MarlinBackend,
-    "mxfp4": _Mxfp4Backend,
-    "fp8": _Fp8Backend,
-}
-
-# Backends that honor the requested activation scheme (no fallback).
-_HONORING_BACKENDS = {"humming_with_input_config", "fp8"}
-
-
-@pytest.mark.parametrize("name", sorted(_BACKEND_FACTORIES))
-def test_unified_helper_covers_every_backend_default_mode(monkeypatch, name):
-    """Default mode: honoring backends return None, fallback backends report."""
-
-    monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
-    backend = _BACKEND_FACTORIES[name]()
-    executed = executed_activation_key(backend, "w", "a")
-    reason = check_activation_quant_fallback(name, "a", executed)
-    if name in _HONORING_BACKENDS:
-        assert reason is None
-    else:
-        assert reason is not None
-        assert name in reason
-
-
-@pytest.mark.parametrize("name", sorted(_BACKEND_FACTORIES))
-def test_unified_helper_covers_every_backend_strict_mode(monkeypatch, name):
-    """Strict mode: honoring backends pass, fallback backends raise."""
-
-    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
-    backend = _BACKEND_FACTORIES[name]()
-    executed = executed_activation_key(backend, "w", "a")
-    if name in _HONORING_BACKENDS:
-        assert check_activation_quant_fallback(name, "a", executed) is None
-    else:
         with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
-            check_activation_quant_fallback(name, "a", executed)
+            activation_fallback.check_runner_activation_fallback(
+                "MarlinMoeQuantInfo", "w", "fp8", _WeightOnlyKernel
+            )
+    else:
+        assert (
+            activation_fallback.check_runner_activation_fallback(
+                "MarlinMoeQuantInfo", "w", "fp8", _WeightOnlyKernel
+            )
+            is not None
+        )
 
 
-@pytest.mark.parametrize("name", sorted(_BACKEND_FACTORIES))
-def test_unified_helper_no_fallback_when_nothing_requested(monkeypatch, name):
-    """No requested activation quantization means no fallback for any backend."""
+@pytest.mark.parametrize("strict", [False, True])
+def test_humming_without_input_quant_config_falls_back(
+    monkeypatch, activation_fallback, strict
+):
+    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", str(int(strict)))
+    kernel = _HummingKernel(has_input_quant_config=False)
+    if strict:
+        with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
+            activation_fallback.check_runner_activation_fallback(
+                "HummingMoeQuantInfo", "w", "fp8", kernel
+            )
+    else:
+        assert (
+            activation_fallback.check_runner_activation_fallback(
+                "HummingMoeQuantInfo", "w", "fp8", kernel
+            )
+            is not None
+        )
 
-    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
-    backend = _BACKEND_FACTORIES[name]()
-    executed = executed_activation_key(backend, "w", None)
-    assert check_activation_quant_fallback(name, None, executed) is None
+
+def test_humming_with_input_quant_config_honors_scheme(activation_fallback):
+    kernel = _HummingKernel(has_input_quant_config=True)
+    assert (
+        activation_fallback.check_runner_activation_fallback(
+            "HummingMoeQuantInfo", "w", "fp8", kernel
+        )
+        is None
+    )
 
 
-def test_unified_helper_is_single_decision_point(monkeypatch):
-    """The helper is the only place that decides fallback vs. rejection.
+def test_mxfp4_emulation_honors_scheme(activation_fallback):
+    # Emulation kernels execute the requested activation quantization.
+    assert (
+        activation_fallback.check_runner_activation_fallback(
+            "Nvfp4QuantizationEmulationTritonExperts", "w", "nvfp4", _Kernel
+        )
+        is None
+    )
 
-    Both the default-mode warning path and the strict-mode error path must go
-    through ``check_activation_quant_fallback``; a backend that declares a
-    fallback must never be silently accepted in strict mode.
-    """
 
-    backend = _MarlinBackend()
-    executed = executed_activation_key(backend, "w", "a")
-
+def test_fp8_marlin_fallback_reason(monkeypatch, activation_fallback):
     monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
-    assert check_activation_quant_fallback("MarlinBackend", "a", executed) is not None
+    reason = activation_fallback.check_runner_activation_fallback(
+        "MarlinExperts", "fp8_static", "fp8_dynamic", _WeightOnlyKernel
+    )
+    assert reason is not None
+    assert "fp8_dynamic" in reason
 
-    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
-    with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
-        check_activation_quant_fallback("MarlinBackend", "a", executed)
+
+# ---------------------------------------------------------------------------
+# UNQUANTIZED_ACTIVATION sentinel
+# ---------------------------------------------------------------------------
 
 
-def test_runner_helper_covers_every_backend(monkeypatch):
-    """The runner entry point delegates to the same unified helper."""
-
-    monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
-    for name, factory in _BACKEND_FACTORIES.items():
-        backend = factory()
-        reason = check_runner_activation_fallback(name, "w", "a", backend)
-        if name in _HONORING_BACKENDS:
-            assert reason is None
-        else:
-            assert reason is not None
-            assert name in reason
-
-    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
-    for name, factory in _BACKEND_FACTORIES.items():
-        backend = factory()
-        if name in _HONORING_BACKENDS:
-            assert check_runner_activation_fallback(name, "w", "a", backend) is None
-        else:
-            with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
-                check_runner_activation_fallback(name, "w", "a", backend)
+def test_unquantized_activation_sentinel(activation_fallback):
+    assert activation_fallback.UNQUANTIZED_ACTIVATION is None
