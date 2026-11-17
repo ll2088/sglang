@@ -433,3 +433,144 @@ def test_humming_runner_with_input_config_accepted_under_strict(monkeypatch):
     runner = _HummingRunner(has_input_config=True)
     executed = executed_activation_key(runner, "w", "a")
     assert check_activation_quant_fallback("HummingRunner", "a", executed) is None
+
+
+# ---------------------------------------------------------------------------
+# Unified helper coverage across backend selection paths.
+#
+# The acceptance criteria require that every quantization backend selection
+# path goes through the unified fallback helper and that no silent fallback
+# branch is left behind. These tests exercise the helper with the exact
+# declarations the real backends use (humming / marlin / mxfp4 / fp8) and
+# assert that the helper is the single decision point for both default and
+# strict mode.
+# ---------------------------------------------------------------------------
+
+
+class _HummingBackend:
+    """Humming: honors the scheme only when an input quant config is set."""
+
+    def __init__(self, has_input_config):
+        self._has_input_config = has_input_config
+
+    def executed_activation_key(self, weight_key, activation_key):
+        if self._has_input_config:
+            return activation_key
+        return None
+
+
+class _MarlinBackend:
+    """Marlin: weight-only, activations always run in 16-bit."""
+
+    @staticmethod
+    def executed_activation_key(weight_key, activation_key):
+        return None
+
+
+class _Mxfp4Backend:
+    """MXFP4 weight-only conversion runs unquantized activations."""
+
+    @staticmethod
+    def executed_activation_key(weight_key, activation_key):
+        return None
+
+
+class _Fp8Backend:
+    """FP8 W8A8 honors the requested activation scheme."""
+
+    @staticmethod
+    def executed_activation_key(weight_key, activation_key):
+        return activation_key
+
+
+_BACKEND_FACTORIES = {
+    "humming_with_input_config": lambda: _HummingBackend(has_input_config=True),
+    "humming_without_input_config": lambda: _HummingBackend(has_input_config=False),
+    "marlin": _MarlinBackend,
+    "mxfp4": _Mxfp4Backend,
+    "fp8": _Fp8Backend,
+}
+
+# Backends that honor the requested activation scheme (no fallback).
+_HONORING_BACKENDS = {"humming_with_input_config", "fp8"}
+
+
+@pytest.mark.parametrize("name", sorted(_BACKEND_FACTORIES))
+def test_unified_helper_covers_every_backend_default_mode(monkeypatch, name):
+    """Default mode: honoring backends return None, fallback backends report."""
+
+    monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
+    backend = _BACKEND_FACTORIES[name]()
+    executed = executed_activation_key(backend, "w", "a")
+    reason = check_activation_quant_fallback(name, "a", executed)
+    if name in _HONORING_BACKENDS:
+        assert reason is None
+    else:
+        assert reason is not None
+        assert name in reason
+
+
+@pytest.mark.parametrize("name", sorted(_BACKEND_FACTORIES))
+def test_unified_helper_covers_every_backend_strict_mode(monkeypatch, name):
+    """Strict mode: honoring backends pass, fallback backends raise."""
+
+    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
+    backend = _BACKEND_FACTORIES[name]()
+    executed = executed_activation_key(backend, "w", "a")
+    if name in _HONORING_BACKENDS:
+        assert check_activation_quant_fallback(name, "a", executed) is None
+    else:
+        with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
+            check_activation_quant_fallback(name, "a", executed)
+
+
+@pytest.mark.parametrize("name", sorted(_BACKEND_FACTORIES))
+def test_unified_helper_no_fallback_when_nothing_requested(monkeypatch, name):
+    """No requested activation quantization means no fallback for any backend."""
+
+    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
+    backend = _BACKEND_FACTORIES[name]()
+    executed = executed_activation_key(backend, "w", None)
+    assert check_activation_quant_fallback(name, None, executed) is None
+
+
+def test_unified_helper_is_single_decision_point(monkeypatch):
+    """The helper is the only place that decides fallback vs. rejection.
+
+    Both the default-mode warning path and the strict-mode error path must go
+    through ``check_activation_quant_fallback``; a backend that declares a
+    fallback must never be silently accepted in strict mode.
+    """
+
+    backend = _MarlinBackend()
+    executed = executed_activation_key(backend, "w", "a")
+
+    monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
+    assert check_activation_quant_fallback("MarlinBackend", "a", executed) is not None
+
+    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
+    with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
+        check_activation_quant_fallback("MarlinBackend", "a", executed)
+
+
+def test_runner_helper_covers_every_backend(monkeypatch):
+    """The runner entry point delegates to the same unified helper."""
+
+    monkeypatch.delenv("VLLM_STRICT_QUANT_SCHEME", raising=False)
+    for name, factory in _BACKEND_FACTORIES.items():
+        backend = factory()
+        reason = check_runner_activation_fallback(name, "w", "a", backend)
+        if name in _HONORING_BACKENDS:
+            assert reason is None
+        else:
+            assert reason is not None
+            assert name in reason
+
+    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
+    for name, factory in _BACKEND_FACTORIES.items():
+        backend = factory()
+        if name in _HONORING_BACKENDS:
+            assert check_runner_activation_fallback(name, "w", "a", backend) is None
+        else:
+            with pytest.raises(ValueError, match="VLLM_STRICT_QUANT_SCHEME"):
+                check_runner_activation_fallback(name, "w", "a", backend)

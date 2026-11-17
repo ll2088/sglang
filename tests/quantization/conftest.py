@@ -142,3 +142,29 @@ def _sglang_installed_from_full_install() -> bool:
     import importlib.util
 
     return importlib.util.find_spec("sglang") is not None
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items) -> None:
+    """Skip the whole suite when the source tree is missing.
+
+    The activation-fallback tests load the module under test directly from its
+    file path and never import ``sglang``. When the checkout does not contain
+    ``python/sglang/srt/layers/quantization/activation_fallback.py`` there is
+    nothing to test, so skip with an actionable message instead of failing
+    collection. This keeps CI logs pointing at the real problem (missing
+    checkout) rather than an opaque import error.
+    """
+
+    if _ACTIVATION_FALLBACK_PATH.is_file():
+        return
+
+    skip_marker = pytest.mark.skip(
+        reason=(
+            "activation_fallback module not found at "
+            f"{_ACTIVATION_FALLBACK_PATH}; run the suite from a full "
+            "repository checkout (no sglang install is required, but the "
+            "source tree must be present)."
+        )
+    )
+    for item in items:
+        item.add_marker(skip_marker)
