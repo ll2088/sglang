@@ -151,6 +151,24 @@ def test_fallback_error_message_contains_mismatch(monkeypatch, activation_fallba
     assert "MarlinExperts" in message
     assert "fp8" in message
     assert "VLLM_STRICT_QUANT_SCHEME" in message
+    # The reason must name both the requested and the executed scheme so the
+    # user can tell which activation quantization was dropped.
+    assert "requested" in message
+    assert "executed" in message
+
+
+def test_runner_fallback_error_message_contains_mismatch(
+    monkeypatch, activation_fallback
+):
+    monkeypatch.setenv("VLLM_STRICT_QUANT_SCHEME", "1")
+    with pytest.raises(ValueError) as excinfo:
+        activation_fallback.check_runner_activation_fallback(
+            "MarlinMoeQuantInfo", "w", "fp8", _WeightOnlyKernel
+        )
+    message = str(excinfo.value)
+    assert "MarlinMoeQuantInfo" in message
+    assert "fp8" in message
+    assert "VLLM_STRICT_QUANT_SCHEME" in message
 
 
 # ---------------------------------------------------------------------------
@@ -370,11 +388,40 @@ def test_conftest_strips_repo_root_from_sys_path():
             f"repository root leaked onto sys.path: {entry!r}"
         )
         try:
-            parts = Path(entry).parts
-        except (TypeError, ValueError):
+            resolved = Path(entry).resolve()
+        except (OSError, TypeError, ValueError):
             continue
-        assert "sglang" not in parts, (
+        assert resolved not in (repo_root, repo_root / "python"), (
+            f"repository root leaked onto sys.path: {entry!r}"
+        )
+        assert "sglang" not in resolved.parts, (
             f"sglang entry leaked onto sys.path: {entry!r}"
+        )
+
+
+def test_pythonpath_is_stripped():
+    """``PYTHONPATH`` must not re-inject the repo root or sglang paths.
+
+    CI may export ``PYTHONPATH`` pointing at the repository root; if that
+    survives, pytest's environment preparation resolves the full sglang
+    dependency set even though the suite only needs pytest.
+    """
+
+    import os
+    from pathlib import Path
+
+    here = Path(__file__).resolve().parent
+    repo_root = here.parent.parent
+    value = os.environ.get("PYTHONPATH", "")
+    for part in value.split(os.pathsep):
+        if not part:
+            continue
+        resolved = Path(part).resolve()
+        assert resolved not in (repo_root, repo_root / "python"), (
+            f"repository root leaked onto PYTHONPATH: {part!r}"
+        )
+        assert "sglang" not in resolved.parts, (
+            f"sglang entry leaked onto PYTHONPATH: {part!r}"
         )
 
 

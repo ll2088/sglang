@@ -39,36 +39,43 @@ _MODULE_PATH = (
 )
 
 
-def _strip_repo_paths() -> None:
-    """Remove the repository root and sglang entries from the import path.
+def _is_blocked_path(entry: str) -> bool:
+    """Return True for repo-root, python/ and any sglang import path.
 
     The repository root contains a ``python/`` package directory and a
     ``setup.py``; leaving it on ``sys.path`` lets pytest's rootdir discovery
-    pull in the full sglang dependency set. We also drop any ``sglang``
-    entries that may have been injected via ``PYTHONPATH``.
+    pull in the full sglang dependency set. Any path whose components include
+    ``sglang`` is likewise dropped so a stale ``PYTHONPATH`` entry cannot
+    re-trigger the full dependency resolution.
+    """
+
+    if entry in ("", "."):
+        return True
+    try:
+        resolved = Path(entry).resolve()
+    except (OSError, TypeError, ValueError):
+        return False
+    if resolved in (_REPO_ROOT, _REPO_ROOT / "python"):
+        return True
+    try:
+        parts = resolved.parts
+    except (TypeError, ValueError):
+        return False
+    return "sglang" in parts
+
+
+def _strip_repo_paths() -> None:
+    """Remove the repository root and sglang entries from the import path.
 
     This runs at import time (before collection) and is idempotent, so it is
     safe to call again from ``pytest_configure`` after pytest has finished
-    its own rootdir / conftest discovery.
+    its own rootdir / conftest discovery. It also drops any already-imported
+    ``sglang`` modules so a stale import cannot re-trigger the full
+    dependency resolution during collection.
     """
 
-    repo_root = str(_REPO_ROOT)
-    python_dir = str(_REPO_ROOT / "python")
-    blocked = {repo_root, python_dir, "", "."}
+    sys.path[:] = [entry for entry in sys.path if not _is_blocked_path(entry)]
 
-    def _is_blocked(entry: str) -> bool:
-        if entry in blocked:
-            return True
-        try:
-            parts = Path(entry).parts
-        except (TypeError, ValueError):
-            return False
-        return "sglang" in parts
-
-    sys.path[:] = [entry for entry in sys.path if not _is_blocked(entry)]
-
-    # Drop any already-imported sglang modules so a stale import cannot
-    # re-trigger the full dependency resolution during collection.
     for name in list(sys.modules):
         if name == "sglang" or name.startswith("sglang."):
             del sys.modules[name]
@@ -80,7 +87,7 @@ def _strip_repo_paths() -> None:
         kept = [
             part
             for part in value.split(os.pathsep)
-            if part and not _is_blocked(part)
+            if part and not _is_blocked_path(part)
         ]
         if kept:
             os.environ[var] = os.pathsep.join(kept)
@@ -126,6 +133,16 @@ def pytest_configure(config) -> None:
     # repository-root pyproject.toml / setup.py during collection.
     config.rootpath = _HERE
     config.inifile = _HERE / "pytest.ini"
+
+    # Guard against a regression where the repo root leaks back onto the
+    # import path and pytest resolves the full sglang dependency set during
+    # environment preparation.
+    leaked = [entry for entry in sys.path if _is_blocked_path(entry)]
+    if leaked:
+        raise RuntimeError(
+            "repository root leaked onto sys.path during pytest_configure: "
+            f"{leaked!r}"
+        )
 
 
 def _load_activation_fallback():
