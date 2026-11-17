@@ -82,7 +82,26 @@ def _strip_repo_paths() -> None:
             os.environ.pop(var, None)
 
 
+def _ensure_minimal_pytest_config() -> None:
+    """Fail fast if the suite is not run with its minimal pytest config.
+
+    Running pytest without ``-c tests/quantization/pytest.ini`` lets pytest
+    discover the repository-root ``pyproject.toml`` / ``setup.py``, which
+    triggers the full sglang dependency resolution during environment
+    preparation. We refuse to run in that configuration so CI fails with a
+    clear message instead of a confusing pip error.
+    """
+
+    ini = _HERE / "pytest.ini"
+    if not ini.is_file():
+        raise RuntimeError(
+            f"missing minimal pytest config: {ini}; CI must invoke pytest "
+            "with ``-c tests/quantization/pytest.ini``"
+        )
+
+
 _strip_repo_paths()
+_ensure_minimal_pytest_config()
 
 
 def pytest_configure(config) -> None:
@@ -95,6 +114,7 @@ def pytest_configure(config) -> None:
     """
 
     _strip_repo_paths()
+    _ensure_minimal_pytest_config()
 
 
 def _load_activation_fallback():

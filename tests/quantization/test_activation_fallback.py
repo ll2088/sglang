@@ -348,6 +348,36 @@ def test_pytest_ini_is_used():
     assert "testpaths = ." in text
 
 
+def test_conftest_strips_repo_root_from_sys_path():
+    """The suite must not leave the repository root on ``sys.path``.
+
+    If the repository root (or its ``python/`` directory) stays importable,
+    pytest's rootdir discovery can resolve the full sglang dependency set
+    during environment preparation. ``conftest.py`` strips those entries at
+    import time and again in ``pytest_configure``; this test guards that the
+    stripping actually took effect.
+    """
+
+    import sys
+    from pathlib import Path
+
+    here = Path(__file__).resolve().parent
+    repo_root = here.parent.parent
+    blocked = {str(repo_root), str(repo_root / "python")}
+
+    for entry in sys.path:
+        assert entry not in blocked, (
+            f"repository root leaked onto sys.path: {entry!r}"
+        )
+        try:
+            parts = Path(entry).parts
+        except (TypeError, ValueError):
+            continue
+        assert "sglang" not in parts, (
+            f"sglang entry leaked onto sys.path: {entry!r}"
+        )
+
+
 def test_requirements_is_minimal():
     """The suite must only require pytest, never the full sglang package."""
 
