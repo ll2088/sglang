@@ -67,6 +67,12 @@ def _strip_repo_paths() -> None:
 
     sys.path[:] = [entry for entry in sys.path if not _is_blocked(entry)]
 
+    # Drop any already-imported sglang modules so a stale import cannot
+    # re-trigger the full dependency resolution during collection.
+    for name in list(sys.modules):
+        if name == "sglang" or name.startswith("sglang."):
+            del sys.modules[name]
+
     for var in ("PYTHONPATH", "PYTHONSTARTUP"):
         value = os.environ.get(var)
         if not value:
@@ -115,6 +121,11 @@ def pytest_configure(config) -> None:
 
     _strip_repo_paths()
     _ensure_minimal_pytest_config()
+
+    # Force the suite's own rootdir so pytest never walks up to the
+    # repository-root pyproject.toml / setup.py during collection.
+    config.rootpath = _HERE
+    config.inifile = _HERE / "pytest.ini"
 
 
 def _load_activation_fallback():

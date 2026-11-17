@@ -12,5 +12,8 @@
 #   pip install -r tests/quantization/requirements.txt
 #   python -m pytest -q -c tests/quantization/pytest.ini \
 #       tests/quantization/test_activation_fallback.py
+#
+# Do NOT add sglang or any of its runtime dependencies here: the suite is
+# intentionally self-contained and must run with pytest alone.
 
 pytest>=7.0
