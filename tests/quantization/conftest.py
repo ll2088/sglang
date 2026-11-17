@@ -22,6 +22,13 @@ from pathlib import Path
 # quack-kernels, ...) during pytest collection, which is exactly the CI
 # environment-preparation failure this suite is designed to avoid. The module
 # under test is loaded from its source file below.
+#
+# IMPORTANT: the isolation below runs at conftest import time, i.e. before any
+# test module is collected. It must stay at the very top of this file, before
+# any other import that could pull in the sglang package. CI must also invoke
+# pytest with ``-c tests/quantization/pytest.ini`` so that the repository-root
+# pyproject.toml / setup.py is not consulted and no editable install of the
+# sglang package is triggered during environment preparation.
 
 # The module under test only uses the standard library, so it is loaded
 # directly from its file path. This keeps the suite runnable with only pytest
@@ -97,12 +104,6 @@ os.environ.pop("PYTHONPATH", None)
 # top-level ``sglang`` package either. This is what prevents CI from
 # re-triggering ``pip install -e python`` during collection.
 for _env_var in ("PYTHONPATH", "PYTHONHOME"):
-    os.environ.pop(_env_var, None)
-
-# Also drop the repository root and the ``python/`` directory from the
-# environment so subprocesses spawned by tests (if any) cannot resolve the
-# top-level ``sglang`` package either.
-for _env_var in ("PYTHONHOME",):
     os.environ.pop(_env_var, None)
 
 # Also drop any ``sglang`` entry that an editable install may have injected
@@ -228,3 +229,15 @@ def activation_fallback():
     _assert_no_sglang_imported()
     _assert_sglang_not_importable()
     return _load_activation_fallback()
+
+
+def pytest_configure(config):
+    """Fail fast if the suite is not running in the intended minimal env.
+
+    This runs before test collection, so a misconfigured CI (e.g. one that
+    installed the full sglang package) reports a clear error instead of a
+    confusing dependency failure during collection.
+    """
+
+    _assert_no_sglang_imported()
+    _assert_sglang_not_importable()

@@ -329,3 +329,42 @@ def test_sglang_package_is_not_importable():
         "CI must install only tests/quantization/requirements.txt (pytest) "
         "and must not run ``pip install -e python`` for this suite."
     )
+
+
+def test_pytest_ini_is_used():
+    """CI must invoke pytest with ``-c tests/quantization/pytest.ini``.
+
+    Without the explicit config, pytest would pick up the repository-root
+    pyproject.toml / setup.py and could trigger the full sglang dependency
+    resolution during environment preparation.
+    """
+
+    from pathlib import Path
+
+    ini = Path(__file__).resolve().parent / "pytest.ini"
+    assert ini.is_file(), f"missing minimal pytest config: {ini}"
+    text = ini.read_text(encoding="utf-8")
+    assert "rootdir = ." in text
+    assert "testpaths = ." in text
+
+
+def test_requirements_is_minimal():
+    """The suite must only require pytest, never the full sglang package."""
+
+    from pathlib import Path
+
+    req = Path(__file__).resolve().parent / "requirements.txt"
+    assert req.is_file(), f"missing minimal requirements: {req}"
+    lines = [
+        line.strip()
+        for line in req.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert lines, "requirements.txt must list at least pytest"
+    assert all("sglang" not in line for line in lines), (
+        "tests/quantization/requirements.txt must not depend on sglang; "
+        f"found: {lines}"
+    )
+    assert any(line.startswith("pytest") for line in lines), (
+        f"requirements.txt must list pytest; found: {lines}"
+    )
