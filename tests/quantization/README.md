@@ -1,39 +1,52 @@
-# Activation-quantization fallback tests
+# tests/quantization
 
-This directory contains the self-contained test suite for the explicit
-activation-quantization fallback handling (`VLLM_STRICT_QUANT_SCHEME`).
+Self-contained tests for explicit activation-quantization fallback handling
+(`VLLM_STRICT_QUANT_SCHEME`).
 
-## Why this suite is self-contained
+## Why this directory is special
 
-The suite loads the module under test directly from its file path
-(`python/sglang/srt/layers/quantization/activation_fallback.py`) and only
-uses the standard library plus `pytest`. It must **not** require a full
-`pip install -e python` of sglang (no GPU, no compiled kernels, no heavy
-third-party runtime dependencies).
+The activation-fallback suite (`test_activation_fallback.py`) is deliberately
+self-contained: it loads the module under test directly from its file path and
+only uses the standard library plus `pytest`. It must **not** require a full
+`pip install -e python` of sglang (no GPU, no compiled kernels, no third-party
+runtime deps).
 
-## How CI should run it
+## Running the suite
 
-From the repository root:
+Install only the minimal dependencies and run pytest with this directory as the
+rootdir so that `tests/quantization/pytest.ini` is picked up instead of the
+repository-wide configuration:
 
 ```bash
 pip install -r tests/quantization/requirements.txt
 python -m pytest -q tests/quantization/test_activation_fallback.py
 ```
 
-Do **not** run `pip install -e python` for this directory: that pulls the
-full sglang dependency set (py-spy, pybase64, pydantic, quack-kernels, ...)
-which is unnecessary here and has been observed to fail during dependency
-resolution in CI.
+Stability check (no random ordering plugin):
 
-## What is covered
+```bash
+python -m pytest -q -p no:randomly tests/quantization/test_activation_fallback.py
+```
 
-- `VLLM_STRICT_QUANT_SCHEME` parsing (`""`/`"0"` disabled, anything else
-  enabled).
-- `executed_activation_key` dispatch for kernels that honor the requested
-  scheme, weight-only kernels (Marlin, MXFP4), and Humming's input-schema
-  dependent behavior.
-- `check_activation_quant_fallback` returning `None` on match, a reason in
-  default mode, and raising `ValueError` in strict mode.
-- Backend selection loop behavior: default mode picks the fallback kernel,
-  strict mode rejects it and falls through to a later honoring kernel.
-- MoE runner declarations for base / humming / marlin runners.
+Performance check:
+
+```bash
+python -m pytest -q tests/quantization/test_activation_fallback.py --durations=10
+```
+
+Usability check (strict-mode env var):
+
+```bash
+python -m pytest -q tests/quantization/test_activation_fallback.py -k strict
+```
+
+## CI guidance
+
+CI jobs that run this directory should install only
+`tests/quantization/requirements.txt` (i.e. `pytest`) and must **not** run
+`pip install -e python`, which pulls the full sglang runtime dependency set
+(including CUDA/kernel packages) and fails on GPU-less runners.
+
+The suite requires the source tree to be present (it reads
+`python/sglang/srt/layers/quantization/activation_fallback.py` from disk) but
+it does not import the `sglang` package.
