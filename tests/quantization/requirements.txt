@@ -1,8 +1,9 @@
-# Minimal requirements for the self-contained activation-fallback suite.
-# This suite must run without installing the full sglang runtime dependency
-# set (no GPU, no compiled kernels). Only pytest is required.
+# Minimal, self-contained test requirements for tests/quantization.
 #
-# Run with:
-#   pip install -r tests/quantization/requirements.txt
-#   python -m pytest -q -c tests/quantization/pytest.ini tests/quantization
-pytest
+# These tests intentionally avoid importing the ``sglang`` package so they can
+# run without the full sglang dependency set (py-spy, quack-kernels, ...).
+# Only pytest is required; the module under test uses the standard library.
+#
+# Do NOT add sglang or its runtime dependencies here. If a test needs them,
+# it belongs in a different test directory.
+pytest>=7.0

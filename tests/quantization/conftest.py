@@ -1,16 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Lightweight conftest for the self-contained activation-fallback suite.
+"""Self-contained conftest for tests/quantization.
 
-This suite must run without installing the full sglang runtime dependency set
-(no GPU, no compiled kernels). The module under test only uses the standard
-library, so it is loaded directly from its file path by the test module.
+This directory's tests must run without a full ``sglang`` install. The
+repository-level conftest.py imports ``sglang`` (and therefore its full
+dependency set), so we deliberately keep this conftest free of any sglang
+imports and only add the source tree to ``sys.path`` so tests can locate the
+module under test by file path.
 
-This conftest deliberately does NOT import ``sglang`` and does NOT add the
-repository root to ``sys.path`` in a way that would trigger the root
-``conftest.py`` (which may import the full runtime). It only makes the
-``python/`` source tree importable for tests that want to import the module
-under test by package path, without requiring ``pip install -e python``.
+If a future test in this directory needs sglang, it should be moved out of
+this directory rather than adding an import here.
 """
 
 from __future__ import annotations
@@ -19,28 +18,36 @@ import sys
 from pathlib import Path
 
 
-def _find_repo_root(start: Path) -> Path | None:
-    """Walk upwards from ``start`` looking for the repository root.
+def _find_repo_root() -> Path | None:
+    """Walk upwards from this file to locate the repository root.
 
-    The repository root is identified by the presence of the ``python``
-    directory containing the ``sglang`` package. Returns ``None`` when the
-    source tree is not present (e.g. a partial checkout), in which case the
-    test module skips itself with an explicit message.
+    The repository root is identified by the presence of the
+    ``python/sglang/srt/layers/quantization`` directory. Returns ``None`` when
+    the source tree is not present (e.g. a partial checkout); tests that need
+    it will skip with an explicit message instead of failing during collection.
     """
 
-    for candidate in (start, *start.parents):
-        if (candidate / "python" / "sglang" / "srt").is_dir():
+    here = Path(__file__).resolve()
+    for candidate in (here.parent, *here.parents):
+        if (
+            candidate
+            / "python"
+            / "sglang"
+            / "srt"
+            / "layers"
+            / "quantization"
+        ).is_dir():
             return candidate
     return None
 
 
-_REPO_ROOT = _find_repo_root(Path(__file__).resolve().parent)
+_REPO_ROOT = _find_repo_root()
 
 if _REPO_ROOT is not None:
-    _PYTHON_DIR = _REPO_ROOT / "python"
-    if _PYTHON_DIR.is_dir():
-        _python_dir_str = str(_PYTHON_DIR)
-        if _python_dir_str not in sys.path:
-            # Append rather than prepend so an installed sglang (if any) still
-            # wins; this suite does not need the package to be importable.
-            sys.path.append(_python_dir_str)
+    # Make the source tree importable by file path without requiring an
+    # editable install. This is a no-op for tests that load modules directly
+    # from their file path, but keeps the door open for future tests that
+    # import sibling modules by package path.
+    _python_dir = str(_REPO_ROOT / "python")
+    if _python_dir not in sys.path:
+        sys.path.insert(0, _python_dir)
