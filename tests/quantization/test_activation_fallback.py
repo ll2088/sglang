@@ -4,7 +4,8 @@
 
 These tests intentionally avoid importing the ``sglang`` package so they can
 run in a minimal environment (no GPU, no compiled kernels, no full dependency
-set). The module under test is loaded directly from its file path.
+set). The module under test is loaded directly from its file path, and only
+uses the standard library.
 """
 
 from __future__ import annotations
