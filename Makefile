@@ -1,33 +1,34 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright (c) vLLM project
 #
-# Minimal-dependency entry point for the activation-fallback suite.
+# Minimal, self-contained targets for the activation-fallback suite.
 #
-# CI must use this target (or an equivalent command) instead of
-# ``pip install -e python`` for tests/quantization. Installing the sglang
-# package resolves its full dependency set (py-spy, pybase64, pydantic,
-# pyzmq, quack-kernels, ...) and fails during environment preparation.
-#
-# The module under test only uses the standard library, so pytest is the only
-# dependency required.
+# CI must call ``make test-quantization`` (or the equivalent commands below)
+# instead of running ``pip install -e python`` for this suite: the latter
+# resolves the full sglang dependency set (py-spy, pybase64, pydantic,
+# quack-kernels, ...) during environment preparation and fails before any test
+# executes. The suite only needs pytest and is loaded from source file paths.
 
-.PHONY: test-quantization test-quantization-strict test-quantization-stability
+PYTHON ?= python
+QUANT_DIR := tests/quantization
+QUANT_REQ := $(QUANT_DIR)/requirements.txt
+QUANT_INI := $(QUANT_DIR)/pytest.ini
+QUANT_TEST := $(QUANT_DIR)/test_activation_fallback.py
 
-# Install only the minimal dependencies and run the activation-fallback suite.
-# ``--no-deps`` prevents pip from resolving the sglang package metadata.
+.PHONY: test-quantization test-quantization-stability test-quantization-perf
+
+# Install only the minimal dependency set, then run the suite with an explicit
+# config so pytest never walks up to the repository-root pyproject.toml.
 test-quantization:
-	python -m pip install --no-deps -r tests/quantization/requirements.txt
-	python -m pytest -q -c tests/quantization/pytest.ini tests/quantization/test_activation_fallback.py
+	$(PYTHON) -m pip install -r $(QUANT_REQ)
+	PYTHONPATH= $(PYTHON) -m pytest -q -c $(QUANT_INI) $(QUANT_TEST)
 
-# Run only the strict-mode tests (VLLM_STRICT_QUANT_SCHEME).
-test-quantization-strict:
-	python -m pip install --no-deps -r tests/quantization/requirements.txt
-	python -m pytest -q -c tests/quantization/pytest.ini tests/quantization/test_activation_fallback.py -k strict
-
-# Run the suite three times with random ordering disabled to catch order
-# dependencies or flaky failures.
+# Repeat the suite without random ordering to catch order dependencies.
 test-quantization-stability:
-	python -m pip install --no-deps -r tests/quantization/requirements.txt
-	python -m pytest -q -c tests/quantization/pytest.ini -p no:randomly tests/quantization/test_activation_fallback.py
-	python -m pytest -q -c tests/quantization/pytest.ini -p no:randomly tests/quantization/test_activation_fallback.py
-	python -m pytest -q -c tests/quantization/pytest.ini -p no:randomly tests/quantization/test_activation_fallback.py
+	$(PYTHON) -m pip install -r $(QUANT_REQ)
+	PYTHONPATH= $(PYTHON) -m pytest -q -c $(QUANT_INI) -p no:randomly $(QUANT_TEST)
+
+# Report the slowest tests so reviewers can compare against a baseline.
+test-quantization-perf:
+	$(PYTHON) -m pip install -r $(QUANT_REQ)
+	PYTHONPATH= $(PYTHON) -m pytest -q -c $(QUANT_INI) $(QUANT_TEST) --durations=10

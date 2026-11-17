@@ -110,7 +110,7 @@ import pytest  # noqa: E402  (imported after path stripping on purpose)
 
 
 @pytest.fixture(scope="session")
- def activation_fallback():
+def activation_fallback():
     """The module under test, loaded from its source file."""
 
     return _ACTIVATION_FALLBACK
