@@ -46,17 +46,26 @@ def _strip_repo_paths() -> None:
     ``setup.py``; leaving it on ``sys.path`` lets pytest's rootdir discovery
     pull in the full sglang dependency set. We also drop any ``sglang``
     entries that may have been injected via ``PYTHONPATH``.
+
+    This runs at import time (before collection) and is idempotent, so it is
+    safe to call again from ``pytest_configure`` after pytest has finished
+    its own rootdir / conftest discovery.
     """
 
     repo_root = str(_REPO_ROOT)
     python_dir = str(_REPO_ROOT / "python")
     blocked = {repo_root, python_dir, "", "."}
 
-    sys.path[:] = [
-        entry
-        for entry in sys.path
-        if entry not in blocked and "sglang" not in Path(entry).parts
-    ]
+    def _is_blocked(entry: str) -> bool:
+        if entry in blocked:
+            return True
+        try:
+            parts = Path(entry).parts
+        except (TypeError, ValueError):
+            return False
+        return "sglang" in parts
+
+    sys.path[:] = [entry for entry in sys.path if not _is_blocked(entry)]
 
     for var in ("PYTHONPATH", "PYTHONSTARTUP"):
         value = os.environ.get(var)
@@ -65,7 +74,7 @@ def _strip_repo_paths() -> None:
         kept = [
             part
             for part in value.split(os.pathsep)
-            if part and part not in blocked and "sglang" not in Path(part).parts
+            if part and not _is_blocked(part)
         ]
         if kept:
             os.environ[var] = os.pathsep.join(kept)
@@ -74,6 +83,18 @@ def _strip_repo_paths() -> None:
 
 
 _strip_repo_paths()
+
+
+def pytest_configure(config) -> None:
+    """Re-strip repo paths after pytest's own rootdir discovery.
+
+    pytest may re-insert the rootdir (or the invocation directory) onto
+    ``sys.path`` while loading conftest files. Running the strip again here
+    guarantees the suite stays isolated from the full sglang dependency set
+    even when CI invokes pytest from the repository root.
+    """
+
+    _strip_repo_paths()
 
 
 def _load_activation_fallback():
