@@ -20,6 +20,10 @@ import logging
 import os
 from typing import Any, Optional
 
+# NOTE: this module must stay importable with only the standard library.
+# It is loaded directly from its source file by tests/quantization/conftest.py
+# so the suite can run with pytest alone (no sglang import, no GPU, no
+# compiled kernels). Do not add sglang imports here.
 logger = logging.getLogger(__name__)
 
 # Messages already emitted by ``_warn_once``; used when the stdlib logger is

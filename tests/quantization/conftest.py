@@ -104,6 +104,18 @@ def pytest_configure(config) -> None:
     _strip_paths()
 
 
+def pytest_collection_modifyitems(config, items) -> None:
+    # Guard against accidental sglang imports during collection: if any test
+    # module pulled in the sglang package, fail loudly instead of silently
+    # resolving the full dependency set.
+    if "sglang" in sys.modules:
+        raise RuntimeError(
+            "tests/quantization must not import sglang; found it in "
+            "sys.modules during collection. The suite is loaded from file "
+            "paths via conftest.py so CI only needs pytest installed."
+        )
+
+
 def pytest_report_header(config) -> str:
     return "activation-fallback suite: self-contained (pytest only)"
 
