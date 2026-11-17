@@ -10,5 +10,11 @@
 # which would resolve the full sglang dependency set (py-spy, pybase64,
 # pydantic, pyzmq, quack-kernels, ...) and fail during environment
 # preparation.
+#
+# Install with:
+#   pip install --no-deps -r tests/quantization/requirements.txt
+# The ``--no-deps`` flag is important: it prevents pip from resolving the
+# sglang package metadata (which is what triggered the CI environment
+# preparation failure). pytest itself has no runtime dependency on sglang.
 
 pytest>=7.0

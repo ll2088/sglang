@@ -44,6 +44,12 @@ from pathlib import Path
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _THIS_DIR.parents[1]
 
+# NOTE: This conftest must run before any test module is collected. The
+# isolation below (sys.path pruning, PYTHONPATH clearing, sys.modules cleanup)
+# is what keeps CI from resolving the full sglang dependency set. If a future
+# change moves this logic into a fixture, the isolation would run too late and
+# CI would fail during environment preparation again.
+
 # Drop every path that could make ``import sglang`` resolve the top-level
 # package (whose ``__init__`` pulls in the full dependency set). This covers
 # the repository root, the ``python/`` subdirectory, and this test directory
@@ -85,6 +91,13 @@ sys.path[:] = [p for p in sys.path if not _is_forbidden_path(p)]
 # module is imported so a stray ``import sglang`` cannot resolve the top-level
 # package and trigger the full dependency resolution.
 os.environ.pop("PYTHONPATH", None)
+
+# Also drop the repository root and the ``python/`` directory from the
+# environment so subprocesses spawned by tests (if any) cannot resolve the
+# top-level ``sglang`` package either. This is what prevents CI from
+# re-triggering ``pip install -e python`` during collection.
+for _env_var in ("PYTHONPATH", "PYTHONHOME"):
+    os.environ.pop(_env_var, None)
 
 # Also drop the repository root and the ``python/`` directory from the
 # environment so subprocesses spawned by tests (if any) cannot resolve the

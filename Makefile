@@ -1,42 +1,33 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright (c) vLLM project
 #
-# Minimal entry points for the activation-fallback suite.
+# Minimal-dependency entry point for the activation-fallback suite.
 #
-# CI must use these targets (or the equivalent commands) instead of
-# ``pip install -e python``: the suite is self-contained and only needs
-# pytest, so installing the full sglang dependency set is both unnecessary and
-# the cause of the environment-preparation failure.
+# CI must use this target (or an equivalent command) instead of
+# ``pip install -e python`` for tests/quantization. Installing the sglang
+# package resolves its full dependency set (py-spy, pybase64, pydantic,
+# pyzmq, quack-kernels, ...) and fails during environment preparation.
+#
+# The module under test only uses the standard library, so pytest is the only
+# dependency required.
 
-PYTHON ?= python
-QUANT_TEST_DIR := tests/quantization
-QUANT_TEST_INI := $(QUANT_TEST_DIR)/pytest.ini
-QUANT_TEST_REQS := $(QUANT_TEST_DIR)/requirements.txt
-QUANT_TEST_FILE := $(QUANT_TEST_DIR)/test_activation_fallback.py
+.PHONY: test-quantization test-quantization-strict test-quantization-stability
 
-.PHONY: install-quant-test-deps test-quant test-quant-strict test-quant-stability test-quant-perf
+# Install only the minimal dependencies and run the activation-fallback suite.
+# ``--no-deps`` prevents pip from resolving the sglang package metadata.
+test-quantization:
+	python -m pip install --no-deps -r tests/quantization/requirements.txt
+	python -m pytest -q -c tests/quantization/pytest.ini tests/quantization/test_activation_fallback.py
 
-# Install ONLY the minimal requirements for the activation-fallback suite.
-# Never run ``pip install -e python`` for this suite.
-install-quant-test-deps:
-	$(PYTHON) -m pip install -r $(QUANT_TEST_REQS)
+# Run only the strict-mode tests (VLLM_STRICT_QUANT_SCHEME).
+test-quantization-strict:
+	python -m pip install --no-deps -r tests/quantization/requirements.txt
+	python -m pytest -q -c tests/quantization/pytest.ini tests/quantization/test_activation_fallback.py -k strict
 
-# Run the activation-fallback suite with the dedicated pytest.ini so the
-# repository-wide configuration (and its import paths) is not picked up.
-test-quant:
-	$(PYTHON) -m pytest -q -c $(QUANT_TEST_INI) $(QUANT_TEST_FILE)
-
-# Usability check: VLLM_STRICT_QUANT_SCHEME behavior.
-test-quant-strict:
-	$(PYTHON) -m pytest -q -c $(QUANT_TEST_INI) $(QUANT_TEST_FILE) -k strict
-
-# Stability check: run without the random-order plugin to confirm no ordering
-# dependency, three times.
-test-quant-stability:
-	$(PYTHON) -m pytest -q -c $(QUANT_TEST_INI) -p no:randomly $(QUANT_TEST_FILE)
-	$(PYTHON) -m pytest -q -c $(QUANT_TEST_INI) -p no:randomly $(QUANT_TEST_FILE)
-	$(PYTHON) -m pytest -q -c $(QUANT_TEST_INI) -p no:randomly $(QUANT_TEST_FILE)
-
-# Performance check: report the slowest tests to confirm no regression.
-test-quant-perf:
-	$(PYTHON) -m pytest -q -c $(QUANT_TEST_INI) $(QUANT_TEST_FILE) --durations=10
+# Run the suite three times with random ordering disabled to catch order
+# dependencies or flaky failures.
+test-quantization-stability:
+	python -m pip install --no-deps -r tests/quantization/requirements.txt
+	python -m pytest -q -c tests/quantization/pytest.ini -p no:randomly tests/quantization/test_activation_fallback.py
+	python -m pytest -q -c tests/quantization/pytest.ini -p no:randomly tests/quantization/test_activation_fallback.py
+	python -m pytest -q -c tests/quantization/pytest.ini -p no:randomly tests/quantization/test_activation_fallback.py
