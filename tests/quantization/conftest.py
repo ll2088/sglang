@@ -17,6 +17,12 @@ import os
 import sys
 from pathlib import Path
 
+# NOTE: This conftest must never import ``sglang`` (or any submodule). Doing so
+# resolves the full sglang dependency set (py-spy, pybase64, pydantic,
+# quack-kernels, ...) during pytest collection, which is exactly the CI
+# environment-preparation failure this suite is designed to avoid. The module
+# under test is loaded from its source file below.
+
 # The module under test only uses the standard library, so it is loaded
 # directly from its file path. This keeps the suite runnable with only pytest
 # installed and avoids importing the ``sglang`` package (which would pull in
@@ -77,6 +83,16 @@ sys.path[:] = [p for p in sys.path if not _is_forbidden_path(p)]
 # Keep the suite hermetic: never let a stray ``PYTHONPATH`` re-introduce the
 # repository root during collection.
 os.environ.pop("PYTHONPATH", None)
+
+# Also drop any ``sglang`` entry that an editable install may have injected
+# into ``sys.modules`` before collection started. Importing the top-level
+# package is what triggers the full dependency resolution, so remove it (and
+# its submodules) defensively. This runs at conftest import time, i.e. before
+# any test module is collected.
+for _name in [
+    name for name in list(sys.modules) if name == "sglang" or name.startswith("sglang.")
+]:
+    sys.modules.pop(_name, None)
 _ACTIVATION_FALLBACK_PATH = (
     _REPO_ROOT
     / "python"

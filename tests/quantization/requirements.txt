@@ -37,4 +37,13 @@
 # or ImportError, proving the sglang package is not installed/importable):
 #
 #     python -c "import sglang" || echo "isolation OK"
+#
+# CI environment-preparation note: if the setup step still runs
+# ``pip install -e python`` (or ``pip install -e .``), it will resolve the full
+# sglang dependency set and fail before pytest ever runs. The setup command for
+# this suite must install THIS file only, e.g.:
+#
+#     pip install --no-deps -r tests/quantization/requirements.txt
+#
+# and must not install the sglang package itself.
 pytest>=7.0
