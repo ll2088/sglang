@@ -80,6 +80,13 @@ def pytest_configure(config: pytest.Config) -> None:
     _strip_repo_root_from_pythonpath()
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items) -> None:
+    # Collection may re-insert the rootdir; strip it once more before the
+    # tests run so no sglang import can resolve through sys.path.
+    _strip_repo_root_from_sys_path()
+    _strip_repo_root_from_pythonpath()
+
+
 def _load_activation_fallback():
     """Load ``activation_fallback.py`` from its source file.
 
