@@ -1,40 +1,39 @@
-# tests/quantization
+# Activation-quantization fallback tests
 
-Self-contained test suite for explicit activation-quantization fallback
-handling (`VLLM_STRICT_QUANT_SCHEME`).
+This directory is intentionally **self-contained**. It verifies the explicit
+activation-quantization fallback handling and the `VLLM_STRICT_QUANT_SCHEME`
+strict mode without importing the `sglang` package.
 
-## Why this directory is self-contained
+## Why self-contained
 
-The suite loads the module under test directly from its file path
-(`python/sglang/srt/layers/quantization/activation_fallback.py`) and only
-uses the standard library plus pytest. It must run on GPU-less runners
-without compiled kernels and without the full sglang runtime dependency
-set.
+The module under test
+(`python/sglang/srt/layers/quantization/activation_fallback.py`) only uses the
+standard library. The test module loads it directly from its file path, so no
+`sglang` install is required. This keeps the suite runnable on GPU-less CI
+runners where `pip install -e python` would pull the full runtime dependency
+set (py-spy, pydantic, quack-kernels, ...) and fail during environment setup.
 
 ## How to run
 
-```bash
-# Install only the minimal dependencies for this directory.
-pip install -r tests/quantization/requirements.txt
+Install only pytest, then run with the directory-local config:
 
-# Run with the directory-local pytest configuration so that rootdir and
-# testpaths are pinned to this directory.
-python -m pytest -q -c tests/quantization/pytest.ini tests/quantization/test_activation_fallback.py
+```bash
+pip install -r tests/quantization/requirements.txt
+python -m pytest -q -c tests/quantization/pytest.ini tests/quantization
 ```
 
-## CI guidance
+Do **not** run `pip install -e python` (or `pip install sglang`) before this
+suite. The `-c tests/quantization/pytest.ini` flag pins rootdir/testpaths to
+this directory so the repository-root pytest configuration is not picked up.
 
-CI jobs that run this directory must:
+## What is covered
 
-1. Install **only** `tests/quantization/requirements.txt` (pytest).
-2. **Not** run `pip install -e python`; that pulls the full sglang runtime
-   dependency set and fails on GPU-less runners before pytest can start.
-3. Pass `-c tests/quantization/pytest.ini` so the directory-local
-   configuration is used instead of the repository-root configuration.
-4. Optionally set `PYTHONPATH` to the repository `python/` source tree if a
-   future test in this directory needs to import `sglang` from the checkout.
-
-If the environment preparation step fails, print the full pip error output
-(including the failing requirement and the Python version) so the real
-cause (dependency resolution conflict, Python version mismatch, or index
-/ network issue) is visible in CI logs.
+- `VLLM_STRICT_QUANT_SCHEME` parsing (`""`/`"0"` disabled, anything else on).
+- `executed_activation_key` dispatch, including per-backend declarations
+  (humming / marlin / mxfp4 / fp8).
+- `check_activation_quant_fallback` for matching, mismatching, and
+  nothing-requested cases, in both default and strict mode.
+- Backend selection: default mode picks the fallback kernel, strict mode
+  rejects it while preserving priority order so a later honoring kernel can
+  still be selected.
+- MoE runner declarations (base / humming / marlin).
