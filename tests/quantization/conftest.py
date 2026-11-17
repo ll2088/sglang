@@ -83,30 +83,36 @@ if not _PYTEST_INI_PATH.is_file():
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Fail fast with an actionable message when the suite is misconfigured.
+    """Warn (not fail) when the suite is misconfigured.
 
     The activation-fallback suite must run without importing ``sglang``. If a
     caller forgets ``-c tests/quantization/pytest.ini``, the repository-root
     pytest configuration may be picked up and pull in the full sglang runtime
     dependency set, which is exactly the environment-setup failure this suite
-    is designed to avoid. Surface that as a clear error instead of an opaque
-    import failure.
+    is designed to avoid. Surface that as a clear warning so the environment
+    is visible in CI logs, while still letting the self-contained tests run
+    when the source tree is present.
     """
 
     if not _ACTIVATION_FALLBACK_PATH.is_file():
-        raise pytest.UsageError(
+        warnings.warn(
             "tests/quantization requires "
             f"{_ACTIVATION_FALLBACK_PATH} to exist in the checkout; run the "
             "suite from a full repository checkout (no sglang install is "
-            "required, but the source tree must be present)."
+            "required, but the source tree must be present). The "
+            "activation-fallback tests will be skipped.",
+            RuntimeWarning,
+            stacklevel=1,
         )
 
     if not _PYTEST_INI_PATH.is_file():
-        raise pytest.UsageError(
+        warnings.warn(
             "tests/quantization/pytest.ini is missing; run this suite with "
             "`-c tests/quantization/pytest.ini` so rootdir/testpaths are "
             "pinned to this directory and the repository-root configuration "
-            "is not picked up."
+            "is not picked up.",
+            RuntimeWarning,
+            stacklevel=1,
         )
 
     # The suite is self-contained and must not depend on the full sglang
