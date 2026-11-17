@@ -25,6 +25,11 @@ from pathlib import Path
 # of the pytest rootdir / importmode chosen by CI. We deliberately do NOT
 # import ``sglang`` anywhere in this file: any such import would trigger the
 # full dependency resolution that this suite is designed to avoid.
+#
+# Guard against a parent conftest.py / pyproject.toml being collected: if the
+# repository root ends up on sys.path, ``import sglang`` can be attempted
+# during collection and resolve the full dependency set. We therefore resolve
+# the module path from this file only and never rely on sys.path.
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _THIS_DIR.parents[1]
 _ACTIVATION_FALLBACK_PATH = (
@@ -36,6 +41,15 @@ _ACTIVATION_FALLBACK_PATH = (
     / "quantization"
     / "activation_fallback.py"
 )
+
+# Fail fast with a clear message if the repository layout is unexpected, so CI
+# reports a layout problem instead of a confusing import error.
+if not _ACTIVATION_FALLBACK_PATH.is_file():
+    raise FileNotFoundError(
+        "activation_fallback.py not found at "
+        f"{_ACTIVATION_FALLBACK_PATH}; the tests/quantization suite must be "
+        "run from a checkout of the repository."
+    )
 
 
 def _load_activation_fallback():
