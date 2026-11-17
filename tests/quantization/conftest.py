@@ -24,6 +24,8 @@ import sys
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
+# This suite lives at <repo_root>/tests/quantization, so the repository root
+# is two levels up. The sglang package itself lives under <repo_root>/python.
 _REPO_ROOT = _HERE.parent.parent
 _BLOCKED_PATHS = {_REPO_ROOT, _REPO_ROOT / "python"}
 
