@@ -44,7 +44,9 @@ def _load_module():
         raise FileNotFoundError(
             f"activation_fallback module not found at {_MODULE_PATH}; "
             "the test suite must be run from a checkout that contains "
-            "python/sglang/srt/layers/quantization/activation_fallback.py"
+            "python/sglang/srt/layers/quantization/activation_fallback.py. "
+            "No sglang install is required, but the source tree must be "
+            "present; run pytest with tests/quantization as the rootdir."
         )
     spec = importlib.util.spec_from_file_location(
         "_activation_fallback_under_test", _MODULE_PATH
