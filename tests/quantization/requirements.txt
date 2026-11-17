@@ -1,0 +1,11 @@
+# Minimal dependencies for tests/quantization.
+#
+# The activation-fallback suite (test_activation_fallback.py) is deliberately
+# self-contained: it loads the module under test directly from its file path
+# and only uses the standard library plus pytest. It must NOT require a full
+# ``pip install -e python`` of sglang (no GPU, no compiled kernels, no
+# third-party runtime deps).
+#
+# CI jobs that run this directory should install only the packages listed
+# below instead of the full sglang dependency set.
+pytest

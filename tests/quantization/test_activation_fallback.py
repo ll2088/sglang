@@ -36,7 +36,16 @@ def _load_module():
     loaded directly from its file path. This keeps the suite runnable in
     minimal environments where ``pip install -e python`` has not completed
     (e.g. CI setup failures unrelated to this change).
+
+    If the file is missing, fail with an explicit message instead of an
+    opaque ``FileNotFoundError`` so CI logs point at the real problem.
     """
+    if not _MODULE_PATH.is_file():
+        raise FileNotFoundError(
+            f"activation_fallback module not found at {_MODULE_PATH}; "
+            "the test suite must be run from a checkout that contains "
+            "python/sglang/srt/layers/quantization/activation_fallback.py"
+        )
     spec = importlib.util.spec_from_file_location(
         "_activation_fallback_under_test", _MODULE_PATH
     )

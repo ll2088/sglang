@@ -13,6 +13,18 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+# This suite is intentionally self-contained: it must run without installing
+# the ``sglang`` package (no GPU, no compiled kernels, no third-party deps).
+# The conftest therefore only ensures the repository root is importable and
+# does not import anything from ``sglang``.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+
+# Also expose the ``python`` source tree so that, if a future test in this
+# directory does need to import ``sglang``, it can do so from the checkout
+# without a prior ``pip install -e python``. Importing ``sglang`` itself is
+# still not required by the activation-fallback suite.
+_PYTHON_ROOT = _REPO_ROOT / "python"
+if _PYTHON_ROOT.is_dir() and str(_PYTHON_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PYTHON_ROOT))
