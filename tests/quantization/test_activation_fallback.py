@@ -44,6 +44,37 @@ def _find_module_path() -> Path:
     return here.parents[2] / relative
 
 
+def _load_module():
+    """Load the module under test without requiring a full sglang install.
+
+    The module under test only uses the standard library, so it is always
+    loaded directly from its file path. This keeps the suite runnable in
+    minimal environments where ``pip install -e python`` has not completed
+    (e.g. CI setup failures unrelated to this change).
+
+    If the source tree is missing, skip the whole module with an explicit
+    message instead of failing during collection, so CI logs point at the
+    real problem (missing checkout) rather than an opaque import error.
+    """
+    if not _MODULE_PATH.is_file():
+        pytest.skip(
+            f"activation_fallback module not found at {_MODULE_PATH}; "
+            "the test suite must be run from a checkout that contains "
+            "python/sglang/srt/layers/quantization/activation_fallback.py. "
+            "No sglang install is required, but the source tree must be "
+            "present; run pytest with tests/quantization as the rootdir.",
+            allow_module_level=True,
+        )
+    spec = importlib.util.spec_from_file_location(
+        "_activation_fallback_under_test", _MODULE_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 _MODULE_PATH = _find_module_path()
 
 

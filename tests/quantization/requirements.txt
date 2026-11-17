@@ -1,9 +1,5 @@
-# Minimal, self-contained test requirements for tests/quantization.
-#
-# These tests intentionally avoid importing the ``sglang`` package so they can
-# run without the full sglang dependency set (py-spy, quack-kernels, ...).
-# Only pytest is required; the module under test uses the standard library.
-#
-# Do NOT add sglang or its runtime dependencies here. If a test needs them,
-# it belongs in a different test directory.
+# Minimal dependencies for the self-contained activation-fallback suite.
+# The module under test (activation_fallback.py) only uses the standard
+# library, so pytest is the only requirement. Do NOT add sglang here: the
+# whole point is to avoid the full package install in CI.
 pytest>=7.0
