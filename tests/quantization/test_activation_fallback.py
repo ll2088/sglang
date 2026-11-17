@@ -295,7 +295,9 @@ def test_suite_does_not_import_sglang_submodules():
 
     import sys
 
-    sglang_modules = [name for name in sys.modules if name == "sglang" or name.startswith("sglang.")]
+    sglang_modules = [
+        name for name in sys.modules if name == "sglang" or name.startswith("sglang.")
+    ]
     assert not sglang_modules, (
         "tests/quantization must not import any sglang submodule; found: "
         f"{sglang_modules}"
