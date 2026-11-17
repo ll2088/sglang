@@ -28,3 +28,21 @@ if str(_REPO_ROOT) not in sys.path:
 _PYTHON_ROOT = _REPO_ROOT / "python"
 if _PYTHON_ROOT.is_dir() and str(_PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(_PYTHON_ROOT))
+
+# Fail fast with an actionable diagnostic if the module under test is missing.
+# CI logs otherwise show an opaque FileNotFoundError from the test module.
+_ACTIVATION_FALLBACK_PATH = (
+    _PYTHON_ROOT
+    / "sglang"
+    / "srt"
+    / "layers"
+    / "quantization"
+    / "activation_fallback.py"
+)
+if not _ACTIVATION_FALLBACK_PATH.is_file():
+    raise RuntimeError(
+        "tests/quantization requires "
+        f"{_ACTIVATION_FALLBACK_PATH} to exist in the checkout; "
+        "run the suite from a full repository checkout (no sglang install "
+        "is required, but the source tree must be present)."
+    )
