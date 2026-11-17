@@ -1,20 +1,4 @@
-# Minimal dependencies for tests/quantization.
-#
-# The activation-fallback suite (test_activation_fallback.py) is deliberately
-# self-contained: it loads the module under test directly from its file path
-# and only uses the standard library plus pytest. It must NOT require a full
-# ``pip install -e python`` of sglang (no GPU, no compiled kernels, no
-# third-party runtime deps).
-#
-# CI jobs that run this directory should install only the packages listed
-# below instead of the full sglang dependency set. Do NOT run
-# ``pip install -e python`` (or ``pip install sglang``) before this suite:
-# that pulls the full runtime dependency set and fails on GPU-less runners.
-#
-# The environment-preparation step for this suite must therefore be exactly:
-#   python -m pip install -r tests/quantization/requirements.txt
-# and must NOT be preceded by ``pip install -e python``.
-#
-# Run with:
-#   python -m pytest -q -c tests/quantization/pytest.ini tests/quantization
+# Minimal requirements for the self-contained activation-fallback suite.
+# This suite must run without installing the full sglang runtime dependency
+# set (no GPU, no compiled kernels). Only pytest is required.
 pytest

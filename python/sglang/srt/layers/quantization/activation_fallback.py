@@ -27,6 +27,7 @@ __all__ = [
     "is_strict_quant_scheme",
     "executed_activation_key",
     "check_activation_quant_fallback",
+    "check_runner_activation_fallback",
 ]
 
 # Sentinel used to distinguish "no activation quantization requested" from
