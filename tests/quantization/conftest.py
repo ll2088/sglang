@@ -108,3 +108,29 @@ def pytest_configure(config: pytest.Config) -> None:
             "pinned to this directory and the repository-root configuration "
             "is not picked up."
         )
+
+    # Guard against the environment-preparation failure that blocked CI: the
+    # suite must not be run after a full ``pip install -e python`` of sglang.
+    # Detect that case and fail with an actionable message instead of letting
+    # the run proceed in a broken environment.
+    if _sglang_installed_from_full_install():
+        raise pytest.UsageError(
+            "tests/quantization must run without a full sglang install; "
+            "install only tests/quantization/requirements.txt (pytest) and "
+            "do NOT run `pip install -e python` before this suite."
+        )
+
+
+def _sglang_installed_from_full_install() -> bool:
+    """Return True when a full sglang install is present in the environment.
+
+    The activation-fallback suite is self-contained and must not depend on the
+    full sglang runtime. If ``sglang`` is importable, the environment was
+    prepared with the full dependency set, which is the failure mode this
+    suite is designed to avoid. We only check importability here; we never
+    import ``sglang`` ourselves.
+    """
+
+    import importlib.util
+
+    return importlib.util.find_spec("sglang") is not None

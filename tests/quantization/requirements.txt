@@ -11,6 +11,10 @@
 # ``pip install -e python`` (or ``pip install sglang``) before this suite:
 # that pulls the full runtime dependency set and fails on GPU-less runners.
 #
+# The environment-preparation step for this suite must therefore be exactly:
+#   python -m pip install -r tests/quantization/requirements.txt
+# and must NOT be preceded by ``pip install -e python``.
+#
 # Run with:
 #   python -m pytest -q -c tests/quantization/pytest.ini tests/quantization
 pytest
