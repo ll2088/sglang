@@ -3,12 +3,22 @@
 # library, so pytest is the only requirement. Do NOT add sglang here: the
 # whole point is to avoid the full package install in CI.
 #
-# CI should install this file directly, e.g.:
+# CI MUST install this file directly and MUST NOT run ``pip install -e python``
+# for this suite. The previous CI failure was caused by the environment
+# preparation step still resolving the full sglang dependency set
+# (py-spy, pybase64, pydantic, python-multipart, pyzmq, quack-kernels, regex,
+# ...), which is exactly what this file exists to avoid.
+#
+# Correct invocation:
 #
 #     pip install -r tests/quantization/requirements.txt
 #     python -m pytest -q -c tests/quantization/pytest.ini \
 #         tests/quantization/test_activation_fallback.py
 #
-# Do NOT run ``pip install -e python`` for this suite; that pulls in the full
-# sglang dependency set and is what caused the previous environment failure.
+# The suite is loaded via ``tests/quantization/conftest.py``, which reads
+# ``activation_fallback.py`` from its file path with ``importlib`` and never
+# imports the ``sglang`` package. ``tests/quantization/pytest.ini`` pins
+# ``rootdir`` and ``--import-mode=importlib`` so no implicit sglang import is
+# triggered during collection.
 pytest>=7.0
+

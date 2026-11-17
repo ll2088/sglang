@@ -262,3 +262,32 @@ def test_fp8_marlin_fallback_reason(monkeypatch, activation_fallback):
 
 def test_unquantized_activation_sentinel(activation_fallback):
     assert activation_fallback.UNQUANTIZED_ACTIVATION is None
+
+
+# ---------------------------------------------------------------------------
+# Self-containment guards
+# ---------------------------------------------------------------------------
+
+
+def test_suite_does_not_import_sglang():
+    """The suite must run without importing the ``sglang`` package.
+
+    This guards against regressions where a helper or fixture accidentally
+    pulls in the full sglang dependency set, which is what caused the previous
+    CI environment-preparation failure.
+    """
+
+    import sys
+
+    assert "sglang" not in sys.modules, (
+        "tests/quantization must not import sglang; the suite is loaded from "
+        "file paths via conftest.py so CI only needs pytest installed."
+    )
+
+
+def test_activation_fallback_module_loaded_from_file(activation_fallback):
+    """The module under test is loaded from its source file, not via sglang."""
+
+    module_file = getattr(activation_fallback, "__file__", "")
+    assert module_file.endswith("activation_fallback.py"), module_file
+    assert "sglang" not in activation_fallback.__name__

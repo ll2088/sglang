@@ -20,7 +20,13 @@ from pathlib import Path
 # directly from its file path. This keeps the suite runnable with only pytest
 # installed and avoids importing the ``sglang`` package (which would pull in
 # the full dependency set and fail in minimal CI environments).
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+#
+# The path is resolved relative to this conftest file so it works regardless
+# of the pytest rootdir / importmode chosen by CI. We deliberately do NOT
+# import ``sglang`` anywhere in this file: any such import would trigger the
+# full dependency resolution that this suite is designed to avoid.
+_THIS_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _THIS_DIR.parents[1]
 _ACTIVATION_FALLBACK_PATH = (
     _REPO_ROOT
     / "python"
