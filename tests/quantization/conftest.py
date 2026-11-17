@@ -43,12 +43,36 @@ _REPO_ROOT = _THIS_DIR.parents[1]
 # the repository root, the ``python/`` subdirectory, and this test directory
 # itself, regardless of how pytest was invoked or what an editable install
 # injected.
+#
+# This runs at conftest import time, i.e. before any test module is collected,
+# so a stray ``import sglang`` in the collection chain cannot resolve the
+# top-level package. The set is intentionally broad: any path that is the
+# repository root, the ``python/`` subdirectory, this test directory, or a
+# path that contains a ``sglang`` package directory is removed.
 _FORBIDDEN_PATHS = {
     str(_REPO_ROOT),
     str(_REPO_ROOT / "python"),
     str(_THIS_DIR),
 }
-sys.path[:] = [p for p in sys.path if p not in _FORBIDDEN_PATHS]
+
+
+def _is_forbidden_path(path: str) -> bool:
+    """Return True if ``path`` could make ``import sglang`` resolve."""
+
+    if path in _FORBIDDEN_PATHS:
+        return True
+    try:
+        resolved = Path(path).resolve()
+    except (OSError, ValueError):
+        return False
+    if resolved in {Path(p).resolve() for p in _FORBIDDEN_PATHS}:
+        return True
+    # Any directory that directly contains a ``sglang`` package would let
+    # ``import sglang`` resolve the top-level package.
+    return (resolved / "sglang" / "__init__.py").is_file()
+
+
+sys.path[:] = [p for p in sys.path if not _is_forbidden_path(p)]
 
 # Keep the suite hermetic: never let a stray ``PYTHONPATH`` re-introduce the
 # repository root during collection.
@@ -129,6 +153,26 @@ def _assert_no_sglang_imported() -> None:
         )
 
 
+def _assert_sglang_not_importable() -> None:
+    """Fail fast if ``import sglang`` would resolve in this interpreter.
+
+    This is the environment-preparation guard: if the sglang package is
+    installed (e.g. via ``pip install -e python``), the suite is not running
+    in the intended minimal environment and CI would have resolved the full
+    dependency set. Surface a clear error instead of silently importing it.
+    """
+
+    import importlib.util
+
+    if importlib.util.find_spec("sglang") is not None:
+        raise RuntimeError(
+            "tests/quantization must run without the sglang package installed; "
+            "found an importable ``sglang`` module. CI must install only "
+            "tests/quantization/requirements.txt (pytest) and must not run "
+            "``pip install -e python`` for this suite."
+        )
+
+
 # Expose the loaded module as a fixture so tests do not need to import sglang.
 import pytest  # noqa: E402  (imported after the loader helpers for clarity)
 
@@ -138,4 +182,5 @@ def activation_fallback():
     """Return the activation_fallback module loaded from its source file."""
 
     _assert_no_sglang_imported()
+    _assert_sglang_not_importable()
     return _load_activation_fallback()

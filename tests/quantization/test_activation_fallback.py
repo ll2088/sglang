@@ -310,3 +310,22 @@ def test_activation_fallback_module_loaded_from_file(activation_fallback):
     module_file = getattr(activation_fallback, "__file__", "")
     assert module_file.endswith("activation_fallback.py"), module_file
     assert "sglang" not in activation_fallback.__name__
+
+
+def test_sglang_package_is_not_importable():
+    """The suite must run without the sglang package installed.
+
+    This is the environment-preparation guard: CI must install only
+    ``tests/quantization/requirements.txt`` (pytest) and must not run
+    ``pip install -e python`` for this suite. If ``import sglang`` resolves,
+    the full dependency set was resolved and the suite is not running in the
+    intended minimal environment.
+    """
+
+    import importlib.util
+
+    assert importlib.util.find_spec("sglang") is None, (
+        "tests/quantization must run without the sglang package installed; "
+        "CI must install only tests/quantization/requirements.txt (pytest) "
+        "and must not run ``pip install -e python`` for this suite."
+    )

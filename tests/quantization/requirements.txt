@@ -16,6 +16,11 @@
 # dependency set (py-spy, pybase64, pydantic, python-multipart, pyzmq,
 # quack-kernels, regex, ...) is exactly what this file exists to avoid.
 #
+# If the CI environment-preparation step still fails while resolving
+# ``sglang==0.0.0.dev1``, the setup command is wrong: it is installing the
+# sglang package itself instead of this file. Fix the setup command, not this
+# file. The suite must be runnable with only pytest installed.
+#
 # Correct invocation:
 #
 #     pip install --no-deps -r tests/quantization/requirements.txt
@@ -27,4 +32,9 @@
 #
 #     python -m pytest -q -c tests/quantization/pytest.ini \
 #         tests/quantization/test_activation_fallback.py
+#
+# Sanity check that isolation is in effect (must fail with ModuleNotFoundError
+# or ImportError, proving the sglang package is not installed/importable):
+#
+#     python -c "import sglang" || echo "isolation OK"
 pytest>=7.0
