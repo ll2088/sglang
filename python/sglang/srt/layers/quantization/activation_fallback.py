@@ -89,7 +89,8 @@ def check_activation_quant_fallback(
 
     if is_strict_quant_scheme():
         raise ValueError(
-            f"{reason}; VLLM_STRICT_QUANT_SCHEME=1 forbids this fallback"
+            f"{reason}; VLLM_STRICT_QUANT_SCHEME=1 forbids this fallback "
+            f"(requested={requested_key!r}, executed={executed_key!r})"
         )
 
     logger.warning_once(

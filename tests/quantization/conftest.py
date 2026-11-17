@@ -38,6 +38,22 @@ if _PYTHON_ROOT.is_dir() and str(_PYTHON_ROOT) not in sys.path:
 # ``tests/quantization/requirements.txt`` (pytest) and must NOT run
 # ``pip install -e python``, which pulls the full sglang runtime dependency
 # set and fails on GPU-less runners.
+#
+# The directory-local pytest.ini pins rootdir/testpaths to this directory so
+# the suite does not depend on the repository-root pytest configuration.
+_PYTEST_INI_PATH = Path(__file__).resolve().parent / "pytest.ini"
+if not _PYTEST_INI_PATH.is_file():
+    import warnings
+
+    warnings.warn(
+        "tests/quantization/pytest.ini is missing; run this suite with "
+        "`-c tests/quantization/pytest.ini` so rootdir/testpaths are pinned "
+        "to this directory and the repository-root configuration is not "
+        "picked up.",
+        RuntimeWarning,
+        stacklevel=1,
+    )
+
 _ACTIVATION_FALLBACK_PATH = (
     _PYTHON_ROOT
     / "sglang"
