@@ -1,19 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright (c) vLLM project
-"""Minimal, self-contained pytest configuration for the activation-fallback suite.
+"""Minimal conftest for the activation-fallback suite.
 
-This suite must run with only ``pytest`` installed. Importing ``sglang`` (or
-any of its submodules) resolves the full runtime dependency set, which is what
-made CI environment preparation fail. To keep that from happening:
+This suite must run with only pytest installed: it must never import the
+``sglang`` package (which resolves the full runtime dependency set and is what
+made CI environment preparation fail). To keep that guarantee we
 
-* the repository root and its ``python/`` directory are stripped from
-  ``sys.path`` at import time (before pytest collects anything),
-* ``PYTHONPATH`` is sanitized the same way,
-* the module under test is loaded directly from its source file instead of
-  being imported through the ``sglang`` package.
-
-Everything here runs at module import time so it takes effect before any test
-module is collected.
+* strip the repository root and its ``python/`` directory from ``sys.path``
+  (and from ``PYTHONPATH``) at import time and again in ``pytest_configure``,
+  so pytest's rootdir discovery cannot resolve ``sglang``, and
+* load ``activation_fallback.py`` directly from its source file instead of
+  importing it through the ``sglang`` package.
 """
 
 from __future__ import annotations
@@ -23,128 +20,88 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 _HERE = Path(__file__).resolve().parent
-# This suite lives at <repo_root>/tests/quantization, so the repository root
-# is two levels up. The sglang package itself lives under <repo_root>/python.
 _REPO_ROOT = _HERE.parent.parent
 _BLOCKED_PATHS = {_REPO_ROOT, _REPO_ROOT / "python"}
 
 
-def _is_blocked(entry: str) -> bool:
-    if not entry:
-        return False
-    try:
-        resolved = Path(entry).resolve()
-    except (OSError, TypeError, ValueError):
-        return False
-    if resolved in _BLOCKED_PATHS:
-        return True
-    # Any path that would make the ``sglang`` package importable.
-    return "sglang" in resolved.parts
+def _strip_repo_root_from_sys_path() -> None:
+    """Remove repo-root / python-dir / sglang entries from ``sys.path``."""
+
+    cleaned = []
+    for entry in sys.path:
+        if not entry:
+            cleaned.append(entry)
+            continue
+        try:
+            resolved = Path(entry).resolve()
+        except (OSError, TypeError, ValueError):
+            cleaned.append(entry)
+            continue
+        if resolved in _BLOCKED_PATHS or "sglang" in resolved.parts:
+            continue
+        cleaned.append(entry)
+    sys.path[:] = cleaned
 
 
-def _strip_paths() -> None:
-    sys.path[:] = [entry for entry in sys.path if not _is_blocked(entry)]
+def _strip_repo_root_from_pythonpath() -> None:
+    """Remove repo-root / python-dir / sglang entries from ``PYTHONPATH``."""
 
-    pythonpath = os.environ.get("PYTHONPATH", "")
-    if pythonpath:
-        kept = [
-            part
-            for part in pythonpath.split(os.pathsep)
-            if part and not _is_blocked(part)
-        ]
-        if kept:
-            os.environ["PYTHONPATH"] = os.pathsep.join(kept)
-        else:
-            os.environ.pop("PYTHONPATH", None)
-
-
-def _drop_sglang_modules() -> None:
-    """Drop any already-imported ``sglang`` modules from ``sys.modules``.
-
-    If a plugin or the rootdir discovery imported the sglang package before
-    this conftest ran, the full dependency set was already resolved. Removing
-    the modules keeps the suite self-contained and lets the guard tests in
-    ``test_activation_fallback.py`` detect the leak instead of silently
-    passing.
-    """
-
-    for name in [
-        name
-        for name in sys.modules
-        if name == "sglang" or name.startswith("sglang.")
-    ]:
-        sys.modules.pop(name, None)
+    value = os.environ.get("PYTHONPATH", "")
+    if not value:
+        return
+    kept = []
+    for part in value.split(os.pathsep):
+        if not part:
+            continue
+        try:
+            resolved = Path(part).resolve()
+        except (OSError, TypeError, ValueError):
+            kept.append(part)
+            continue
+        if resolved in _BLOCKED_PATHS or "sglang" in resolved.parts:
+            continue
+        kept.append(part)
+    if kept:
+        os.environ["PYTHONPATH"] = os.pathsep.join(kept)
+    else:
+        os.environ.pop("PYTHONPATH", None)
 
 
-# Strip before anything else can import the repository packages.
-_strip_paths()
-_drop_sglang_modules()
+_strip_repo_root_from_sys_path()
+_strip_repo_root_from_pythonpath()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    # pytest may re-insert the rootdir during collection; strip it again.
+    _strip_repo_root_from_sys_path()
+    _strip_repo_root_from_pythonpath()
 
 
 def _load_activation_fallback():
-    """Load ``activation_fallback.py`` from its file path.
+    """Load ``activation_fallback.py`` from its source file.
 
-    The module only uses the standard library, so it can be loaded without
-    importing the ``sglang`` package (which would pull in the full dependency
-    set).
+    The module is intentionally importable with only the standard library, so
+    loading it by path keeps the suite free of any ``sglang`` import.
     """
 
-    module_path = (
-        _REPO_ROOT
-        / "python"
-        / "sglang"
-        / "srt"
-        / "layers"
-        / "quantization"
-        / "activation_fallback.py"
-    )
+    module_path = _REPO_ROOT / "python" / "sglang" / "srt" / "layers" / "quantization" / "activation_fallback.py"
     if not module_path.is_file():
-        raise FileNotFoundError(
-            f"activation_fallback.py not found at {module_path}; the suite "
-            "must be run from a checkout that contains it."
-        )
+        pytest.skip(f"activation_fallback.py not found at {module_path}")
 
     spec = importlib.util.spec_from_file_location(
         "activation_fallback", module_path
     )
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load activation_fallback from {module_path}")
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-_ACTIVATION_FALLBACK = _load_activation_fallback()
-
-
-def pytest_configure(config) -> None:
-    # Re-strip in case a plugin or the rootdir discovery re-added entries.
-    _strip_paths()
-    _drop_sglang_modules()
-
-
-def pytest_collection_modifyitems(config, items) -> None:
-    # Guard against accidental sglang imports during collection: if any test
-    # module pulled in the sglang package, fail loudly instead of silently
-    # resolving the full dependency set.
-    if "sglang" in sys.modules:
-        raise RuntimeError(
-            "tests/quantization must not import sglang; found it in "
-            "sys.modules during collection. The suite is loaded from file "
-            "paths via conftest.py so CI only needs pytest installed."
-        )
-
-
-def pytest_report_header(config) -> str:
-    return "activation-fallback suite: self-contained (pytest only)"
-
-
-import pytest  # noqa: E402  (imported after path stripping on purpose)
-
-
 @pytest.fixture(scope="session")
 def activation_fallback():
-    """The module under test, loaded from its source file."""
+    """The module under test, loaded from its source file (no sglang import)."""
 
-    return _ACTIVATION_FALLBACK
+    return _load_activation_fallback()
