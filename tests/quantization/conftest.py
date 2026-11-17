@@ -94,7 +94,15 @@ def _load_activation_fallback():
     loading it by path keeps the suite free of any ``sglang`` import.
     """
 
-    module_path = _REPO_ROOT / "python" / "sglang" / "srt" / "layers" / "quantization" / "activation_fallback.py"
+    module_path = (
+        _REPO_ROOT
+        / "python"
+        / "sglang"
+        / "srt"
+        / "layers"
+        / "quantization"
+        / "activation_fallback.py"
+    )
     if not module_path.is_file():
         pytest.skip(f"activation_fallback.py not found at {module_path}")
 

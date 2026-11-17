@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright (c) vLLM project
 """Explicit activation-quantization fallback handling.
 
 Weight-only kernels (Marlin, Humming weight-only conversions, MXFP8 emulation,
