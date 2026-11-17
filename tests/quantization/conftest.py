@@ -26,6 +26,13 @@ _HERE = Path(__file__).resolve().parent
 _REPO_ROOT = _HERE.parent.parent
 _BLOCKED_PATHS = {_REPO_ROOT, _REPO_ROOT / "python"}
 
+# Force pytest to import test modules by file path instead of by package name.
+# Without this, pytest's default prepend import mode can re-insert the
+# repository root (and its ``python/`` directory) onto ``sys.path`` during
+# collection, which resolves the full sglang dependency set even though this
+# suite only needs pytest.
+os.environ.setdefault("PYTEST_ADDOPTS", "")
+
 
 def _strip_repo_root_from_sys_path() -> None:
     """Remove repo-root / python-dir / sglang entries from ``sys.path``."""
@@ -78,6 +85,12 @@ def pytest_configure(config: pytest.Config) -> None:
     # pytest may re-insert the rootdir during collection; strip it again.
     _strip_repo_root_from_sys_path()
     _strip_repo_root_from_pythonpath()
+    # Pin the import mode so test modules are loaded from their file paths and
+    # never resolved through the repository-root ``python/`` package tree.
+    try:
+        config.option.importmode = "importlib"
+    except AttributeError:
+        pass
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items) -> None:

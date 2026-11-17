@@ -6,5 +6,9 @@
 # The suite is loaded from file paths via conftest.py and only needs pytest;
 # it must never depend on the full sglang package (which resolves the entire
 # runtime dependency set and is what made CI environment preparation fail).
+#
+# CI must install exactly this file (``pip install -r
+# tests/quantization/requirements.txt``) and must NOT run ``pip install -e
+# python`` / ``pip install sglang`` for this suite.
 
 pytest
