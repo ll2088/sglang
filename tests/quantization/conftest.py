@@ -47,12 +47,19 @@ _ACTIVATION_FALLBACK_PATH = (
     / "activation_fallback.py"
 )
 if not _ACTIVATION_FALLBACK_PATH.is_file():
-    raise RuntimeError(
+    # Emit a clear, actionable diagnostic instead of crashing the whole
+    # pytest session with an opaque traceback. The individual test module
+    # also checks for the file and will fail with a precise message.
+    import warnings
+
+    warnings.warn(
         "tests/quantization requires "
         f"{_ACTIVATION_FALLBACK_PATH} to exist in the checkout; "
         "run the suite from a full repository checkout (no sglang install "
         "is required, but the source tree must be present). "
         "Install only tests/quantization/requirements.txt (pytest) and run "
         "pytest with tests/quantization as the rootdir; do not run "
-        "`pip install -e python`."
+        "`pip install -e python`.",
+        RuntimeWarning,
+        stacklevel=1,
     )

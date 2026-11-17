@@ -1,52 +1,37 @@
 # tests/quantization
 
-Self-contained tests for explicit activation-quantization fallback handling
-(`VLLM_STRICT_QUANT_SCHEME`).
+Self-contained test suite for explicit activation-quantization fallback
+handling (`VLLM_STRICT_QUANT_SCHEME`).
 
-## Why this directory is special
+## Why this directory is self-contained
 
-The activation-fallback suite (`test_activation_fallback.py`) is deliberately
-self-contained: it loads the module under test directly from its file path and
-only uses the standard library plus `pytest`. It must **not** require a full
-`pip install -e python` of sglang (no GPU, no compiled kernels, no third-party
-runtime deps).
+The suite under test (`python/sglang/srt/layers/quantization/activation_fallback.py`)
+only uses the standard library. The tests load it directly from its file path
+so they can run without a GPU, without compiled kernels, and without a full
+`pip install -e python` of sglang.
 
-## Running the suite
+## How to run
 
-Install only the minimal dependencies and run pytest with this directory as the
-rootdir so that `tests/quantization/pytest.ini` is picked up instead of the
-repository-wide configuration:
+From the repository root:
+
+```bash
+python -m pytest -q -c tests/quantization/pytest.ini tests/quantization/test_activation_fallback.py
+```
+
+Install only the minimal dependencies:
 
 ```bash
 pip install -r tests/quantization/requirements.txt
-python -m pytest -q tests/quantization/test_activation_fallback.py
 ```
 
-Stability check (no random ordering plugin):
+Do **not** run `pip install -e python` for this suite. That pulls the full
+sglang runtime dependency set (py-spy, pybase64, pydantic, pyzmq,
+quack-kernels, regex, ...) and fails on GPU-less runners.
 
-```bash
-python -m pytest -q -p no:randomly tests/quantization/test_activation_fallback.py
-```
+## CI notes
 
-Performance check:
-
-```bash
-python -m pytest -q tests/quantization/test_activation_fallback.py --durations=10
-```
-
-Usability check (strict-mode env var):
-
-```bash
-python -m pytest -q tests/quantization/test_activation_fallback.py -k strict
-```
-
-## CI guidance
-
-CI jobs that run this directory should install only
-`tests/quantization/requirements.txt` (i.e. `pytest`) and must **not** run
-`pip install -e python`, which pulls the full sglang runtime dependency set
-(including CUDA/kernel packages) and fails on GPU-less runners.
-
-The suite requires the source tree to be present (it reads
-`python/sglang/srt/layers/quantization/activation_fallback.py` from disk) but
-it does not import the `sglang` package.
+- Pin the Python version used by the job (the suite targets CPython 3.10+).
+- Set `PYTHONPATH` to the repository root (and optionally `python/`) so the
+  source tree is importable if a future test needs it.
+- The `conftest.py` in this directory fails fast with an actionable message if
+  the module under test is missing from the checkout.
