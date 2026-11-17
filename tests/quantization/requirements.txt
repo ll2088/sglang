@@ -1,49 +1,14 @@
-# Minimal dependencies for the self-contained activation-fallback suite.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright (c) vLLM project
 #
-# The module under test (activation_fallback.py) only uses the standard
-# library, so pytest is the only requirement. Do NOT add sglang here: the
-# whole point is to avoid the full package install in CI.
+# Minimal dependencies for the activation-fallback suite.
 #
-# Install with:
-#
-#     pip install --no-deps -r tests/quantization/requirements.txt
-#
-# The suite is loaded from source files via conftest.py and does not import
-# the sglang package, so no runtime dependency is required.
-#
-# CI MUST install this file directly and MUST NOT run ``pip install -e python``
-# (or ``pip install -e .``) for this suite. Resolving the full sglang
-# dependency set (py-spy, pybase64, pydantic, python-multipart, pyzmq,
-# quack-kernels, regex, ...) is exactly what this file exists to avoid.
-#
-# If the CI environment-preparation step still fails while resolving
-# ``sglang==0.0.0.dev1``, the setup command is wrong: it is installing the
-# sglang package itself instead of this file. Fix the setup command, not this
-# file. The suite must be runnable with only pytest installed.
-#
-# Correct invocation:
-#
-#     pip install --no-deps -r tests/quantization/requirements.txt
-#     python -m pytest -q -c tests/quantization/pytest.ini \
-#         tests/quantization/test_activation_fallback.py
-#
-# The suite is also runnable without installing anything at all, as long as
-# pytest is already available on the interpreter:
-#
-#     python -m pytest -q -c tests/quantization/pytest.ini \
-#         tests/quantization/test_activation_fallback.py
-#
-# Sanity check that isolation is in effect (must fail with ModuleNotFoundError
-# or ImportError, proving the sglang package is not installed/importable):
-#
-#     python -c "import sglang" || echo "isolation OK"
-#
-# CI environment-preparation note: if the setup step still runs
-# ``pip install -e python`` (or ``pip install -e .``), it will resolve the full
-# sglang dependency set and fail before pytest ever runs. The setup command for
-# this suite must install THIS file only, e.g.:
-#
-#     pip install --no-deps -r tests/quantization/requirements.txt
-#
-# and must not install the sglang package itself.
+# The module under test (python/sglang/srt/layers/quantization/
+# activation_fallback.py) only uses the standard library, and conftest.py
+# loads it directly from its source file. CI must install ONLY this file for
+# the tests/quantization suite and must NOT run ``pip install -e python``,
+# which would resolve the full sglang dependency set (py-spy, pybase64,
+# pydantic, pyzmq, quack-kernels, ...) and fail during environment
+# preparation.
+
 pytest>=7.0

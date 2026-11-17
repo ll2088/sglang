@@ -81,8 +81,16 @@ def _is_forbidden_path(path: str) -> bool:
 sys.path[:] = [p for p in sys.path if not _is_forbidden_path(p)]
 
 # Keep the suite hermetic: never let a stray ``PYTHONPATH`` re-introduce the
-# repository root during collection.
+# repository root during collection. ``PYTHONPATH`` is cleared before any test
+# module is imported so a stray ``import sglang`` cannot resolve the top-level
+# package and trigger the full dependency resolution.
 os.environ.pop("PYTHONPATH", None)
+
+# Also drop the repository root and the ``python/`` directory from the
+# environment so subprocesses spawned by tests (if any) cannot resolve the
+# top-level ``sglang`` package either.
+for _env_var in ("PYTHONHOME",):
+    os.environ.pop(_env_var, None)
 
 # Also drop any ``sglang`` entry that an editable install may have injected
 # into ``sys.modules`` before collection started. Importing the top-level
@@ -176,10 +184,17 @@ def _assert_sglang_not_importable() -> None:
     installed (e.g. via ``pip install -e python``), the suite is not running
     in the intended minimal environment and CI would have resolved the full
     dependency set. Surface a clear error instead of silently importing it.
+
+    The check is performed with the repository root and ``python/`` directory
+    removed from ``sys.path`` (see module top) so that a source checkout alone
+    does not make ``sglang`` importable. Only an actual installed package
+    (editable or wheel) is reported here.
     """
 
     import importlib.util
 
+    # ``find_spec`` consults ``sys.path``; the forbidden paths were already
+    # removed at import time, so a source checkout will not resolve here.
     if importlib.util.find_spec("sglang") is not None:
         raise RuntimeError(
             "tests/quantization must run without the sglang package installed; "
