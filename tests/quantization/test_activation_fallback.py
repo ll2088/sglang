@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright (c) vLLM project
 """Tests for explicit activation-quantization fallback handling.
 
 These tests exercise ``activation_fallback.py`` in isolation. The module is

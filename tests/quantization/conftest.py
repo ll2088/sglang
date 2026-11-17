@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright (c) vLLM project
 """Self-contained conftest for the activation-fallback test suite.
 
 This suite must run without importing the ``sglang`` package (no GPU, no

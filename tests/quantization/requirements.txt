@@ -4,13 +4,12 @@
 # library, so pytest is the only requirement. Do NOT add sglang here: the
 # whole point is to avoid the full package install in CI.
 #
-# IMPORTANT: install this file with ``--no-deps`` passed on the pip command
-# line, NOT as a line inside this file (pip does not accept ``--no-deps`` as a
-# requirements-file directive). The suite is loaded from source files via
-# conftest.py and does not import the sglang package, so no runtime dependency
-# is required.
+# Install with:
 #
 #     pip install --no-deps -r tests/quantization/requirements.txt
+#
+# The suite is loaded from source files via conftest.py and does not import
+# the sglang package, so no runtime dependency is required.
 #
 # CI MUST install this file directly and MUST NOT run ``pip install -e python``
 # (or ``pip install -e .``) for this suite. Resolving the full sglang
@@ -23,22 +22,9 @@
 #     python -m pytest -q -c tests/quantization/pytest.ini \
 #         tests/quantization/test_activation_fallback.py
 #
-# The suite is loaded via ``tests/quantization/conftest.py``, which reads
-# ``activation_fallback.py`` from its file path with ``importlib`` and never
-# imports the ``sglang`` package. ``tests/quantization/pytest.ini`` pins
-# ``rootdir`` and ``--import-mode=importlib`` so no implicit sglang import is
-# triggered during collection.
-#
-# NOTE: this file intentionally lists only pytest. If a CI job still resolves
-# the full sglang dependency set, the job is invoking ``pip install -e python``
-# (or equivalent) instead of this file; fix the job, not this file.
-#
 # The suite is also runnable without installing anything at all, as long as
 # pytest is already available on the interpreter:
 #
 #     python -m pytest -q -c tests/quantization/pytest.ini \
 #         tests/quantization/test_activation_fallback.py
-#
-# This is the recommended fallback when the CI environment cannot install
-# packages at all: it avoids the dependency-resolution step entirely.
 pytest>=7.0
