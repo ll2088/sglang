@@ -38,16 +38,17 @@ from pathlib import Path
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _THIS_DIR.parents[1]
 
-_repo_root_str = str(_REPO_ROOT)
-if _repo_root_str in sys.path:
-    sys.path.remove(_repo_root_str)
-
-# Also drop the ``python/`` subdirectory if it was injected by an editable
-# install or a parent conftest, since that is where the ``sglang`` package
-# lives and importing it would trigger the full dependency resolution.
-_python_dir_str = str(_REPO_ROOT / "python")
-if _python_dir_str in sys.path:
-    sys.path.remove(_python_dir_str)
+# Drop every path that could make ``import sglang`` resolve the top-level
+# package (whose ``__init__`` pulls in the full dependency set). This covers
+# the repository root, the ``python/`` subdirectory, and this test directory
+# itself, regardless of how pytest was invoked or what an editable install
+# injected.
+_FORBIDDEN_PATHS = {
+    str(_REPO_ROOT),
+    str(_REPO_ROOT / "python"),
+    str(_THIS_DIR),
+}
+sys.path[:] = [p for p in sys.path if p not in _FORBIDDEN_PATHS]
 
 # Keep the suite hermetic: never let a stray ``PYTHONPATH`` re-introduce the
 # repository root during collection.
@@ -113,11 +114,17 @@ def _assert_no_sglang_imported() -> None:
     failure.
     """
 
-    if "sglang" in sys.modules:
+    sglang_modules = [
+        name
+        for name in sys.modules
+        if name == "sglang" or name.startswith("sglang.")
+    ]
+    if sglang_modules:
         raise RuntimeError(
             "tests/quantization must not import the sglang package; the suite "
             "is loaded from source files via conftest.py so CI only needs "
-            "pytest installed. Check for a stray ``import sglang`` in the "
+            "pytest installed. Found: "
+            f"{sglang_modules}. Check for a stray ``import sglang`` in the "
             "collection chain or a parent conftest.py."
         )
 
