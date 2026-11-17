@@ -63,3 +63,23 @@ if not _ACTIVATION_FALLBACK_PATH.is_file():
         RuntimeWarning,
         stacklevel=1,
     )
+
+# Guard against accidental full-package imports: if a future test in this
+# directory tries to import sglang, surface a clear message instead of a
+# confusing ImportError from a partially installed editable package.
+import builtins as _builtins  # noqa: E402
+
+_real_import = _builtins.__import__
+
+
+def _guarded_import(name, *args, **kwargs):
+    if name == "sglang" or name.startswith("sglang."):
+        raise ImportError(
+            "tests/quantization is a self-contained suite and must not import "
+            "the sglang package. Load the module under test directly from its "
+            "file path instead (see test_activation_fallback.py)."
+        )
+    return _real_import(name, *args, **kwargs)
+
+
+_builtins.__import__ = _guarded_import
