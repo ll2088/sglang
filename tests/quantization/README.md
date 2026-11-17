@@ -1,48 +1,38 @@
-# Self-contained quantization tests
+# Activation-quantization fallback tests
 
-This directory hosts the activation-quantization fallback suite
-(`test_activation_fallback.py`). It is deliberately self-contained so it can
-run on GPU-less CI runners without installing the full `sglang` runtime
-dependency set.
+This directory holds the self-contained test suite for explicit
+activation-quantization fallback handling (`VLLM_STRICT_QUANT_SCHEME`).
 
-## Why self-contained
+## Why it is self-contained
 
-The module under test
-(`python/sglang/srt/layers/quantization/activation_fallback.py`) only uses the
-standard library. The test module loads it directly from its file path, so no
-`import sglang` is required. This avoids the failure mode where CI runs
-`pip install -e python`, which resolves the full sglang dependency set and
-fails on runners without a GPU or the required system libraries.
+The suite must run on GPU-less CI runners. It therefore does **not** import
+the `sglang` package. Instead, `test_activation_fallback.py` loads the module
+under test directly from its file path:
+
+```
+python/sglang/srt/layers/quantization/activation_fallback.py
+```
+
+That module only uses the standard library, so no compiled kernels and no
+third-party runtime dependencies are required.
 
 ## How to run
 
-Install only the minimal dependencies:
+Install only the minimal dependencies and run pytest with the directory-local
+configuration:
 
 ```bash
 pip install -r tests/quantization/requirements.txt
-```
-
-Then run the suite with the directory-local pytest configuration so the
-repository-root `pytest.ini` is not picked up:
-
-```bash
 python -m pytest -q -c tests/quantization/pytest.ini tests/quantization
 ```
 
 Do **not** run `pip install -e python` (or `pip install sglang`) before this
-suite. That pulls the full runtime dependency set and is exactly the
-environment-setup failure this suite is designed to avoid.
+suite. That pulls the full sglang runtime dependency set (py-spy, pyzmq,
+quack-kernels, pydantic, ...) and fails during environment preparation on
+runners without a GPU.
 
-## CI guidance
+## Configuration
 
-CI jobs that run this directory should:
-
-1. Install only `tests/quantization/requirements.txt` (pytest and
-   pytest-randomly).
-2. Set `PYTHONPATH` to the repository `python/` directory if any future test
-   in this directory needs to import `sglang` from the checkout.
-3. Invoke pytest with `-c tests/quantization/pytest.ini` so rootdir/testpaths
-   are pinned to this directory.
-
-If the CI configuration cannot be changed, provide reproducible local
-verification evidence (full commands and output) in the commit description.
+`pytest.ini` in this directory pins `rootdir`/`testpaths` to this directory so
+the repository-root pytest configuration is not picked up. Always pass
+`-c tests/quantization/pytest.ini` when invoking pytest for this suite.

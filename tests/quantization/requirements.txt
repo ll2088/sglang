@@ -14,4 +14,3 @@
 # Run with:
 #   python -m pytest -q -c tests/quantization/pytest.ini tests/quantization
 pytest
-pytest-randomly
