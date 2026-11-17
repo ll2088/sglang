@@ -2,4 +2,13 @@
 # The module under test (activation_fallback.py) only uses the standard
 # library, so pytest is the only requirement. Do NOT add sglang here: the
 # whole point is to avoid the full package install in CI.
+#
+# CI should install this file directly, e.g.:
+#
+#     pip install -r tests/quantization/requirements.txt
+#     python -m pytest -q -c tests/quantization/pytest.ini \
+#         tests/quantization/test_activation_fallback.py
+#
+# Do NOT run ``pip install -e python`` for this suite; that pulls in the full
+# sglang dependency set and is what caused the previous environment failure.
 pytest>=7.0
