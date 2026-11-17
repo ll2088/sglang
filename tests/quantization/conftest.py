@@ -59,8 +59,27 @@ def _strip_paths() -> None:
             os.environ.pop("PYTHONPATH", None)
 
 
+def _drop_sglang_modules() -> None:
+    """Drop any already-imported ``sglang`` modules from ``sys.modules``.
+
+    If a plugin or the rootdir discovery imported the sglang package before
+    this conftest ran, the full dependency set was already resolved. Removing
+    the modules keeps the suite self-contained and lets the guard tests in
+    ``test_activation_fallback.py`` detect the leak instead of silently
+    passing.
+    """
+
+    for name in [
+        name
+        for name in sys.modules
+        if name == "sglang" or name.startswith("sglang.")
+    ]:
+        sys.modules.pop(name, None)
+
+
 # Strip before anything else can import the repository packages.
 _strip_paths()
+_drop_sglang_modules()
 
 
 def _load_activation_fallback():
@@ -102,6 +121,7 @@ _ACTIVATION_FALLBACK = _load_activation_fallback()
 def pytest_configure(config) -> None:
     # Re-strip in case a plugin or the rootdir discovery re-added entries.
     _strip_paths()
+    _drop_sglang_modules()
 
 
 def pytest_collection_modifyitems(config, items) -> None:

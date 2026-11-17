@@ -1,19 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright (c) vLLM project
 #
-# Minimal dependencies for the activation-fallback suite.
+# Minimal requirements for the activation-fallback suite.
 #
-# The module under test (activation_fallback.py) only uses the standard
-# library, so pytest is the only requirement. CI must install this file
-# instead of running ``pip install -e python`` (which resolves the full
-# sglang dependency set and fails during environment preparation).
-#
-# Usage:
-#   pip install -r tests/quantization/requirements.txt
-#   python -m pytest -q -c tests/quantization/pytest.ini \
-#       tests/quantization/test_activation_fallback.py
-#
-# Do NOT add sglang or any of its runtime dependencies here: the suite is
-# intentionally self-contained and must run with pytest alone.
+# The suite is loaded from file paths via conftest.py and only needs pytest;
+# it must never depend on the full sglang package (which resolves the entire
+# runtime dependency set and is what made CI environment preparation fail).
 
-pytest>=7.0
+pytest
