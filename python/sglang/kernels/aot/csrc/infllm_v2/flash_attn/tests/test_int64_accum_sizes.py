@@ -187,6 +187,9 @@ def test_module_has_no_third_party_imports():
     with open(os.path.abspath(__file__), "r", encoding="utf-8") as fh:
         tree = ast.parse(fh.read())
 
+    # The module itself must not import any third-party package at module
+    # level; the stdlib-only runner relies on this to stay dependency-free.
+
     imported = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -491,13 +494,17 @@ def _run_tests_quietly():
     This is the shared implementation used by both the standalone runner and
     the module-level ``main`` entry point. It never imports pytest, torch or
     sglang, so it stays runnable in a bare Python environment.
+
+    Any exception raised by a test is recorded as a failure (not only
+    ``AssertionError``), so that a missing optional dependency or a syntax
+    level problem in a helper cannot silently abort the whole run.
     """
     tests = _collect_tests()
     failures = []
     for name, fn in tests:
         try:
             fn()
-        except AssertionError as exc:  # pragma: no cover - failure path
+        except Exception as exc:  # pragma: no cover - failure path
             failures.append((name, exc))
     return len(tests), failures
 

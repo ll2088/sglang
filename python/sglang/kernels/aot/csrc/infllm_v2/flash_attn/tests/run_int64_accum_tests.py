@@ -72,6 +72,21 @@ def main():
     return 0
 
 
+def _run_pytest_if_available():
+    """Run the tests through pytest when it is installed.
+
+    This keeps the standalone runner usable both as a dependency-free script
+    and as a thin wrapper around pytest in environments where pytest is
+    available. It never imports sglang or torch.
+    """
+    try:
+        import pytest  # noqa: F401
+    except ImportError:
+        return None
+    here = os.path.dirname(os.path.abspath(__file__))
+    return pytest.main(["-q", os.path.join(here, "test_int64_accum_sizes.py")])
+
+
 def _self_check():
     """Verify the runner can load and execute the test module.
 

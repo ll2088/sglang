@@ -27,6 +27,15 @@ try:
 except ImportError:  # pragma: no cover - exercised only without pytest
     pytest = None
 
+# When pytest is unavailable (e.g. the stdlib-only runner path), make sure the
+# tests directory is still importable and that no pytest-only hooks are
+# required. This keeps the int64 accumulator checks runnable in a bare Python
+# environment without installing the heavy sglang dependency set.
+if pytest is None:  # pragma: no cover - exercised only without pytest
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    if _HERE not in sys.path:
+        sys.path.insert(0, _HERE)
+
 # Keep the tests stdlib-only: make sure the repository root (which contains the
 # ``sglang`` package) is not on ``sys.path`` while these tests are collected.
 # Otherwise pytest's rootdir detection can import ``sglang`` and trigger the
