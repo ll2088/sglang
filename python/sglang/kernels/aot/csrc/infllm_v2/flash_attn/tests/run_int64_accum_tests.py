@@ -14,17 +14,26 @@ Usage::
 Exit code is 0 when all tests pass, 1 otherwise.
 """
 
+import importlib.util
 import os
 import sys
 
 
 def _load_test_module():
-    here = os.path.dirname(os.path.abspath(__file__))
-    if here not in sys.path:
-        sys.path.insert(0, here)
-    import test_int64_accum_sizes  # noqa: WPS433 (local import by design)
+    """Load the sibling test module by file path.
 
-    return test_int64_accum_sizes
+    Loading by path (instead of a plain ``import``) avoids triggering any
+    package ``__init__.py`` on the way up the directory tree, which would
+    otherwise pull in the heavy ``sglang`` dependency set and break CI
+    environment preparation.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    module_path = os.path.join(here, "test_int64_accum_sizes.py")
+    spec = importlib.util.spec_from_file_location("test_int64_accum_sizes", module_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def main():
