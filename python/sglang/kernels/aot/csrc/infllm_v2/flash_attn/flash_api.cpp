@@ -20,6 +20,24 @@
   TORCH_CHECK(x.sizes() == torch::IntArrayRef({__VA_ARGS__}), #x " must have shape (" #__VA_ARGS__ ")")
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 
+// Compute the per-head size of an fp32 accumulator (seqlen_rounded * head_size_rounded)
+// in 64 bits so that it cannot overflow int32 for very long sequences.
+static inline int64_t flash_attn_accum_head_size(int seqlen_rounded, int head_size_rounded) {
+  return static_cast<int64_t>(seqlen_rounded) * static_cast<int64_t>(head_size_rounded);
+}
+
+// Compute the batch stride of an fp32 accumulator (head_size * num_heads) in 64 bits.
+static inline int64_t flash_attn_accum_batch_stride(int64_t head_size, int num_heads) {
+  return head_size * static_cast<int64_t>(num_heads);
+}
+
+// Compute the offset of a block inside an fp32 accumulator in 64 bits:
+// block_idx * block_size * head_dim. Used for dq_accum / dk_accum / dv_accum
+// block indexing (see upstream FA3 #3152).
+static inline int64_t flash_attn_accum_block_offset(int64_t block_idx, int block_size, int head_dim) {
+  return block_idx * static_cast<int64_t>(block_size) * static_cast<int64_t>(head_dim);
+}
+
 void set_params_fprop(
     Flash_fwd_params& params,
     // sizes
@@ -371,6 +389,21 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
   // depend on them cannot silently truncate to int32.
   (void)seqlen_q_rounded_x_head_size_rounded;
   (void)seqlen_k_rounded_x_head_size_rounded;
+
+  // Mirror the upstream FA3 #3152 fix for the backward fp32 accumulators
+  // (dq_accum / dk_accum / dv_accum): their per-head size, batch stride and
+  // block offsets must be computed in 64 bits. The backward path is not built
+  // in this repository, so we only expose the 64-bit helpers here to keep the
+  // size/stride/offset arithmetic consistent and overflow-free.
+  const int64_t dq_accum_head_size = flash_attn_accum_head_size(seqlen_q_rounded, head_size_rounded);
+  const int64_t dk_accum_head_size = flash_attn_accum_head_size(seqlen_k_rounded, head_size_rounded);
+  const int64_t dv_accum_head_size = flash_attn_accum_head_size(seqlen_k_rounded, head_size_rounded);
+  const int64_t dq_accum_batch_stride = flash_attn_accum_batch_stride(dq_accum_head_size, num_heads);
+  const int64_t dk_accum_batch_stride = flash_attn_accum_batch_stride(dk_accum_head_size, num_heads_k);
+  const int64_t dv_accum_batch_stride = flash_attn_accum_batch_stride(dv_accum_head_size, num_heads_k);
+  (void)dq_accum_batch_stride;
+  (void)dk_accum_batch_stride;
+  (void)dv_accum_batch_stride;
 
   // auto softmax_lse = torch::empty({num_heads, total_q}, opts.dtype(at::kFloat));
   at::Tensor p;
