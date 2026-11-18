@@ -74,18 +74,6 @@ pub fn is_client_fault(error: &str) -> bool {
         || error.contains("not a regular file")
 }
 
-/// Whether a fetch failure is the request's fault rather than the server's.
-///
-/// A malformed data URL, undecodable base64, or a source the connector
-/// refuses is a client fault (HTTP 400 / gRPC `INVALID_ARGUMENT`); a read or
-/// download failure on this side stays a server fault. Hosts use this to pick
-/// the wire status instead of reporting every media error as a 500.
-pub fn is_client_fault(error: &str) -> bool {
-    error.contains("malformed data: URL")
-        || error.contains("base64 decode")
-        || error.contains("not a regular file")
-}
-
 /// Read a trusted local media path without applying the per-source remote cap.
 ///
 /// Python's media security limit is specifically a URL-download limit. Local

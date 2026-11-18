@@ -51,23 +51,6 @@ impl From<&str> for ProcessorError {
     }
 }
 
-impl ProcessorError {
-    /// Whether this failure is the request's fault rather than the server's.
-    ///
-    /// Hosts map a request-fault error onto their client-error status (HTTP
-    /// 400, gRPC `INVALID_ARGUMENT`) and everything else onto a server error,
-    /// so a malformed request is never reported as a server defect.
-    pub fn is_request_validation_error(&self) -> bool {
-        matches!(self, Self::InvalidRequest(_) | Self::Media(_))
-    }
-
-    /// Build a media error from a source the request got wrong. The message
-    /// keeps the underlying cause so the client can see what was rejected.
-    pub fn media(message: impl Into<String>) -> Self {
-        Self::Media(message.into())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
