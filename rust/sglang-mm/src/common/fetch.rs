@@ -72,6 +72,7 @@ pub fn is_client_fault(error: &str) -> bool {
     error.contains("malformed data: URL")
         || error.contains("base64 decode")
         || error.contains("not a regular file")
+        || error.contains("unsupported input_audio format")
 }
 
 /// Read a trusted local media path without applying the per-source remote cap.
@@ -381,6 +382,32 @@ mod tests {
     fn unsupported_scheme_is_a_client_fault() {
         let err = fetch_bytes("ftp://example.invalid/a.wav").err().unwrap();
         assert!(is_client_fault(&err), "{err}");
+    }
+
+    /// An unsupported `input_audio` format is the request's fault, so a host
+    /// maps it onto 400 / `INVALID_ARGUMENT` rather than a server error.
+    #[test]
+    fn unsupported_input_audio_format_is_a_client_fault() {
+        let err = "unsupported input_audio format `flac`; expected `wav` or `mp3`";
+        assert!(is_client_fault(err), "{err}");
+    }
+
+    /// The classification boundary: a request-fault source is a client fault,
+    /// while a read failure on this side stays a server fault.
+    #[test]
+    fn client_fault_boundary_matches_the_source() {
+        let client = [
+            fetch_bytes("data:image/png;base64").err().unwrap(),
+            fetch_bytes("!!not-base64!!").err().unwrap(),
+            fetch_bytes("ftp://example.invalid/a.wav").err().unwrap(),
+        ];
+        for err in client {
+            assert!(is_client_fault(&err), "{err}");
+        }
+        let server = fetch_bytes("file:///definitely/not/here.jpg")
+            .err()
+            .unwrap();
+        assert!(!is_client_fault(&server), "{server}");
     }
 
     #[test]

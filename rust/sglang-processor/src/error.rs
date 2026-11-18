@@ -20,6 +20,12 @@ pub enum ProcessorError {
     /// it onto a client-error status instead of a generic server error.
     #[error("invalid media: {0}")]
     Media(String),
+
+    /// An `input_audio` part whose `format` is neither `wav` nor `mp3`.
+    /// A dedicated variant keeps the field-level validation error on the
+    /// client-error path instead of the generic multimodal one.
+    #[error("unsupported input_audio format `{format}`; expected `wav` or `mp3`")]
+    UnsupportedInputAudioFormat { format: String },
 }
 
 impl ProcessorError {
@@ -29,7 +35,12 @@ impl ProcessorError {
     /// 400, gRPC `INVALID_ARGUMENT`) and everything else onto a server error,
     /// so a malformed request is never reported as a server defect.
     pub fn is_request_validation_error(&self) -> bool {
-        matches!(self, Self::InvalidRequest(_) | Self::Media(_))
+        matches!(
+            self,
+            Self::InvalidRequest(_)
+                | Self::Media(_)
+                | Self::UnsupportedInputAudioFormat { .. }
+        )
     }
 
     /// Build a media error from a source the request got wrong. The message
@@ -84,5 +95,41 @@ mod tests {
         let error = ProcessorError::media("media fetch: malformed data: URL");
         assert!(error.is_request_validation_error());
         assert!(error.to_string().contains("malformed data: URL"));
+    }
+
+    /// An unsupported `input_audio` format is the request's fault, so hosts
+    /// answer 400 / `INVALID_ARGUMENT` rather than a server error.
+    #[test]
+    fn unsupported_input_audio_format_is_a_request_validation_error() {
+        let error = ProcessorError::UnsupportedInputAudioFormat {
+            format: "flac".into(),
+        };
+        assert!(error.is_request_validation_error());
+        assert!(error.to_string().contains("flac"), "{error}");
+        assert!(error.to_string().contains("wav"), "{error}");
+        assert!(error.to_string().contains("mp3"), "{error}");
+    }
+
+    /// The classification boundary: a request-fault error is a validation
+    /// error, a server-side failure is not.
+    #[test]
+    fn request_fault_and_server_fault_are_distinguished() {
+        let client = [
+            ProcessorError::InvalidRequest("bad".into()),
+            ProcessorError::media("base64 decode error"),
+            ProcessorError::UnsupportedInputAudioFormat {
+                format: "flac".into(),
+            },
+        ];
+        for error in client {
+            assert!(error.is_request_validation_error(), "{error}");
+        }
+        let server = [
+            ProcessorError::Tokenize("boom".into()),
+            ProcessorError::Internal("bug".into()),
+        ];
+        for error in server {
+            assert!(!error.is_request_validation_error(), "{error}");
+        }
     }
 }
