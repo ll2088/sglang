@@ -12,6 +12,10 @@ Run directly with ``python test_int64_accum_sizes.py`` or via pytest.
 INT32_MAX = 2**31 - 1
 INT32_MIN = -(2**31)
 
+# This module intentionally depends only on the Python standard library so that
+# it can be executed directly (``python test_int64_accum_sizes.py``) without
+# installing the heavy sglang dependency set. Do not add third-party imports.
+
 
 def _as_int32(value: int) -> int:
     """Wrap a Python int into the signed 32-bit range, mimicking C int truncation."""
@@ -198,6 +202,11 @@ def _run_all_tests():
         raise SystemExit(1)
     print("All {} int64 accumulator tests passed.".format(len(tests)))
     return len(tests)
+
+
+def main():
+    """Entry point usable both as a script and via ``python -m``."""
+    return _run_all_tests()
 
 
 if __name__ == "__main__":
