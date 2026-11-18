@@ -135,4 +135,28 @@ mod tests {
             assert!(!error.is_request_validation_error(), "{error}");
         }
     }
+
+    /// A media error built from a fetch failure keeps the underlying cause in
+    /// its message, so a host can surface what was rejected rather than a
+    /// generic server error.
+    #[test]
+    fn media_error_from_fetch_failure_keeps_the_cause() {
+        let error = ProcessorError::media("media fetch: base64 decode: Invalid symbol 32");
+        assert!(error.is_request_validation_error());
+        assert!(error.to_string().contains("base64 decode"), "{error}");
+    }
+
+    /// An unsupported `input_audio` format names the offending value and the
+    /// accepted ones, so the client can fix the request.
+    #[test]
+    fn unsupported_input_audio_format_names_the_value_and_accepted_ones() {
+        let error = ProcessorError::UnsupportedInputAudioFormat {
+            format: "flac".into(),
+        };
+        let message = error.to_string();
+        assert!(message.contains("flac"), "{message}");
+        assert!(message.contains("wav"), "{message}");
+        assert!(message.contains("mp3"), "{message}");
+        assert!(error.is_request_validation_error());
+    }
 }
