@@ -361,6 +361,12 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
   const int head_size_rounded = head_size <= 192 ? round_multiple(head_size, 32) : 256;
   const int seqlen_q_rounded = round_multiple(max_seqlen_q, 128);
   const int seqlen_k_rounded = round_multiple(max_seqlen_k, 128);
+  // Compute the fp32 accumulator sizes in 64 bits to avoid int32 overflow when
+  // seqlen_*_rounded * head_size_rounded exceeds 2^31 (see upstream FA3 #3152).
+  const int64_t seqlen_q_rounded_x_head_size_rounded =
+      static_cast<int64_t>(seqlen_q_rounded) * head_size_rounded;
+  const int64_t seqlen_k_rounded_x_head_size_rounded =
+      static_cast<int64_t>(seqlen_k_rounded) * head_size_rounded;
 
   // auto softmax_lse = torch::empty({num_heads, total_q}, opts.dtype(at::kFloat));
   at::Tensor p;
