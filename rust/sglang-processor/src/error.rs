@@ -15,6 +15,11 @@ pub enum ProcessorError {
     /// Output processing reached a state the request could not have caused.
     #[error("{0}")]
     Internal(String),
+    /// A media source the request got wrong (bad base64, undecodable bytes,
+    /// a URL the connector refuses). Kept as its own variant so hosts can map
+    /// it onto a client-error status instead of a generic server error.
+    #[error("invalid media: {0}")]
+    Media(String),
 }
 
 impl From<String> for ProcessorError {
@@ -36,7 +41,13 @@ impl ProcessorError {
     /// 400, gRPC `INVALID_ARGUMENT`) and everything else onto a server error,
     /// so a malformed request is never reported as a server defect.
     pub fn is_request_validation_error(&self) -> bool {
-        matches!(self, Self::InvalidRequest(_))
+        matches!(self, Self::InvalidRequest(_) | Self::Media(_))
+    }
+
+    /// Build a media error from a source the request got wrong. The message
+    /// keeps the underlying cause so the client can see what was rejected.
+    pub fn media(message: impl Into<String>) -> Self {
+        Self::Media(message.into())
     }
 }
 
@@ -50,6 +61,17 @@ mod tests {
     fn only_invalid_request_is_a_request_validation_error() {
         assert!(ProcessorError::InvalidRequest("bad media".into()).is_request_validation_error());
         assert!(ProcessorError::from("bad media").is_request_validation_error());
+        assert!(!ProcessorError::Tokenize("boom".into()).is_request_validation_error());
+        assert!(!ProcessorError::Internal("bug".into()).is_request_validation_error());
+    }
+
+    /// Media the request got wrong is a client fault (400 / INVALID_ARGUMENT),
+    /// while a tokenize or internal failure stays a server fault (5xx).
+    #[test]
+    fn media_error_is_a_request_validation_error() {
+        let error = ProcessorError::media("base64 decode error: Invalid symbol 32");
+        assert!(error.is_request_validation_error());
+        assert!(error.to_string().contains("base64 decode error"));
         assert!(!ProcessorError::Tokenize("boom".into()).is_request_validation_error());
         assert!(!ProcessorError::Internal("bug".into()).is_request_validation_error());
     }

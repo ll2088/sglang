@@ -62,6 +62,18 @@ pub fn fetch_bytes(src: &str) -> Result<Vec<u8>, String> {
     fetch_bytes_budgeted(src, &ByteBudget::new(MAX_FETCH_BYTES))
 }
 
+/// Whether a fetch failure is the request's fault rather than the server's.
+///
+/// A malformed data URL, undecodable base64, or a source the connector
+/// refuses is a client fault (HTTP 400 / gRPC `INVALID_ARGUMENT`); a read or
+/// download failure on this side stays a server fault. Hosts use this to pick
+/// the wire status instead of reporting every media error as a 500.
+pub fn is_client_fault(error: &str) -> bool {
+    error.contains("malformed data: URL")
+        || error.contains("base64 decode")
+        || error.contains("not a regular file")
+}
+
 /// Read a trusted local media path without applying the per-source remote cap.
 ///
 /// Python's media security limit is specifically a URL-download limit. Local
@@ -334,6 +346,22 @@ mod tests {
     fn unsupported_scheme_is_rejected() {
         let err = fetch_bytes("ftp://example.invalid/a.wav").err().unwrap();
         assert!(err.contains("base64 decode"), "{err}");
+    }
+
+    /// A malformed source is a client fault; a read failure on this side is
+    /// not, so hosts can map the two onto different statuses.
+    #[test]
+    fn client_fault_classification_matches_the_source() {
+        let bad_data = fetch_bytes("data:image/png;base64").err().unwrap();
+        assert!(is_client_fault(&bad_data), "{bad_data}");
+
+        let bad_base64 = fetch_bytes("!!not-base64!!").err().unwrap();
+        assert!(is_client_fault(&bad_base64), "{bad_base64}");
+
+        let missing = fetch_bytes("file:///definitely/not/here.jpg")
+            .err()
+            .unwrap();
+        assert!(!is_client_fault(&missing), "{missing}");
     }
 
     #[test]
