@@ -28,3 +28,29 @@ impl From<&str> for ProcessorError {
         Self::InvalidRequest(message.to_owned())
     }
 }
+
+impl ProcessorError {
+    /// Whether this failure is the request's fault rather than the server's.
+    ///
+    /// Hosts map a request-fault error onto their client-error status (HTTP
+    /// 400, gRPC `INVALID_ARGUMENT`) and everything else onto a server error,
+    /// so a malformed request is never reported as a server defect.
+    pub fn is_request_validation_error(&self) -> bool {
+        matches!(self, Self::InvalidRequest(_))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only a request the caller got wrong is a validation error; a tokenize
+    /// or internal failure stays a server error.
+    #[test]
+    fn only_invalid_request_is_a_request_validation_error() {
+        assert!(ProcessorError::InvalidRequest("bad media".into()).is_request_validation_error());
+        assert!(ProcessorError::from("bad media").is_request_validation_error());
+        assert!(!ProcessorError::Tokenize("boom".into()).is_request_validation_error());
+        assert!(!ProcessorError::Internal("bug".into()).is_request_validation_error());
+    }
+}

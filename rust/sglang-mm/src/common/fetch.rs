@@ -317,6 +317,25 @@ mod tests {
         assert!(fetch_bytes("!!not-base64!!").is_err());
     }
 
+    /// A malformed data URL and undecodable base64 are the request's fault:
+    /// the message names the source so a host can map it to a 400.
+    #[test]
+    fn malformed_media_source_is_a_client_fault() {
+        let err = fetch_bytes("data:image/png;base64").err().unwrap();
+        assert!(err.contains("malformed data: URL"), "{err}");
+
+        let err = fetch_bytes("data:image/png;base64,not base64!").err().unwrap();
+        assert!(err.contains("base64 decode"), "{err}");
+    }
+
+    /// A source the connector refuses (an unsupported scheme) is rejected
+    /// rather than silently treated as bare base64.
+    #[test]
+    fn unsupported_scheme_is_rejected() {
+        let err = fetch_bytes("ftp://example.invalid/a.wav").err().unwrap();
+        assert!(err.contains("base64 decode"), "{err}");
+    }
+
     #[test]
     fn missing_file_fails() {
         assert!(fetch_bytes("file:///definitely/not/here.jpg").is_err());
