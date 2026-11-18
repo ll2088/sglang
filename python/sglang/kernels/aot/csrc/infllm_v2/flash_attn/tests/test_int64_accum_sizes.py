@@ -187,6 +187,9 @@ def test_module_has_no_third_party_imports():
     with open(os.path.abspath(__file__), "r", encoding="utf-8") as fh:
         tree = ast.parse(fh.read())
 
+    # The module must not import any third-party package at module level; the
+    # stdlib-only runner relies on this to stay dependency-free.
+
     # The module itself must not import any third-party package at module
     # level; the stdlib-only runner relies on this to stay dependency-free.
 
@@ -254,6 +257,31 @@ def test_flash_api_uses_int64_accum_helpers():
     assert "flash_attn_accum_batch_stride" in source
     assert "flash_attn_accum_block_offset" in source
     assert "static_cast<int64_t>(seqlen_rounded)" in source
+
+
+def test_flash_api_has_no_int32_accum_allocation():
+    # The backward accumulators must be allocated with a 64-bit per-head size.
+    # Guard against a regression that reintroduces a raw int32 product in the
+    # torch::empty / torch::zeros allocation of dq_accum / dk_accum / dv_accum.
+    source = _read_flash_api_source()
+    if source is None:
+        return
+
+    for pattern in (
+        "seqlen_q_rounded * head_size_rounded",
+        "seqlen_k_rounded * head_size_rounded",
+        "seqlen_k_rounded * head_size_v_rounded",
+    ):
+        idx = 0
+        while True:
+            idx = source.find(pattern, idx)
+            if idx == -1:
+                break
+            prefix = source[max(0, idx - 48):idx]
+            assert "static_cast<int64_t>" in prefix or "int64_t(" in prefix, (
+                "raw int32 product found: {!r} at offset {}".format(pattern, idx)
+            )
+            idx += len(pattern)
 
 
 def test_flash_api_accum_helpers_are_int64_returning():

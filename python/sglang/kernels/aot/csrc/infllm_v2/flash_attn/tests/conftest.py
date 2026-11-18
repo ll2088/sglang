@@ -62,3 +62,22 @@ for _entry in list(sys.path):
 #
 # Keep the tests stdlib-only by construction: do not add third-party imports
 # to the test modules in this directory.
+
+
+def pytest_configure(config):  # pragma: no cover - only runs under pytest
+    """Pin the pytest rootdir to this directory when pytest is present.
+
+    Without this, pytest can walk up to the repository root, import the
+    ``sglang`` package during collection and trigger the full dependency
+    install. The sibling ``pytest.ini`` already sets ``rootdir``/``testpaths``;
+    this hook makes the intent explicit and keeps the stdlib-only runner path
+    (which never calls this hook) unaffected.
+    """
+    if pytest is None:
+        return
+    try:
+        config.inifile = os.path.join(_HERE, "pytest.ini")
+        config.rootdir = _HERE
+    except Exception:
+        # Never let a pytest-internal attribute change break collection.
+        pass

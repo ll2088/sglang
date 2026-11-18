@@ -54,13 +54,27 @@ def _run_pytest_if_available():
     This keeps the standalone runner usable both as a dependency-free script
     and as a thin wrapper around pytest in environments where pytest is
     available. It never imports sglang or torch.
+
+    The pytest invocation is pinned to this directory (``rootdir`` and
+    ``testpaths`` come from the sibling ``pytest.ini``) and disables plugin
+    autoloading so that a bare pytest install cannot pull in the heavy sglang
+    dependency set during collection.
     """
     try:
         import pytest  # noqa: F401
     except ImportError:
         return None
     here = os.path.dirname(os.path.abspath(__file__))
-    return pytest.main(["-q", os.path.join(here, "test_int64_accum_sizes.py")])
+    return pytest.main(
+        [
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "no:randomly",
+            os.path.join(here, "test_int64_accum_sizes.py"),
+        ]
+    )
 
 
 def _self_check():
@@ -77,6 +91,21 @@ def _self_check():
             print("FAILED {}: {}".format(name, exc))
         return 1
     print("self-check ok: {} tests ran".format(ran))
+    return 0
+
+
+def _assert_no_heavy_imports():
+    """Fail fast if this runner ever grows a heavy import.
+
+    The whole point of this entry point is that it can run in a bare Python
+    environment without installing the sglang dependency set. Guard that
+    property so a future edit cannot silently reintroduce the dependency.
+    """
+    forbidden = {"sglang", "torch", "numpy", "cute", "cutlass"}
+    leaked = sorted(name for name in forbidden if name in sys.modules)
+    if leaked:
+        print("heavy modules already imported: {}".format(leaked))
+        return 1
     return 0
 
 
