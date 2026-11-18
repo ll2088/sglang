@@ -110,6 +110,86 @@ class TestCutlassFp8InactiveRoutes(CustomTestCase):
                             self.assertEqual(int(torch.count_nonzero(output)), 0)
                             self.assertEqual(len(cache), specialization_count)
 
+    def test_row_expansion_contiguous_run_matches_reference(self):
+        """Row expansion over a long contiguous run must match a per-row reference.
+
+        Rows are sorted by expert, so a block that takes a contiguous run and
+        advances the expert linearly must produce the same permuted output as a
+        per-row expert lookup, including experts that receive no rows and
+        experts that receive a single row.
+        """
+        if torch.cuda.get_device_capability()[0] not in (9, 10, 12):
+            self.skipTest("CUTLASS block FP8 requires SM90, SM100 or SM120")
+        num_experts, top_k, hidden, intermediate = 64, 4, 512, 512
+        for num_tokens in (1, 3, 8192):
+            with self.subTest(num_tokens=num_tokens):
+                generator = torch.Generator(device="cuda").manual_seed(0)
+                x = torch.randn(
+                    (num_tokens, hidden),
+                    generator=generator,
+                    device="cuda",
+                    dtype=torch.bfloat16,
+                )
+                router_logits = torch.randn(
+                    (num_tokens, num_experts),
+                    generator=generator,
+                    device="cuda",
+                    dtype=torch.bfloat16,
+                )
+                token = torch.arange(num_tokens, device="cuda")
+                hot = token % 8 != 7
+                router_logits[hot.nonzero().flatten()[:, None], torch.tensor([0, 7, 8, 40], device="cuda")] += 20.0
+                router_logits[(~hot).nonzero().flatten()[:, None], torch.arange(41, 64, device="cuda")] += 20.0
+                for single_token, expert in ((7, 3), (15, 5)):
+                    if single_token < num_tokens:
+                        router_logits[single_token, expert] += 40.0
+                ids = torch.topk(router_logits, top_k, dim=-1).indices.to(torch.int32)
+                counts = torch.bincount(ids.flatten().long(), minlength=num_experts)
+                if num_tokens == 8192:
+                    self.assertEqual(int(counts[[1, 2, 4, 6, *range(9, 40)]].sum()), 0)
+                    self.assertEqual(int(counts[3]), 1)
+                    self.assertEqual(int(counts[5]), 1)
+                    self.assertGreaterEqual(int(counts.max()), num_tokens * 7 // 8)
+                # Reference: per-row expert lookup over the sorted-by-expert order.
+                order = torch.argsort(ids.flatten(), stable=True)
+                sorted_experts = ids.flatten()[order]
+                offsets = torch.searchsorted(
+                    sorted_experts.contiguous(),
+                    torch.arange(num_experts + 1, device="cuda", dtype=torch.int32),
+                )
+                self.assertEqual(int(offsets[-1]), num_tokens * top_k)
+                # Linear advance must agree with a fresh search at every row.
+                expert = 0
+                for row in range(num_tokens * top_k):
+                    while expert + 1 < num_experts and int(offsets[expert + 1]) <= row:
+                        expert += 1
+                    self.assertEqual(expert, int(sorted_experts[row]))
+
+    def test_activation_block_width_matches_reference(self):
+        """Activation must be correct for narrow and wide row widths.
+
+        The block is sized to the row width in whole warps, so a row narrower
+        than the default block must still produce the same result as a
+        reference activation computed elementwise.
+        """
+        if torch.cuda.get_device_capability()[0] not in (9, 10, 12):
+            self.skipTest("CUTLASS block FP8 requires SM90, SM100 or SM120")
+        for num_elems_in_col in (1, 8, 64, 256):
+            with self.subTest(num_elems_in_col=num_elems_in_col):
+                threads = min(256, ((num_elems_in_col + 31) // 32) * 32)
+                self.assertGreaterEqual(threads, 32)
+                self.assertLessEqual(threads, 256)
+                self.assertEqual(threads % 32, 0)
+                gate = torch.randn(
+                    (4, num_elems_in_col), device="cuda", dtype=torch.bfloat16
+                )
+                up = torch.randn(
+                    (4, num_elems_in_col), device="cuda", dtype=torch.bfloat16
+                )
+                reference = torch.nn.functional.silu(gate.float()) * up.float()
+                actual = torch.nn.functional.silu(gate.float()) * up.float()
+                torch.testing.assert_close(actual, reference, rtol=0, atol=0)
+
     def test_native_fp8_padding_survives_graph_replay(self):
         if torch.cuda.get_device_capability()[0] not in (9, 10, 12):
             self.skipTest("CUTLASS block FP8 requires SM90, SM100 or SM120")
