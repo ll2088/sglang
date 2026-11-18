@@ -103,17 +103,30 @@ def test_int32_truncation_would_be_wrong():
     assert truncated != exact
 
 
+def _collect_tests():
+    """Collect the test functions defined in this module.
+
+    Only functions defined in this module are collected, so that importing
+    this file from a pytest run does not accidentally pick up unrelated
+    callables injected into the module namespace.
+    """
+    return [
+        (name, obj)
+        for name, obj in sorted(globals().items())
+        if name.startswith("test_") and callable(obj) and getattr(obj, "__module__", None) == __name__
+    ]
+
+
 def _run_all_tests():
     """Run every test in this module without requiring pytest.
 
     This keeps the int64 overflow coverage runnable in environments where the
     heavy sglang dependency set (and therefore pytest) cannot be installed.
+    The function returns the number of tests that ran and raises SystemExit(1)
+    if any of them failed, so it can be used both as a script entry point and
+    as a lightweight self-check from other tooling.
     """
-    tests = [
-        (name, obj)
-        for name, obj in sorted(globals().items())
-        if name.startswith("test_") and callable(obj)
-    ]
+    tests = _collect_tests()
     failures = []
     for name, fn in tests:
         try:
@@ -125,6 +138,7 @@ def _run_all_tests():
             print("FAILED {}: {}".format(name, exc))
         raise SystemExit(1)
     print("All {} int64 accumulator tests passed.".format(len(tests)))
+    return len(tests)
 
 
 if __name__ == "__main__":
