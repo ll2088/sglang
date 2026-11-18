@@ -320,6 +320,17 @@ class Parallel(msgspec.Struct):
             resolvable=True,
         ),
     ] = False
+    moe_a2a_backend_unsupported_reason: A[
+        Optional[str],
+        Arg(
+            help="(Derived) Why 'auto' did not resolve to "
+            "'flashinfer_nvlink_one_sided' for this deployment, or None when "
+            "it did. Set during backend resolution; surfaced in logs so users "
+            "can see which constraint kept the fallback backend.",
+            no_cli=True,
+            resolvable=True,
+        ),
+    ] = None
     moe_dense_tp_size: A[
         Optional[int],
         Arg(
