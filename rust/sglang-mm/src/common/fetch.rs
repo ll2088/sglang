@@ -74,6 +74,18 @@ pub fn is_client_fault(error: &str) -> bool {
         || error.contains("not a regular file")
 }
 
+/// Whether a fetch failure is the request's fault rather than the server's.
+///
+/// A malformed data URL, undecodable base64, or a source the connector
+/// refuses is a client fault (HTTP 400 / gRPC `INVALID_ARGUMENT`); a read or
+/// download failure on this side stays a server fault. Hosts use this to pick
+/// the wire status instead of reporting every media error as a 500.
+pub fn is_client_fault(error: &str) -> bool {
+    error.contains("malformed data: URL")
+        || error.contains("base64 decode")
+        || error.contains("not a regular file")
+}
+
 /// Read a trusted local media path without applying the per-source remote cap.
 ///
 /// Python's media security limit is specifically a URL-download limit. Local
@@ -362,6 +374,25 @@ mod tests {
             .err()
             .unwrap();
         assert!(!is_client_fault(&missing), "{missing}");
+    }
+
+    /// A non-regular file is refused by the connector, so it is the request's
+    /// fault; a plain missing file is a read failure on this side and stays a
+    /// server fault.
+    #[test]
+    fn non_regular_file_is_a_client_fault() {
+        let err = fetch_local_file_budgeted("/dev/zero", &ByteBudget::new(1024))
+            .err()
+            .unwrap();
+        assert!(is_client_fault(&err), "{err}");
+    }
+
+    /// A source the connector refuses (an unsupported scheme) is rejected as
+    /// undecodable base64, which is the request's fault.
+    #[test]
+    fn unsupported_scheme_is_a_client_fault() {
+        let err = fetch_bytes("ftp://example.invalid/a.wav").err().unwrap();
+        assert!(is_client_fault(&err), "{err}");
     }
 
     #[test]

@@ -22,6 +22,23 @@ pub enum ProcessorError {
     Media(String),
 }
 
+impl ProcessorError {
+    /// Whether this failure is the request's fault rather than the server's.
+    ///
+    /// Hosts map a request-fault error onto their client-error status (HTTP
+    /// 400, gRPC `INVALID_ARGUMENT`) and everything else onto a server error,
+    /// so a malformed request is never reported as a server defect.
+    pub fn is_request_validation_error(&self) -> bool {
+        matches!(self, Self::InvalidRequest(_) | Self::Media(_))
+    }
+
+    /// Build a media error from a source the request got wrong. The message
+    /// keeps the underlying cause so the client can see what was rejected.
+    pub fn media(message: impl Into<String>) -> Self {
+        Self::Media(message.into())
+    }
+}
+
 impl From<String> for ProcessorError {
     fn from(message: String) -> Self {
         Self::InvalidRequest(message)
@@ -74,5 +91,15 @@ mod tests {
         assert!(error.to_string().contains("base64 decode error"));
         assert!(!ProcessorError::Tokenize("boom".into()).is_request_validation_error());
         assert!(!ProcessorError::Internal("bug".into()).is_request_validation_error());
+    }
+
+    /// A media error built from a fetch failure keeps the underlying cause in
+    /// its message, so the client sees what was rejected rather than a generic
+    /// server error.
+    #[test]
+    fn media_error_preserves_the_underlying_cause() {
+        let error = ProcessorError::media("media fetch: malformed data: URL");
+        assert!(error.is_request_validation_error());
+        assert!(error.to_string().contains("malformed data: URL"));
     }
 }
