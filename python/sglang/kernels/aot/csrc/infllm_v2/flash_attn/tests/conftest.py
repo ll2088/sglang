@@ -18,6 +18,15 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+# This conftest must stay importable even when pytest is not installed (e.g.
+# when the tests are executed through the stdlib-only runner
+# ``run_int64_accum_tests.py``). Guard the pytest import so that a missing
+# pytest never turns into a collection-time ImportError.
+try:
+    import pytest  # noqa: F401
+except ImportError:  # pragma: no cover - exercised only without pytest
+    pytest = None
+
 # Keep the tests stdlib-only: make sure the repository root (which contains the
 # ``sglang`` package) is not on ``sys.path`` while these tests are collected.
 # Otherwise pytest's rootdir detection can import ``sglang`` and trigger the

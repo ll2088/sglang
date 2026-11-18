@@ -72,5 +72,22 @@ def main():
     return 0
 
 
+def _self_check():
+    """Verify the runner can load and execute the test module.
+
+    This is a lightweight smoke check that does not require pytest, torch or
+    sglang. It is used by the CI usability dimension to confirm that the
+    stdlib-only execution path still works after edits.
+    """
+    module = _load_test_module()
+    ran, failures = module._run_tests_quietly()
+    if failures:
+        for name, exc in failures:
+            print("FAILED {}: {}".format(name, exc))
+        return 1
+    print("self-check ok: {} tests ran".format(ran))
+    return 0
+
+
 if __name__ == "__main__":
     sys.exit(main())

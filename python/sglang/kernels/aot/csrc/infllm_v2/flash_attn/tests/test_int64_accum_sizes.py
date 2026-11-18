@@ -253,6 +253,45 @@ def test_flash_api_uses_int64_accum_helpers():
     assert "static_cast<int64_t>(seqlen_rounded)" in source
 
 
+def test_flash_api_accum_helpers_are_int64_returning():
+    # The three helpers must be declared with an int64_t return type so that
+    # the per-head size / batch stride / block offset arithmetic cannot be
+    # silently narrowed back to int32 at the call site.
+    source = _read_flash_api_source()
+    if source is None:
+        return
+
+    for helper in (
+        "flash_attn_accum_head_size",
+        "flash_attn_accum_batch_stride",
+        "flash_attn_accum_block_offset",
+    ):
+        signature = "static inline int64_t " + helper
+        assert signature in source, "{} must be declared as int64_t".format(helper)
+
+
+def test_flash_api_accum_helpers_use_int64_casts():
+    # Each helper body must cast its operands to int64_t before multiplying,
+    # otherwise the product would still be evaluated in int32.
+    source = _read_flash_api_source()
+    if source is None:
+        return
+
+    for helper in (
+        "flash_attn_accum_head_size",
+        "flash_attn_accum_batch_stride",
+        "flash_attn_accum_block_offset",
+    ):
+        start = source.find("static inline int64_t " + helper)
+        assert start != -1, "{} definition not found".format(helper)
+        end = source.find("}", start)
+        assert end != -1, "{} body not terminated".format(helper)
+        body = source[start:end]
+        assert "static_cast<int64_t>" in body, (
+            "{} must cast its operands to int64_t".format(helper)
+        )
+
+
 def test_flash_api_int64_helpers_are_defined_and_called():
     # Emit explicit static evidence that the int64 helpers are both defined and
     # invoked in flash_api.cpp, so that the "no residual int32 overflow risk"
