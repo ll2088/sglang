@@ -28,7 +28,10 @@ def _install_sglang_blocker():
     """
 
     class _BlockSglangImport:
-        _BLOCKED = ("sglang",)
+        # Block the sglang package and the heavy third-party packages it pulls
+        # in, so that the standalone runner never triggers a network install of
+        # the full sglang dependency set during CI environment preparation.
+        _BLOCKED = ("sglang", "torch", "numpy", "cute", "cutlass")
 
         def find_spec(self, fullname, path=None, target=None):
             root = fullname.split(".", 1)[0]
@@ -41,6 +44,13 @@ def _install_sglang_blocker():
 
     if not any(isinstance(f, _BlockSglangImport) for f in sys.meta_path):
         sys.meta_path.insert(0, _BlockSglangImport())
+
+    # Drop any already-imported heavy modules so a partially imported
+    # sglang/torch cannot leak into this run.
+    for _mod in list(sys.modules):
+        _root = _mod.split(".", 1)[0]
+        if _root in _BlockSglangImport._BLOCKED:
+            del sys.modules[_mod]
 
 
 def _load_test_module():
