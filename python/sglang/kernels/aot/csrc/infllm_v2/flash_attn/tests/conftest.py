@@ -52,38 +52,13 @@ for _entry in list(sys.path):
         sys.path.remove(_entry)
 
 
-# Hard block: install a meta_path finder that raises ImportError for the
-# ``sglang`` package (and its submodules) before pytest imports any test
-# module. This prevents pytest plugins or rootdir detection from triggering
-# the heavy sglang dependency resolution during collection.
+# NOTE: this conftest deliberately does NOT install a meta_path finder that
+# raises ImportError for ``sglang`` / ``torch`` / ``numpy``. Such a finder
+# would also break pytest's own plugin loading and rootdir detection in CI
+# (pytest imports its plugins through the normal import machinery), which is
+# what caused the previous environment-preparation failures. The tests in
+# this directory are pure standard library and simply never import sglang or
+# torch, so no hard block is needed.
 #
-# The blocked set also covers the heavy third-party packages that the sglang
-# package pulls in (torch / numpy / etc.). Blocking them here means that even
-# if some plugin or rootdir detection tries to import them, collection will
-# fail fast with a clear ImportError instead of attempting a network install
-# of the full sglang dependency set during CI environment preparation.
-class _BlockSglangImport:
-    """Meta path finder that refuses to import ``sglang`` and its heavy deps."""
-
-    _BLOCKED = ("sglang", "torch", "numpy", "cute", "cutlass")
-
-    def find_spec(self, fullname, path=None, target=None):
-        root = fullname.split(".", 1)[0]
-        if root in self._BLOCKED:
-            raise ImportError(
-                "Importing '{}' is blocked by the int64 accumulator test "
-                "conftest to keep CI environment preparation lightweight.".format(fullname)
-            )
-        return None
-
-
-if not any(isinstance(f, _BlockSglangImport) for f in sys.meta_path):
-    sys.meta_path.insert(0, _BlockSglangImport())
-
-# Also drop any already-imported heavy modules from sys.modules so that a
-# partially imported sglang/torch (e.g. from a previous collection attempt)
-# cannot leak into this test session.
-for _mod in list(sys.modules):
-    _root = _mod.split(".", 1)[0]
-    if _root in _BlockSglangImport._BLOCKED:
-        del sys.modules[_mod]
+# Keep the tests stdlib-only by construction: do not add third-party imports
+# to the test modules in this directory.

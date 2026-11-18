@@ -19,49 +19,15 @@ import os
 import sys
 
 
-def _install_sglang_blocker():
-    """Install a meta_path finder that refuses to import ``sglang``.
-
-    This keeps the standalone runner usable in environments where the full
-    sglang dependency set cannot be installed. It must run before any test
-    module is loaded.
-    """
-
-    class _BlockSglangImport:
-        # Block the sglang package and the heavy third-party packages it pulls
-        # in, so that the standalone runner never triggers a network install of
-        # the full sglang dependency set during CI environment preparation.
-        _BLOCKED = ("sglang", "torch", "numpy", "cute", "cutlass")
-
-        def find_spec(self, fullname, path=None, target=None):
-            root = fullname.split(".", 1)[0]
-            if root in self._BLOCKED:
-                raise ImportError(
-                    "Importing '{}' is blocked by the int64 accumulator "
-                    "runner to keep CI environment preparation lightweight.".format(fullname)
-                )
-            return None
-
-    if not any(isinstance(f, _BlockSglangImport) for f in sys.meta_path):
-        sys.meta_path.insert(0, _BlockSglangImport())
-
-    # Drop any already-imported heavy modules so a partially imported
-    # sglang/torch cannot leak into this run.
-    for _mod in list(sys.modules):
-        _root = _mod.split(".", 1)[0]
-        if _root in _BlockSglangImport._BLOCKED:
-            del sys.modules[_mod]
-
-
 def _load_test_module():
     """Load the sibling test module by file path.
 
     Loading by path (instead of a plain ``import``) avoids triggering any
     package ``__init__.py`` on the way up the directory tree, which would
     otherwise pull in the heavy ``sglang`` dependency set and break CI
-    environment preparation.
+    environment preparation. The test module itself is pure standard library
+    and never imports sglang or torch, so no import blocker is required.
     """
-    _install_sglang_blocker()
     here = os.path.dirname(os.path.abspath(__file__))
     module_path = os.path.join(here, "test_int64_accum_sizes.py")
     spec = importlib.util.spec_from_file_location("test_int64_accum_sizes", module_path)
