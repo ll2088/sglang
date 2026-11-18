@@ -286,6 +286,29 @@ class Parallel(msgspec.Struct):
             resolvable=True,
         ),
     ] = 1
+    moe_a2a_backend: A[
+        str,
+        Arg(
+            help="The backend for MoE all-to-all communication. 'auto' resolves "
+            "to 'flashinfer_nvlink_one_sided' on GB200/GB300/VR200 and on "
+            "single-node HGX B200/B300 where it was measured to beat the "
+            "allgather_reducescatter default; otherwise it falls back to "
+            "'none'. Set an explicit backend to override the auto selection.",
+            choices=[
+                "auto",
+                "none",
+                "deepep",
+                "mooncake",
+                "nixl",
+                "mori",
+                "flashinfer",
+                "flashinfer_nvlink_one_sided",
+                "ascend_fuseep",
+                "pplx",
+            ],
+            resolvable=True,
+        ),
+    ] = "auto"
     moe_dense_tp_size: A[
         Optional[int],
         Arg(

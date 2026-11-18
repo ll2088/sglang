@@ -8,8 +8,18 @@ Expert Parallelism (EP) in SGLang distributes expert weights across multiple dev
 ## Supported Backends and Selection Guidance
 
 SGLang's EP integrates diverse, highly efficient backends for different use cases, allowing fine-grained control over performance trade-offs. Users specify backends via command-line flags:
-- `--moe-a2a-backend`: Selects the backend for all-to-all communication.
+- `--moe-a2a-backend`: Selects the backend for all-to-all communication. Defaults to `auto`, which resolves to `flashinfer_nvlink_one_sided` on GB200/GB300/VR200 (Blackwell/Rubin on a Grace or Vera host) and on single-node HGX B200/B300, and falls back to `none` everywhere else. Set an explicit backend to override the auto selection.
 - `--moe-runner-backend`: Selects the backend for MoE computation.
+
+### All-to-All Backend Auto Selection
+
+The `auto` default is resolved at startup against the detected platform and deployment topology:
+
+- **GB200 / GB300 / VR200** (ARM host, compute capability 10.x): `flashinfer_nvlink_one_sided` is enabled. NVLink spans hosts over MNNVL, so the EP group may cross node boundaries.
+- **HGX B200 / B300** (x86 host, compute capability 10.0 or 10.3): `flashinfer_nvlink_one_sided` is enabled only when the whole deployment sits on a single physical node (`--nnodes 1`), because there is no NVLink between hosts. If the ranks span several nodes the manager fails fast with a clear error; switch to `--moe-a2a-backend none` in that case.
+- **Any other platform** (Hopper, GB10, non-CUDA, ...): the previous default `none` is kept.
+
+Elastic EP always falls back to `none`, since the one-sided manager is not wired for stateless groups. Explicitly passing `--moe-a2a-backend <backend>` bypasses the auto selection entirely.
 
 ### Backends for All-to-All Communication
 
