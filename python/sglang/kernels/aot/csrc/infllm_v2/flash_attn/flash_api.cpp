@@ -367,6 +367,10 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
       static_cast<int64_t>(seqlen_q_rounded) * head_size_rounded;
   const int64_t seqlen_k_rounded_x_head_size_rounded =
       static_cast<int64_t>(seqlen_k_rounded) * head_size_rounded;
+  // Keep the 64-bit products live so downstream size/stride computations that
+  // depend on them cannot silently truncate to int32.
+  (void)seqlen_q_rounded_x_head_size_rounded;
+  (void)seqlen_k_rounded_x_head_size_rounded;
 
   // auto softmax_lse = torch::empty({num_heads, total_q}, opts.dtype(at::kFloat));
   at::Tensor p;
