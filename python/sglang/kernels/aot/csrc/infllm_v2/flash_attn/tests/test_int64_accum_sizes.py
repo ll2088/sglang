@@ -2,11 +2,12 @@
 
 These tests mirror the arithmetic used by the upstream FA3 #3152 fix for the
 backward fp32 accumulators (dq_accum / dk_accum / dv_accum). They are pure
-Python and do not require a GPU or a compiled extension, so they can run in
-any CI environment.
-"""
+Python and do not require a GPU, a compiled extension, or any third-party
+dependency, so they can run in any CI environment (including ones where the
+heavy sglang dependency set cannot be installed).
 
-import pytest
+Run directly with ``python test_int64_accum_sizes.py`` or via pytest.
+"""
 
 INT32_MAX = 2**31 - 1
 
@@ -58,38 +59,37 @@ def test_block_offset_does_not_overflow_int32():
     assert accum_block_offset(block_idx, block_size, head_dim) == expected
 
 
-@pytest.mark.parametrize(
-    "seqlen_rounded,head_size_rounded",
-    [
-        (128, 32),
-        (256, 64),
-        (512, 128),
-        (1024, 256),
-        (2**23, 256),
-        (2**24, 256),
-    ],
-)
-def test_head_size_boundary_combinations(seqlen_rounded, head_size_rounded):
-    value = accum_head_size(seqlen_rounded, head_size_rounded)
-    assert value == seqlen_rounded * head_size_rounded
-    # The 64-bit result must never wrap around to a negative value.
-    assert value >= 0
+HEAD_SIZE_BOUNDARY_COMBINATIONS = [
+    (128, 32),
+    (256, 64),
+    (512, 128),
+    (1024, 256),
+    (2**23, 256),
+    (2**24, 256),
+]
+
+BLOCK_OFFSET_BOUNDARY_COMBINATIONS = [
+    (0, 128, 128),
+    (1, 128, 128),
+    (2**10, 128, 256),
+    (2**20, 128, 256),
+    (2**24, 64, 128),
+]
 
 
-@pytest.mark.parametrize(
-    "block_idx,block_size,head_dim",
-    [
-        (0, 128, 128),
-        (1, 128, 128),
-        (2**10, 128, 256),
-        (2**20, 128, 256),
-        (2**24, 64, 128),
-    ],
-)
-def test_block_offset_boundary_combinations(block_idx, block_size, head_dim):
-    value = accum_block_offset(block_idx, block_size, head_dim)
-    assert value == block_idx * block_size * head_dim
-    assert value >= 0
+def test_head_size_boundary_combinations():
+    for seqlen_rounded, head_size_rounded in HEAD_SIZE_BOUNDARY_COMBINATIONS:
+        value = accum_head_size(seqlen_rounded, head_size_rounded)
+        assert value == seqlen_rounded * head_size_rounded
+        # The 64-bit result must never wrap around to a negative value.
+        assert value >= 0
+
+
+def test_block_offset_boundary_combinations():
+    for block_idx, block_size, head_dim in BLOCK_OFFSET_BOUNDARY_COMBINATIONS:
+        value = accum_block_offset(block_idx, block_size, head_dim)
+        assert value == block_idx * block_size * head_dim
+        assert value >= 0
 
 
 def test_int32_truncation_would_be_wrong():
@@ -101,3 +101,31 @@ def test_int32_truncation_would_be_wrong():
     truncated = (seqlen_rounded * head_size_rounded) & INT32_MAX
     assert accum_head_size(seqlen_rounded, head_size_rounded) == exact
     assert truncated != exact
+
+
+def _run_all_tests():
+    """Run every test in this module without requiring pytest.
+
+    This keeps the int64 overflow coverage runnable in environments where the
+    heavy sglang dependency set (and therefore pytest) cannot be installed.
+    """
+    tests = [
+        (name, obj)
+        for name, obj in sorted(globals().items())
+        if name.startswith("test_") and callable(obj)
+    ]
+    failures = []
+    for name, fn in tests:
+        try:
+            fn()
+        except AssertionError as exc:  # pragma: no cover - failure path
+            failures.append((name, exc))
+    if failures:
+        for name, exc in failures:
+            print("FAILED {}: {}".format(name, exc))
+        raise SystemExit(1)
+    print("All {} int64 accumulator tests passed.".format(len(tests)))
+
+
+if __name__ == "__main__":
+    _run_all_tests()
