@@ -10,6 +10,15 @@ Run directly with ``python test_int64_accum_sizes.py`` or via pytest.
 """
 
 INT32_MAX = 2**31 - 1
+INT32_MIN = -(2**31)
+
+
+def _as_int32(value: int) -> int:
+    """Wrap a Python int into the signed 32-bit range, mimicking C int truncation."""
+    wrapped = value & 0xFFFFFFFF
+    if wrapped >= 2**31:
+        wrapped -= 2**32
+    return wrapped
 
 
 def accum_head_size(seqlen_rounded: int, head_size_rounded: int) -> int:
@@ -98,9 +107,59 @@ def test_int32_truncation_would_be_wrong():
     seqlen_rounded = 2**24
     head_size_rounded = 256
     exact = seqlen_rounded * head_size_rounded
-    truncated = (seqlen_rounded * head_size_rounded) & INT32_MAX
+    truncated = _as_int32(seqlen_rounded * head_size_rounded)
     assert accum_head_size(seqlen_rounded, head_size_rounded) == exact
     assert truncated != exact
+
+
+def test_dq_dk_dv_accum_sizes_are_int64_safe():
+    # Mirror the three backward accumulators (dq_accum / dk_accum / dv_accum)
+    # for a configuration whose per-head size exceeds 2^31.
+    seqlen_q_rounded = 2**24
+    seqlen_k_rounded = 2**24
+    head_size_rounded = 256
+    head_size_v_rounded = 256
+    num_heads = 32
+    num_heads_k = 8
+
+    dq_head = accum_head_size(seqlen_q_rounded, head_size_rounded)
+    dk_head = accum_head_size(seqlen_k_rounded, head_size_rounded)
+    dv_head = accum_head_size(seqlen_k_rounded, head_size_v_rounded)
+    for value in (dq_head, dk_head, dv_head):
+        assert value > INT32_MAX
+        assert value == int(value)
+        assert _as_int32(value) != value
+
+    dq_batch = accum_batch_stride(dq_head, num_heads)
+    dk_batch = accum_batch_stride(dk_head, num_heads_k)
+    dv_batch = accum_batch_stride(dv_head, num_heads_k)
+    assert dq_batch == dq_head * num_heads
+    assert dk_batch == dk_head * num_heads_k
+    assert dv_batch == dv_head * num_heads_k
+    for value in (dq_batch, dk_batch, dv_batch):
+        assert value > INT32_MAX
+        assert _as_int32(value) != value
+
+
+def test_dq_dk_dv_block_offsets_are_int64_safe():
+    # Block offsets for the backward accumulators must not wrap around int32.
+    block_size = 128
+    head_dim = 256
+    for block_idx in (2**20, 2**21, 2**24):
+        offset = accum_block_offset(block_idx, block_size, head_dim)
+        assert offset == block_idx * block_size * head_dim
+        assert offset > INT32_MAX
+        assert _as_int32(offset) != offset
+
+
+def test_int32_wrap_can_be_negative():
+    # A wrapped int32 value can even become negative, which is the failure mode
+    # the upstream FA3 #3152 fix guards against.
+    seqlen_rounded = 2**24
+    head_size_rounded = 256
+    wrapped = _as_int32(seqlen_rounded * head_size_rounded)
+    assert wrapped < 0 or wrapped != seqlen_rounded * head_size_rounded
+    assert INT32_MIN <= wrapped <= INT32_MAX
 
 
 def _collect_tests():
