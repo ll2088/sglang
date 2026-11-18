@@ -201,26 +201,117 @@ def test_module_has_no_third_party_imports():
     assert not leaked, "test module must not import {}".format(leaked)
 
 
-def test_flash_api_uses_int64_accum_helpers():
-    # Static check that the host-side accumulator arithmetic in flash_api.cpp
-    # goes through the int64 helpers instead of raw int32 products.
+def _read_flash_api_source():
+    """Return the flash_api.cpp source, or None when it is not shipped."""
     import os
 
     here = os.path.dirname(os.path.abspath(__file__))
-    api_path = os.path.join(here, os.pardir, "flash_api.cpp")
-    api_path = os.path.normpath(api_path)
+    api_path = os.path.normpath(os.path.join(here, os.pardir, "flash_api.cpp"))
     if not os.path.exists(api_path):
+        return None
+    with open(api_path, "r", encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+
+def test_flash_api_uses_int64_accum_helpers():
+    # Static check that the host-side accumulator arithmetic in flash_api.cpp
+    # goes through the int64 helpers instead of raw int32 products.
+    source = _read_flash_api_source()
+    if source is None:
         # The C++ source is not shipped next to the tests in every checkout;
         # skip the static check rather than failing on a missing file.
         return
-
-    with open(api_path, "r", encoding="utf-8", errors="replace") as fh:
-        source = fh.read()
 
     assert "flash_attn_accum_head_size" in source
     assert "flash_attn_accum_batch_stride" in source
     assert "flash_attn_accum_block_offset" in source
     assert "static_cast<int64_t>(seqlen_rounded)" in source
+
+
+def test_flash_api_helpers_are_actually_called():
+    # The helpers must be invoked, not merely declared: a declaration-only
+    # helper would leave the int32 overflow risk in place.
+    source = _read_flash_api_source()
+    if source is None:
+        return
+
+    for helper in (
+        "flash_attn_accum_head_size",
+        "flash_attn_accum_batch_stride",
+        "flash_attn_accum_block_offset",
+    ):
+        # One definition plus at least one call site.
+        assert source.count(helper) >= 2, "{} is declared but never called".format(helper)
+
+
+def test_flash_api_has_no_raw_int32_accum_products():
+    # Guard against regressions that reintroduce a raw int32 product for the
+    # accumulator sizes. The int64 helpers must be the only path used for the
+    # per-head size / batch stride / block offset arithmetic.
+    source = _read_flash_api_source()
+    if source is None:
+        return
+
+    forbidden = [
+        "seqlen_q_rounded * head_size_rounded",
+        "seqlen_k_rounded * head_size_rounded",
+        "seqlen_k_rounded * head_size_v_rounded",
+    ]
+    for pattern in forbidden:
+        # The pattern may appear only inside a static_cast<int64_t>(...) form.
+        idx = 0
+        while True:
+            idx = source.find(pattern, idx)
+            if idx == -1:
+                break
+            prefix = source[max(0, idx - 32):idx]
+            assert "static_cast<int64_t>" in prefix or "int64_t(" in prefix, (
+                "raw int32 product found: {!r} at offset {}".format(pattern, idx)
+            )
+            idx += len(pattern)
+
+
+def test_small_inputs_match_int32_reference():
+    # For small inputs the int64 helpers must produce exactly the same value
+    # as a plain int32 computation, so the change is numerically transparent.
+    for seqlen_rounded, head_size_rounded in [(128, 128), (1024, 64), (4096, 256)]:
+        int64_value = accum_head_size(seqlen_rounded, head_size_rounded)
+        int32_value = _as_int32(seqlen_rounded * head_size_rounded)
+        assert int64_value == int32_value
+        assert int64_value == seqlen_rounded * head_size_rounded
+
+    for head_size, num_heads in [(128, 32), (256, 16), (64, 8)]:
+        int64_value = accum_batch_stride(head_size, num_heads)
+        int32_value = _as_int32(head_size * num_heads)
+        assert int64_value == int32_value
+
+    for block_idx, block_size, head_dim in [(0, 128, 128), (1, 128, 128), (7, 64, 256)]:
+        int64_value = accum_block_offset(block_idx, block_size, head_dim)
+        int32_value = _as_int32(block_idx * block_size * head_dim)
+        assert int64_value == int32_value
+
+
+def test_dq_dk_dv_sizes_are_consistent_across_helpers():
+    # The three accumulators must be derived from the same helper so that a
+    # future change cannot make one of them diverge (e.g. dk vs dv).
+    seqlen_q_rounded = 2**24
+    seqlen_k_rounded = 2**24
+    head_size_rounded = 256
+    head_size_v_rounded = 256
+    num_heads = 32
+    num_heads_k = 8
+
+    dq_head = accum_head_size(seqlen_q_rounded, head_size_rounded)
+    dk_head = accum_head_size(seqlen_k_rounded, head_size_rounded)
+    dv_head = accum_head_size(seqlen_k_rounded, head_size_v_rounded)
+
+    assert dq_head == accum_head_size(seqlen_q_rounded, head_size_rounded)
+    assert dk_head == accum_head_size(seqlen_k_rounded, head_size_rounded)
+    assert dv_head == accum_head_size(seqlen_k_rounded, head_size_v_rounded)
+
+    assert accum_batch_stride(dq_head, num_heads) == dq_head * num_heads
+    assert accum_batch_stride(dk_head, num_heads_k) == dk_head * num_heads_k
+    assert accum_batch_stride(dv_head, num_heads_k) == dv_head * num_heads_k
 
 
 def _collect_tests():

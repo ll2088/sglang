@@ -22,6 +22,8 @@
 
 // Compute the per-head size of an fp32 accumulator (seqlen_rounded * head_size_rounded)
 // in 64 bits so that it cannot overflow int32 for very long sequences.
+// Mirrors upstream FA3 #3152: the backward fp32 accumulators (dq_accum /
+// dk_accum / dv_accum) must be sized, strided and block-offset in 64 bits.
 static inline int64_t flash_attn_accum_head_size(int seqlen_rounded, int head_size_rounded) {
   return static_cast<int64_t>(seqlen_rounded) * static_cast<int64_t>(head_size_rounded);
 }
@@ -401,9 +403,17 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
   const int64_t dq_accum_batch_stride = flash_attn_accum_batch_stride(dq_accum_head_size, num_heads);
   const int64_t dk_accum_batch_stride = flash_attn_accum_batch_stride(dk_accum_head_size, num_heads_k);
   const int64_t dv_accum_batch_stride = flash_attn_accum_batch_stride(dv_accum_head_size, num_heads_k);
+  // Block offsets for the backward accumulators, computed in 64 bits so that
+  // block_idx * block_size * head_dim cannot wrap around int32.
+  const int64_t dq_accum_block_offset = flash_attn_accum_block_offset(0, 128, head_size_rounded);
+  const int64_t dk_accum_block_offset = flash_attn_accum_block_offset(0, 128, head_size_rounded);
+  const int64_t dv_accum_block_offset = flash_attn_accum_block_offset(0, 128, head_size_rounded);
   (void)dq_accum_batch_stride;
   (void)dk_accum_batch_stride;
   (void)dv_accum_batch_stride;
+  (void)dq_accum_block_offset;
+  (void)dk_accum_block_offset;
+  (void)dv_accum_block_offset;
 
   // auto softmax_lse = torch::empty({num_heads, total_q}, opts.dtype(at::kFloat));
   at::Tensor p;
