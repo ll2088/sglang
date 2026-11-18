@@ -309,6 +309,17 @@ class Parallel(msgspec.Struct):
             resolvable=True,
         ),
     ] = "auto"
+    moe_a2a_backend_auto_one_sided: A[
+        bool,
+        Arg(
+            help="(Derived) Whether 'auto' resolved to "
+            "'flashinfer_nvlink_one_sided' for this deployment. Set during "
+            "backend resolution; used to produce a clearer error when the "
+            "one-sided manager detects a multi-node EP group.",
+            no_cli=True,
+            resolvable=True,
+        ),
+    ] = False
     moe_dense_tp_size: A[
         Optional[int],
         Arg(
