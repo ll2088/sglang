@@ -352,6 +352,63 @@ def test_small_inputs_match_int32_reference():
         assert int64_value == int32_value
 
 
+def test_small_inputs_match_int32_reference_allclose():
+    # Mirror the acceptance criterion "small inputs must be numerically
+    # identical to the int32 reference" without importing numpy/torch: the
+    # int64 helper output must equal the exact integer product, and the int32
+    # wrap must agree with it whenever no overflow occurs.
+    for seqlen_rounded, head_size_rounded in [(128, 32), (256, 64), (512, 128), (1024, 256)]:
+        exact = seqlen_rounded * head_size_rounded
+        assert exact <= INT32_MAX
+        assert accum_head_size(seqlen_rounded, head_size_rounded) == exact
+        assert _as_int32(exact) == exact
+
+    for head_size, num_heads in [(128, 32), (256, 16), (64, 8), (32, 4)]:
+        exact = head_size * num_heads
+        assert exact <= INT32_MAX
+        assert accum_batch_stride(head_size, num_heads) == exact
+        assert _as_int32(exact) == exact
+
+    for block_idx, block_size, head_dim in [(0, 128, 128), (1, 128, 128), (7, 64, 256), (3, 32, 64)]:
+        exact = block_idx * block_size * head_dim
+        assert exact <= INT32_MAX
+        assert accum_block_offset(block_idx, block_size, head_dim) == exact
+        assert _as_int32(exact) == exact
+
+
+def test_block_offset_boundary_dimension_combinations():
+    # Cover head_dim / seq_len / batch style dimension combinations for the
+    # block-offset arithmetic, including the exact int32 boundary.
+    combinations = [
+        (0, 128, 128),
+        (1, 128, 128),
+        (2**10, 128, 256),
+        (2**20, 128, 256),
+        (2**24, 64, 128),
+        (2**31 // (128 * 128), 128, 128),
+        (2**31 // (128 * 128) + 1, 128, 128),
+    ]
+    for block_idx, block_size, head_dim in combinations:
+        value = accum_block_offset(block_idx, block_size, head_dim)
+        assert value == block_idx * block_size * head_dim
+        assert value >= 0
+        if value > INT32_MAX:
+            assert _as_int32(value) != value
+        else:
+            assert _as_int32(value) == value
+
+
+def test_head_size_boundary_around_int32_limit():
+    # seqlen_rounded * head_size_rounded exactly at and just above 2^31.
+    head_size_rounded = 256
+    below = INT32_MAX // head_size_rounded
+    above = below + 1
+    assert accum_head_size(below, head_size_rounded) <= INT32_MAX
+    assert accum_head_size(above, head_size_rounded) > INT32_MAX
+    assert accum_head_size(above, head_size_rounded) == above * head_size_rounded
+    assert _as_int32(above * head_size_rounded) != above * head_size_rounded
+
+
 def test_dq_dk_dv_sizes_are_consistent_across_helpers():
     # The three accumulators must be derived from the same helper so that a
     # future change cannot make one of them diverge (e.g. dk vs dv).
@@ -389,6 +446,23 @@ def _collect_tests():
     ]
 
 
+def _run_tests_quietly():
+    """Run every test in this module and return (ran, failures).
+
+    This is the shared implementation used by both the standalone runner and
+    the module-level ``main`` entry point. It never imports pytest, torch or
+    sglang, so it stays runnable in a bare Python environment.
+    """
+    tests = _collect_tests()
+    failures = []
+    for name, fn in tests:
+        try:
+            fn()
+        except AssertionError as exc:  # pragma: no cover - failure path
+            failures.append((name, exc))
+    return len(tests), failures
+
+
 def _run_all_tests():
     """Run every test in this module without requiring pytest.
 
@@ -398,19 +472,13 @@ def _run_all_tests():
     if any of them failed, so it can be used both as a script entry point and
     as a lightweight self-check from other tooling.
     """
-    tests = _collect_tests()
-    failures = []
-    for name, fn in tests:
-        try:
-            fn()
-        except AssertionError as exc:  # pragma: no cover - failure path
-            failures.append((name, exc))
+    ran, failures = _run_tests_quietly()
     if failures:
         for name, exc in failures:
             print("FAILED {}: {}".format(name, exc))
         raise SystemExit(1)
-    print("All {} int64 accumulator tests passed.".format(len(tests)))
-    return len(tests)
+    print("All {} int64 accumulator tests passed.".format(ran))
+    return ran
 
 
 def main():

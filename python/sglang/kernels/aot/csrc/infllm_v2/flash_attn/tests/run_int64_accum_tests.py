@@ -63,18 +63,12 @@ def _load_test_module():
 
 def main():
     module = _load_test_module()
-    tests = module._collect_tests()
-    failures = []
-    for name, fn in tests:
-        try:
-            fn()
-        except AssertionError as exc:
-            failures.append((name, exc))
+    ran, failures = module._run_tests_quietly()
     if failures:
         for name, exc in failures:
             print("FAILED {}: {}".format(name, exc))
         return 1
-    print("All {} int64 accumulator tests passed.".format(len(tests)))
+    print("All {} int64 accumulator tests passed.".format(ran))
     return 0
 
 
