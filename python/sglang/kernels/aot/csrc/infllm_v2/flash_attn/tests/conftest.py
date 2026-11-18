@@ -32,3 +32,26 @@ for _entry in list(sys.path):
         continue
     if _resolved == _REPO_ROOT:
         sys.path.remove(_entry)
+
+
+# Hard block: install a meta_path finder that raises ImportError for the
+# ``sglang`` package (and its submodules) before pytest imports any test
+# module. This prevents pytest plugins or rootdir detection from triggering
+# the heavy sglang dependency resolution during collection.
+class _BlockSglangImport:
+    """Meta path finder that refuses to import the ``sglang`` package."""
+
+    _BLOCKED = ("sglang",)
+
+    def find_spec(self, fullname, path=None, target=None):
+        root = fullname.split(".", 1)[0]
+        if root in self._BLOCKED:
+            raise ImportError(
+                "Importing '{}' is blocked by the int64 accumulator test "
+                "conftest to keep CI environment preparation lightweight.".format(fullname)
+            )
+        return None
+
+
+if not any(isinstance(f, _BlockSglangImport) for f in sys.meta_path):
+    sys.meta_path.insert(0, _BlockSglangImport())

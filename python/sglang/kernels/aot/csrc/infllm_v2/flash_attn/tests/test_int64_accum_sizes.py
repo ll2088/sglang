@@ -201,6 +201,31 @@ def test_module_has_no_third_party_imports():
     assert not leaked, "test module must not import {}".format(leaked)
 
 
+def test_module_does_not_import_sglang_at_module_level():
+    # Explicit regression guard: the test module must not import sglang (or any
+    # of its heavy dependencies) at module import time, otherwise CI's
+    # environment preparation would try to resolve the full sglang dependency
+    # set before any assertion runs.
+    import ast
+    import os
+
+    with open(os.path.abspath(__file__), "r", encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+
+    module_level_imports = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module_level_imports.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                module_level_imports.add(node.module.split(".")[0])
+
+    assert "sglang" not in module_level_imports
+    assert "torch" not in module_level_imports
+    assert "numpy" not in module_level_imports
+
+
 def _read_flash_api_source():
     """Return the flash_api.cpp source, or None when it is not shipped."""
     import os
