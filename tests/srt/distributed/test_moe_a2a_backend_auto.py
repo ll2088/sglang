@@ -5,7 +5,7 @@
 
 import pytest
 
-from sglang.srt.distributed.device_communicators import all2all_auto
+from sglang.srt.distributed.device_communicators import all2all as all2all_auto
 
 
 @pytest.fixture(autouse=True)
@@ -140,3 +140,33 @@ def test_single_node_guard_allows_mnnvl(monkeypatch):
 def test_single_node_guard_allows_single_node(monkeypatch):
     _pretend(monkeypatch, cuda=True, arch="x86_64", capability=(10, 0))
     all2all_auto.require_single_node_without_mnnvl(node_count=1, auto=True)
+
+
+def test_removed_backend_falls_back_to_none(monkeypatch):
+    _pretend(monkeypatch, cuda=True, arch="aarch64", capability=(10, 0))
+    backend, auto, reason = all2all_auto.resolve_all2all_backend(
+        "pplx",
+        enable_expert_parallel=True,
+        enable_elastic_ep=False,
+        nnodes=1,
+        data_parallel_size=1,
+        data_parallel_size_local=1,
+        distributed_executor_backend="mp",
+    )
+    assert backend == all2all_auto.DEFAULT_BACKEND
+    assert auto is False
+    assert reason is not None
+
+
+def test_unsupported_reason_reports_missing_flashinfer(monkeypatch):
+    _pretend(monkeypatch, cuda=True, arch="aarch64", capability=(10, 0), one_sided=False)
+    reason = all2all_auto.one_sided_unsupported_reason(
+        enable_expert_parallel=True,
+        enable_elastic_ep=False,
+        nnodes=1,
+        data_parallel_size=1,
+        data_parallel_size_local=1,
+        distributed_executor_backend="mp",
+    )
+    assert reason is not None
+    assert "FlashInfer" in reason

@@ -36,6 +36,11 @@ _ONE_SIDED_SUPPORTED_TOP_K = frozenset({1, 2, 3, 4, 6, 8, 10, 12, 14, 16, 18, 22
 _BLACKWELL_FAMILY = 100  # 10.x, covers 10.0 / 10.3 / 10.7
 _HGX_CAPABILITIES = (100, 103)  # HGX B200 (10.0) and HGX B300 (10.3)
 
+# Public names used by the auto-resolution policy and its tests.
+AUTO_BACKEND = "auto"
+ONE_SIDED_BACKEND = "flashinfer_nvlink_one_sided"
+DEFAULT_BACKEND = "none"
+
 
 def _is_cuda() -> bool:
     try:
@@ -101,6 +106,11 @@ def is_hgx_b200_or_b300() -> bool:
     return capability in _HGX_CAPABILITIES
 
 
+# Private aliases kept for callers that use the underscore-prefixed names.
+_is_gb200_gb300_or_vr200 = is_gb200_gb300_or_vr200
+_is_hgx_b200_or_b300 = is_hgx_b200_or_b300
+
+
 def clear_platform_probes() -> None:
     """Drop the cached platform probes. Intended for tests."""
     is_gb200_gb300_or_vr200.cache_clear()
@@ -144,6 +154,48 @@ def _one_sided_model_unsupported_reason(model_config) -> Optional[str]:
     return None
 
 
+def _has_one_sided_support() -> bool:
+    """Whether FlashInfer's NVLink one-sided API is importable."""
+    try:
+        from sglang.srt.utils import has_flashinfer_nvlink_one_sided
+
+        return bool(has_flashinfer_nvlink_one_sided())
+    except Exception:
+        return False
+
+
+def prefers_one_sided_all2all(
+    *,
+    enable_expert_parallel: bool,
+    enable_elastic_ep: bool,
+    nnodes: int,
+    data_parallel_size: int,
+    data_parallel_size_local: int,
+    distributed_executor_backend,
+) -> bool:
+    """Whether ``auto`` picks ``flashinfer_nvlink_one_sided``.
+
+    Only where it was measured to beat ``allgather_reducescatter``.
+    """
+    # The one-sided manager is not wired for elastic EP's stateless groups.
+    if not enable_expert_parallel or enable_elastic_ep:
+        return False
+    if not _has_one_sided_support():
+        return False
+    # GB200/GB300/VR200 carry NVLink between hosts over MNNVL, so the EP group
+    # may span nodes and any data-parallel size is served.
+    if is_gb200_gb300_or_vr200():
+        return True
+    # HGX has no NVLink between hosts, so the whole deployment must sit on one
+    # physical node, placed by SGLang's own launcher or by Ray.
+    return (
+        nnodes == 1
+        and data_parallel_size_local in (0, data_parallel_size)
+        and distributed_executor_backend in (None, "mp", "uni", "ray")
+        and is_hgx_b200_or_b300()
+    )
+
+
 def one_sided_unsupported_reason(
     *,
     enable_expert_parallel: bool,
@@ -166,6 +218,8 @@ def one_sided_unsupported_reason(
     # The one-sided manager is not wired for elastic EP's stateless groups.
     if enable_elastic_ep:
         return "elastic EP"
+    if not _has_one_sided_support():
+        return "FlashInfer NVLink one-sided API is not available"
     if lora_enabled:
         return "LoRA"
     # Experts picked with --moe-runner-backend decide on their own whether they
@@ -200,7 +254,7 @@ def one_sided_unsupported_reason(
     return None
 
 
-def resolve_moe_a2a_backend(
+def resolve_all2all_backend(
     requested: str,
     *,
     enable_expert_parallel: bool,
@@ -228,8 +282,8 @@ def resolve_moe_a2a_backend(
             "Falling back to 'none'.",
             requested,
         )
-        return "none", False, f"backend {requested!r} was removed"
-    if requested != "auto":
+        return DEFAULT_BACKEND, False, f"backend {requested!r} was removed"
+    if requested != AUTO_BACKEND:
         return requested, False, None
     reason = one_sided_unsupported_reason(
         enable_expert_parallel=enable_expert_parallel,
@@ -244,16 +298,23 @@ def resolve_moe_a2a_backend(
         batch_invariant=batch_invariant,
     )
     if reason is None:
-        return "flashinfer_nvlink_one_sided", True, None
+        return ONE_SIDED_BACKEND, True, None
     logger.info(
-        "all2all backend 'auto' resolved to 'none': %s. "
+        "all2all backend 'auto' resolved to '%s': %s. "
         "Pass --moe-a2a-backend explicitly to override.",
+        DEFAULT_BACKEND,
         reason,
     )
-    return "none", False, reason
+    return DEFAULT_BACKEND, False, reason
 
 
-def require_single_node_without_mnnvl(auto_one_sided: bool = False) -> None:
+# Backwards-compatible alias for the previous name.
+resolve_moe_a2a_backend = resolve_all2all_backend
+
+
+def require_single_node_without_mnnvl(
+    node_count: Optional[int] = None, auto: bool = False
+) -> None:
     """Fail clearly if one-sided all2all would span hosts without MNNVL.
 
     GB200/GB300/VR200 connect hosts over MNNVL. On other hardware (HGX B200 and
@@ -261,19 +322,20 @@ def require_single_node_without_mnnvl(auto_one_sided: bool = False) -> None:
     """
     if is_gb200_gb300_or_vr200():
         return
-    try:
-        from sglang.srt.distributed.parallel_state import get_node_count
+    if node_count is None:
+        try:
+            from sglang.srt.distributed.parallel_state import get_node_count
 
-        node_count = get_node_count()
-    except Exception:
-        # Used outside SGLang's distributed environment: node count is unknown.
-        return
+            node_count = get_node_count()
+        except Exception:
+            # Used outside SGLang's distributed environment: node count unknown.
+            return
     if node_count == 1:
         return
     origin = (
         " It was picked by default (--moe-a2a-backend auto), which assumes a "
         "single physical node."
-        if auto_one_sided
+        if auto
         else ""
     )
     raise RuntimeError(
