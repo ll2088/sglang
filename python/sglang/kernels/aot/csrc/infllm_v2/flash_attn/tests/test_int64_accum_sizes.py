@@ -15,6 +15,18 @@ INT32_MIN = -(2**31)
 # This module intentionally depends only on the Python standard library so that
 # it can be executed directly (``python test_int64_accum_sizes.py``) without
 # installing the heavy sglang dependency set. Do not add third-party imports.
+#
+# IMPORTANT: this file must never import ``sglang`` (directly or transitively),
+# otherwise CI will try to resolve the full sglang dependency set during
+# environment preparation and fail before any test runs. Keep it stdlib-only.
+#
+# Scope note: the upstream FA3 #3152 fix also touches the hopper backward
+# kernels (flash_bwd_launch_template.h, mainloop_bwd_sm90_tma_gmma_ws.hpp,
+# epilogue_bwd.hpp, flash_bwd_preprocess_kernel.h,
+# flash_bwd_postprocess_kernel.h, mainloop_bwd_sm80.hpp). Those headers are not
+# present in this repository, so only the host-side accumulator size / stride /
+# block-offset arithmetic in flash_api.cpp is actually exercised here. The
+# kernel-side int64 changes are NOT applied and remain a known gap.
 
 
 def _as_int32(value: int) -> int:
@@ -164,6 +176,51 @@ def test_int32_wrap_can_be_negative():
     wrapped = _as_int32(seqlen_rounded * head_size_rounded)
     assert wrapped < 0 or wrapped != seqlen_rounded * head_size_rounded
     assert INT32_MIN <= wrapped <= INT32_MAX
+
+
+def test_module_has_no_third_party_imports():
+    # Guard the dependency isolation: this test module must stay stdlib-only so
+    # that CI can run it without installing the full sglang dependency set.
+    import ast
+    import os
+
+    with open(os.path.abspath(__file__), "r", encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imported.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                imported.add(node.module.split(".")[0])
+
+    forbidden = {"sglang", "torch", "numpy", "pytest", "cute", "cutlass"}
+    leaked = sorted(imported & forbidden)
+    assert not leaked, "test module must not import {}".format(leaked)
+
+
+def test_flash_api_uses_int64_accum_helpers():
+    # Static check that the host-side accumulator arithmetic in flash_api.cpp
+    # goes through the int64 helpers instead of raw int32 products.
+    import os
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    api_path = os.path.join(here, os.pardir, "flash_api.cpp")
+    api_path = os.path.normpath(api_path)
+    if not os.path.exists(api_path):
+        # The C++ source is not shipped next to the tests in every checkout;
+        # skip the static check rather than failing on a missing file.
+        return
+
+    with open(api_path, "r", encoding="utf-8", errors="replace") as fh:
+        source = fh.read()
+
+    assert "flash_attn_accum_head_size" in source
+    assert "flash_attn_accum_batch_stride" in source
+    assert "flash_attn_accum_block_offset" in source
+    assert "static_cast<int64_t>(seqlen_rounded)" in source
 
 
 def _collect_tests():
