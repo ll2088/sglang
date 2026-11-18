@@ -34,6 +34,9 @@ impl ProcessorError {
     /// Hosts map a request-fault error onto their client-error status (HTTP
     /// 400, gRPC `INVALID_ARGUMENT`) and everything else onto a server error,
     /// so a malformed request is never reported as a server defect.
+    ///
+    /// `Media` and `UnsupportedInputAudioFormat` are the two media-specific
+    /// client-fault variants; `Tokenize` and `Internal` stay server faults.
     pub fn is_request_validation_error(&self) -> bool {
         matches!(
             self,

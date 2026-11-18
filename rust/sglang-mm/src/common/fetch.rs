@@ -68,6 +68,9 @@ pub fn fetch_bytes(src: &str) -> Result<Vec<u8>, String> {
 /// refuses is a client fault (HTTP 400 / gRPC `INVALID_ARGUMENT`); a read or
 /// download failure on this side stays a server fault. Hosts use this to pick
 /// the wire status instead of reporting every media error as a 500.
+///
+/// This is the single definition of the classifier; callers must not add a
+/// second copy, which would fail to compile as a duplicate item.
 pub fn is_client_fault(error: &str) -> bool {
     error.contains("malformed data: URL")
         || error.contains("base64 decode")
