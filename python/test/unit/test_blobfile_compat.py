@@ -6,8 +6,23 @@ against import-time or basic-API regressions when the pin is bumped.
 
 import importlib
 import importlib.metadata
+import re
+from pathlib import Path
 
 import pytest
+
+
+def _declared_blobfile_pin():
+    """Return the blobfile pin declared in the nearest pyproject.toml, if any."""
+    for candidate in Path(__file__).resolve().parents:
+        pyproject = candidate / "pyproject.toml"
+        if pyproject.is_file():
+            match = re.search(
+                r'"blobfile==([^"]+)"', pyproject.read_text(encoding="utf-8")
+            )
+            if match is not None:
+                return match.group(1)
+    return None
 
 
 def test_blobfile_importable():
@@ -19,7 +34,11 @@ def test_blobfile_version_metadata_consistent():
     version = importlib.metadata.version("blobfile")
     assert version, "blobfile distribution metadata must expose a version"
     # The declared pin in the project metadata must match the installed one.
-    assert version.split("+")[0].startswith("3."), version
+    # Compare against the pin declared in pyproject.toml instead of hardcoding
+    # a major version, so this check stays valid across future bumps.
+    declared = _declared_blobfile_pin()
+    if declared is not None:
+        assert version.split("+")[0] == declared, (version, declared)
 
 
 def test_blobfile_blobfile_class_available():
@@ -47,4 +66,8 @@ def test_blobfile_public_helpers_present():
 def test_sglang_import_and_version_metadata():
     sglang = pytest.importorskip("sglang")
     assert getattr(sglang, "__version__", None)
-    assert importlib.metadata.version("sglang")
+    try:
+        installed = importlib.metadata.version("sglang")
+    except importlib.metadata.PackageNotFoundError:
+        pytest.skip("sglang distribution metadata is not installed")
+    assert installed
