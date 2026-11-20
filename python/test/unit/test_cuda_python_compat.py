@@ -30,16 +30,19 @@ def test_cuda_python_bindings_importable(module_name, binding_name):
     importlib.import_module(module_name)
 
 
-def test_sgl_kernel_version_matches_cuda_python():
+def test_sgl_kernel_version_is_importable():
     """sgl_kernel.version must be importable and report a valid version string."""
+    version_module = importlib.import_module("sgl_kernel.version")
+    assert isinstance(version_module.__version__, str)
+    assert version_module.__version__.strip()
+
+
+def test_installed_cuda_python_version():
+    """The installed cuda-python must be the expected 13.5.0 release."""
     installed = _installed_cuda_python_version()
     if installed is None:
         pytest.skip("cuda-python is not installed in this environment")
     assert installed == CUDA_PYTHON_VERSION
-
-    version_module = importlib.import_module("sgl_kernel.version")
-    assert isinstance(version_module.__version__, str)
-    assert version_module.__version__.strip()
 
 
 def test_check_env_reports_cuda_python_version():
@@ -51,4 +54,5 @@ def test_check_env_reports_cuda_python_version():
     check_env = importlib.import_module("sglang.check_env")
     env = check_env._get_env()
     versions = env.get_package_versions()
-    assert versions.get("cuda-python") == CUDA_PYTHON_VERSION
+    assert "cuda-python" in versions
+    assert versions["cuda-python"] == installed
