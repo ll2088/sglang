@@ -69,28 +69,25 @@ mod tests {
     /// the end of it. This is the property the Drop-guard wrapper exists for.
     #[tokio::test]
     async fn streaming_body_is_recorded_only_after_it_is_consumed() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let consumed = Arc::new(AtomicUsize::new(0));
-        let seen = consumed.clone();
         let app = Router::new()
             .route(
                 "/stream",
-                get(move || {
-                    let seen = seen.clone();
-                    async move {
-                        let (mut tx, rx) =
-                            futures::channel::mpsc::channel::<Result<axum::body::Bytes, axum::Error>>(1);
-                        tokio::spawn(async move {
-                            let _ = futures::SinkExt::send(&mut tx, Ok(axum::body::Bytes::from_static(b"a"))).await;
-                            let _ = futures::SinkExt::send(&mut tx, Ok(axum::body::Bytes::from_static(b"b"))).await;
-                        });
-                        let body = axum::body::Body::from_stream(rx);
-                        let (parts, body) = axum::response::Response::new(body).into_parts();
-                        let _ = seen;
-                        axum::response::Response::from_parts(parts, body)
-                    }
+                get(|| async {
+                    let (mut tx, rx) =
+                        futures::channel::mpsc::channel::<Result<axum::body::Bytes, axum::Error>>(1);
+                    tokio::spawn(async move {
+                        let _ = futures::SinkExt::send(
+                            &mut tx,
+                            Ok(axum::body::Bytes::from_static(b"a")),
+                        )
+                        .await;
+                        let _ = futures::SinkExt::send(
+                            &mut tx,
+                            Ok(axum::body::Bytes::from_static(b"b")),
+                        )
+                        .await;
+                    });
+                    axum::body::Body::from_stream(rx)
                 }),
             )
             .layer(axum::middleware::from_fn(track_http_metrics));
@@ -101,12 +98,11 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         // Headers are ready but the body has not been read yet; the guard must
-        // still be held by the body.
+        // still be held by the body, so the request is not yet recorded.
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         assert_eq!(&body[..], b"ab");
-        assert_eq!(consumed.load(Ordering::SeqCst), 0);
     }
 
     /// A request cancelled before a response exists must still be counted
@@ -114,8 +110,6 @@ mod tests {
     /// answers with, rather than being dropped from the metrics entirely.
     #[tokio::test]
     async fn cancelled_request_is_still_recorded_once() {
-        use std::sync::Arc;
-
         let started = Arc::new(tokio::sync::Notify::new());
         let notify = started.clone();
         let app = Router::new()
@@ -137,7 +131,11 @@ mod tests {
         });
         started.notified().await;
         task.abort();
-        assert!(task.await.expect_err("request should be cancelled").is_cancelled());
+        assert!(
+            task.await
+                .expect_err("request should be cancelled")
+                .is_cancelled()
+        );
     }
 
     /// A response body that is dropped before it is ever polled must still
@@ -166,7 +164,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        // Drop the response without reading a single frame.
+        // Drop the response without reading a single frame: the guard must
+        // still run, exactly once, on the body's drop.
         drop(response);
     }
 

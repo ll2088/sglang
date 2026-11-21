@@ -240,4 +240,46 @@ mod tests {
         drop(response);
         assert_eq!(abandoned.load(Ordering::SeqCst), 1);
     }
+
+    /// The recording path a metrics middleware relies on: the guard's `Drop`
+    /// must run exactly once on the normal completion path, so a long-lived
+    /// process does not double-count a request whose body was drained and then
+    /// dropped. The counter is asserted to be exactly 1, not merely non-zero.
+    #[tokio::test]
+    async fn a_completed_body_records_exactly_once() {
+        let records = Arc::new(AtomicUsize::new(0));
+        let response = Response::new(Body::from("complete"));
+        let response = hold_until_body_dropped(response, DropCounter(records.clone()));
+
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collecting a guarded body must not error")
+            .to_bytes();
+        assert_eq!(&bytes[..], b"complete");
+        assert_eq!(
+            records.load(Ordering::SeqCst),
+            1,
+            "a completed body must record exactly once",
+        );
+    }
+
+    /// The cancellation path: a body dropped before its first frame must still
+    /// record exactly once, so a client that disconnects between the handler
+    /// returning and the first frame does not leak out of the metrics.
+    #[tokio::test]
+    async fn an_early_dropped_body_records_exactly_once() {
+        let records = Arc::new(AtomicUsize::new(0));
+        let response = Response::new(Body::from("never read"));
+        let response = hold_until_body_dropped(response, DropCounter(records.clone()));
+        assert_eq!(records.load(Ordering::SeqCst), 0, "not recorded before drop");
+
+        drop(response);
+        assert_eq!(
+            records.load(Ordering::SeqCst),
+            1,
+            "an early-dropped body must record exactly once",
+        );
+    }
 }
