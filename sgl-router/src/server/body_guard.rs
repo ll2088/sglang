@@ -28,9 +28,9 @@ use std::task::{Context, Poll};
 /// is replaced by a transparent wrapper. `G` must be `Send + Unpin + 'static`
 /// because the body is moved across tasks by the server.
 ///
-/// Shared by the in-flight counter and the HTTP-metrics middleware so both
-/// release their state on the same paths: last frame sent, or body dropped
-/// early when the client goes away mid-stream.
+/// Shared by the in-flight counter and any future HTTP-metrics middleware so
+/// both release their state on the same paths: last frame sent, or body
+/// dropped early when the client goes away mid-stream.
 pub(crate) fn hold_until_body_dropped<G>(response: Response, guard: G) -> Response
 where
     G: Send + Unpin + 'static,
