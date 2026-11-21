@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::Router;
 use axum::extract::State;
@@ -13,6 +14,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 
 use super::app::AppState;
+use super::body_guard::hold_until_body_dropped;
 use crate::utils::prometheus;
 
 /// Python's `CONTENT_TYPE_PLAIN_0_0_4`, the type it answers a scrape that
@@ -26,6 +28,47 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/metrics", get(metrics))
         .route("/metrics/", get(metrics))
         .route("/metrics/{*path}", get(metrics))
+}
+
+/// Record one HTTP request when its response body completes or is dropped.
+///
+/// The guard is created before the handler runs, so a request cancelled
+/// before a response exists is still counted once (Python's
+/// `with_cancellation` answers that with an empty 200, hence the `2xx`
+/// default). Once a response is available the guard is moved into the body
+/// wrapper, so a streaming response is timed until its last frame rather than
+/// until its headers.
+struct HttpMetricsGuard {
+    method: String,
+    handler: String,
+    status: &'static str,
+    started_at: Instant,
+}
+
+impl Drop for HttpMetricsGuard {
+    fn drop(&mut self) {
+        let elapsed = self.started_at.elapsed().as_secs_f64();
+        let metrics = &METRICS.api_server;
+
+        metrics
+            .http_requests
+            .get_or_create(&HttpRequestLabels {
+                method: self.method.clone(),
+                status: self.status,
+                handler: self.handler.clone(),
+            })
+            .inc();
+
+        metrics
+            .http_request_duration_seconds
+            .get_or_create(&HttpHandlerLabels {
+                method: self.method.clone(),
+                handler: self.handler.clone(),
+            })
+            .observe(elapsed);
+
+        metrics.http_request_duration_highr_seconds.observe(elapsed);
+    }
 }
 
 async fn metrics(State(state): State<Arc<AppState>>) -> Response {
