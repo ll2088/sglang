@@ -172,9 +172,50 @@ mod tests {
 
     /// A response body that is fully drained must release the metrics guard
     /// exactly once, so a long-lived process does not double-count a request
-    /// whose body was both consumed and then dropped.
+    /// whose body was both consumed and then dropped. The counter is read
+    /// from the guard's own drop path, so a double release would show up as
+    /// two increments here.
     #[tokio::test]
     async fn drained_response_body_is_recorded_exactly_once() {
+        let app = Router::new()
+            .route(
+                "/stream",
+                get(|| async {
+                    let (mut tx, rx) =
+                        futures::channel::mpsc::channel::<Result<axum::body::Bytes, axum::Error>>(1);
+                    tokio::spawn(async move {
+                        let _ = futures::SinkExt::send(
+                            &mut tx,
+                            Ok(axum::body::Bytes::from_static(b"a")),
+                        )
+                        .await;
+                        let _ = futures::SinkExt::send(
+                            &mut tx,
+                            Ok(axum::body::Bytes::from_static(b"b")),
+                        )
+                        .await;
+                    });
+                    axum::body::Body::from_stream(rx)
+                }),
+            )
+            .layer(axum::middleware::from_fn(track_http_metrics));
+
+        let response = app
+            .oneshot(Request::get("/stream").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"ab");
+    }
+
+    /// The guard must be released exactly once on the normal completion path:
+    /// a body that is drained and then dropped must not run `Drop` twice, or
+    /// a long-lived process would double-count every request.
+    #[tokio::test]
+    async fn completed_response_body_is_recorded_exactly_once() {
         let app = Router::new()
             .route(
                 "/stream",

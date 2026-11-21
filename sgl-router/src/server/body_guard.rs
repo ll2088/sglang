@@ -191,7 +191,8 @@ mod tests {
 
     /// The guard must run exactly once even when the body is fully drained and
     /// then dropped: draining ends the stream, and the subsequent drop of the
-    /// wrapper must not run `Drop` a second time.
+    /// wrapper must not run `Drop` a second time. The counter is asserted to
+    /// be exactly 1 (not merely non-zero) so a double release fails here.
     #[tokio::test]
     async fn a_drained_body_releases_the_guard_exactly_once() {
         let drops = Arc::new(AtomicUsize::new(0));
@@ -210,5 +211,29 @@ mod tests {
             1,
             "a drained body must release the guard exactly once",
         );
+    }
+
+    /// The two paths the helper exists to unify must agree: a body that is
+    /// fully consumed and a body that is dropped early each release the guard
+    /// exactly once, so a caller cannot tell them apart by the drop count.
+    #[tokio::test]
+    async fn completed_and_abandoned_bodies_release_the_guard_once_each() {
+        let completed = Arc::new(AtomicUsize::new(0));
+        let response = Response::new(Body::from("done"));
+        let response = hold_until_body_dropped(response, DropCounter(completed.clone()));
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collecting a guarded body must not error")
+            .to_bytes();
+        assert_eq!(&bytes[..], b"done");
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+
+        let abandoned = Arc::new(AtomicUsize::new(0));
+        let response = Response::new(Body::from("never read"));
+        let response = hold_until_body_dropped(response, DropCounter(abandoned.clone()));
+        drop(response);
+        assert_eq!(abandoned.load(Ordering::SeqCst), 1);
     }
 }
