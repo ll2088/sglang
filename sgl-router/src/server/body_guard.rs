@@ -89,7 +89,7 @@ mod tests {
     }
 
     /// The wrapper must not disturb the response it wraps: status, headers and
-    /// body bytes all pass through unchanged.
+    /// body bytes all pass through unchanged, and the guard runs exactly once.
     #[tokio::test]
     async fn a_unit_body_passes_through_unchanged() {
         let drops = Arc::new(AtomicUsize::new(0));
@@ -144,7 +144,11 @@ mod tests {
             "the wrapper must end when the inner body does",
         );
         drop(stream);
-        assert_eq!(drops.load(Ordering::SeqCst), 1, "the finished body releases the guard");
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            1,
+            "the finished body releases the guard",
+        );
     }
 
     /// A client that disconnects mid-stream drops the body rather than
@@ -159,6 +163,10 @@ mod tests {
         assert_eq!(drops.load(Ordering::SeqCst), 0);
 
         drop(response);
-        assert_eq!(drops.load(Ordering::SeqCst), 1, "an abandoned body must release the guard");
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            1,
+            "an abandoned body must release the guard",
+        );
     }
 }
