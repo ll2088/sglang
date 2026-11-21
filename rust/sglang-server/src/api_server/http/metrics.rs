@@ -140,6 +140,75 @@ mod tests {
         assert!(task.await.expect_err("request should be cancelled").is_cancelled());
     }
 
+    /// A response body that is dropped before it is ever polled must still
+    /// release the metrics guard: this is the path a client that disconnects
+    /// between the handler returning and the first frame takes. The guard's
+    /// `Drop` runs on the body's drop, so the request is counted exactly once
+    /// rather than leaking out of the metrics entirely.
+    #[tokio::test]
+    async fn dropped_response_body_is_still_recorded_once() {
+        let app = Router::new()
+            .route(
+                "/stream",
+                get(|| async {
+                    let (tx, rx) =
+                        futures::channel::mpsc::channel::<Result<axum::body::Bytes, axum::Error>>(1);
+                    // Keep the sender alive so the body is a real stream that
+                    // has not ended when we drop it.
+                    let _tx = tx;
+                    axum::body::Body::from_stream(rx)
+                }),
+            )
+            .layer(axum::middleware::from_fn(track_http_metrics));
+
+        let response = app
+            .oneshot(Request::get("/stream").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        // Drop the response without reading a single frame.
+        drop(response);
+    }
+
+    /// A response body that is fully drained must release the metrics guard
+    /// exactly once, so a long-lived process does not double-count a request
+    /// whose body was both consumed and then dropped.
+    #[tokio::test]
+    async fn drained_response_body_is_recorded_exactly_once() {
+        let app = Router::new()
+            .route(
+                "/stream",
+                get(|| async {
+                    let (mut tx, rx) =
+                        futures::channel::mpsc::channel::<Result<axum::body::Bytes, axum::Error>>(1);
+                    tokio::spawn(async move {
+                        let _ = futures::SinkExt::send(
+                            &mut tx,
+                            Ok(axum::body::Bytes::from_static(b"a")),
+                        )
+                        .await;
+                        let _ = futures::SinkExt::send(
+                            &mut tx,
+                            Ok(axum::body::Bytes::from_static(b"b")),
+                        )
+                        .await;
+                    });
+                    axum::body::Body::from_stream(rx)
+                }),
+            )
+            .layer(axum::middleware::from_fn(track_http_metrics));
+
+        let response = app
+            .oneshot(Request::get("/stream").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"ab");
+    }
+
     fn app(metrics: Option<MetricsConfig>) -> Router {
         let server_args = Arc::new(ServerArgs {
             metrics,

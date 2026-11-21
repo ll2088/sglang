@@ -169,4 +169,46 @@ mod tests {
             "an abandoned body must release the guard",
         );
     }
+
+    /// Dropping the response *before* the body is ever polled must also run
+    /// the guard exactly once: this is the path a cancelled request takes when
+    /// the client goes away between the handler returning and the first frame
+    /// being written. A guard that only ran on the last frame would leak here.
+    #[tokio::test]
+    async fn a_never_polled_body_releases_the_guard_once() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let response = Response::new(Body::from("never read"));
+        let response = hold_until_body_dropped(response, DropCounter(drops.clone()));
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+
+        drop(response);
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            1,
+            "a body dropped before its first poll must release the guard",
+        );
+    }
+
+    /// The guard must run exactly once even when the body is fully drained and
+    /// then dropped: draining ends the stream, and the subsequent drop of the
+    /// wrapper must not run `Drop` a second time.
+    #[tokio::test]
+    async fn a_drained_body_releases_the_guard_exactly_once() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let response = Response::new(Body::from("drained"));
+        let response = hold_until_body_dropped(response, DropCounter(drops.clone()));
+
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collecting a guarded body must not error")
+            .to_bytes();
+        assert_eq!(&bytes[..], b"drained");
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            1,
+            "a drained body must release the guard exactly once",
+        );
+    }
 }

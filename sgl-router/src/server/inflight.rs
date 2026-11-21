@@ -149,4 +149,46 @@ mod tests {
         assert_eq!(&bytes[..], b"payload");
         assert_eq!(counter.count(), 0);
     }
+
+    /// A request cancelled before a response body exists must still release
+    /// its count: the guard is created at the edge and dropped when the
+    /// request future is dropped, so the gauge cannot ratchet up on the
+    /// cancellation path.
+    #[tokio::test]
+    async fn a_cancelled_request_releases_the_count() {
+        let counter = InflightHttp::new();
+        let guard = counter.enter();
+        assert_eq!(counter.count(), 1);
+
+        // Simulate the request future being dropped before a response is
+        // built: the guard goes out of scope without ever being moved into a
+        // body.
+        drop(guard);
+        assert_eq!(
+            counter.count(),
+            0,
+            "a cancelled request must release its count",
+        );
+    }
+
+    /// The count must be released exactly once when a body is drained and then
+    /// dropped, so a long-lived process does not drift negative or leak.
+    #[tokio::test]
+    async fn a_drained_body_releases_the_count_exactly_once() {
+        let counter = InflightHttp::new();
+        let body = track_body(Body::from("drained"), counter.enter());
+        assert_eq!(counter.count(), 1);
+
+        let bytes = body
+            .collect()
+            .await
+            .expect("collecting a tracked body must not error")
+            .to_bytes();
+        assert_eq!(&bytes[..], b"drained");
+        assert_eq!(
+            counter.count(),
+            0,
+            "a drained body must release the count exactly once",
+        );
+    }
 }
