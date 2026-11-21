@@ -17,12 +17,12 @@
 //! completion the handler returns as soon as the headers are ready, which is
 //! the beginning of the wait, not the end of it.
 
-use axum::body::{Body, Bytes, HttpBody};
-use http_body::{Frame, SizeHint};
-use std::pin::Pin;
+use axum::body::Body;
+use axum::response::Response;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::task::{Context, Poll};
+
+use super::body_guard::hold_until_body_dropped;
 
 /// Open HTTP exchanges, as axum's graceful shutdown counts them.
 #[derive(Debug, Default)]
@@ -60,42 +60,15 @@ impl Drop for InflightGuard {
     }
 }
 
-/// A response body that holds `guard` until the last frame is yielded or the
-/// body is dropped.
-struct TrackedBody {
-    inner: Body,
-    _guard: InflightGuard,
-}
-
 /// Wrap `body` so the exchange stays counted for as long as the client is
 /// still being written to.
+///
+/// The guard is held by the body via [`hold_until_body_dropped`], so it is
+/// released when the last frame is yielded or the body is dropped — including
+/// when the client disconnects mid-stream.
 pub fn track_body(body: Body, guard: InflightGuard) -> Body {
-    Body::new(TrackedBody {
-        inner: body,
-        _guard: guard,
-    })
-}
-
-impl HttpBody for TrackedBody {
-    type Data = Bytes;
-    type Error = axum::Error;
-
-    fn poll_frame(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        // `Body` and `InflightGuard` are both `Unpin`, so the projection is a
-        // plain field borrow rather than anything `pin-project` is needed for.
-        Pin::new(&mut self.get_mut().inner).poll_frame(cx)
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.inner.is_end_stream()
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        self.inner.size_hint()
-    }
+    let response = Response::new(body);
+    hold_until_body_dropped(response, guard).into_body()
 }
 
 #[cfg(test)]
